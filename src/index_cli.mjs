@@ -3,7 +3,7 @@
 import {composeComponent, readSpecs, specToJSON} from "./index.mjs";
 
 const {argv} = process;
-// console.log(argv);
+
 const command1 = argv[2];
 
 switch (command1) {
@@ -17,8 +17,7 @@ switch (command1) {
                 const specs = await readSpecs(argv[4]);
                 for(const spec of specs){
                     const data = await specToJSON(spec);
-                    // console.log(data,'JSONNNNN')
-                    await composeComponent(data?.components);
+                    await composeComponent({data: data?.components, path: spec});
                 }
                 break;
         }
