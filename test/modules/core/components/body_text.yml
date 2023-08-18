@@ -1,0 +1,21 @@
+components:
+  base: rectangle
+  description: component for showing body text
+  modifier:
+    display: flex
+    position: relative
+    width: 80%
+    height: 20
+    padding: 8
+    props:
+      children: $name
+      states:
+        name: doe
+      effects:
+          - onStart:
+              watch:
+                - name
+              body:
+                - bodyTextMounted
+              clean:
+                - bodyTextUnMounted
