@@ -24,8 +24,9 @@ function sanitizeEffectDependency(data) {
 }
 
 function getSrcPathFromBlueprintPath(path) {
-    return `${path}`.trim()
-        .replace(/^(blueprints)/ig, 'src')
+    const pathParts = `${path}`.split('/').filter(x => x !== 'blueprints');
+    return `${pathParts.join('/')}`
+        // .replace(/^(blueprints)/ig, 'src')
         .replace(/(.yml)/ig, '.mjs');
 }
 
@@ -51,7 +52,7 @@ function getEffectsStatement(effects = {}) {
     return Object
         .keys(effects ?? {})
         .map(k => `/*${k}*/
-    React.useEffects(()=>${getBody(k)}({component:this}),[${getDependencies(k)}]);`)
+    React.useEffect(()=>${getBody(k)}({component:this}),[${getDependencies(k)}]);`)
         .join('\n\t');
 }
 
@@ -94,7 +95,7 @@ function getInputsStatement(data = {}) {
 async function getLogicsStatement(data = {}, path, projectPath) {
     const pathParts = `${path}`.split('/');
     pathParts.pop();
-    const pathSteps = pathParts.map(_ => '..');
+    const pathSteps = pathParts.filter(x => x !== 'blueprints').map(_ => '..');
     const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
     const map = x => `${x}`.trim().replace(/^(logics.)/ig, '');
     const propsInputs = Object.values({...data?.modifier?.props ?? {}}).filter(filter).map(map);
@@ -115,8 +116,8 @@ async function getLogicsStatement(data = {}, path, projectPath) {
     try {
         const importedLogic = await import(`${projectPath}/${logicFolderPath}/${logicFileName}`);
         for (const e of exports) {
-            if(importedLogic[e]===undefined){
-                await appendFile(`${logicFolderPath}/${logicFileName}`,`
+            if (importedLogic[e] === undefined) {
+                await appendFile(`${logicFolderPath}/${logicFileName}`, `
 /**
 * @param data {{component: *, args: Array<*>}}
 */

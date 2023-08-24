@@ -5,7 +5,9 @@ import {readFile} from 'node:fs/promises'
 export async function readSpecs(rootFolder) {
     const root = rootFolder === '/' ? './' : rootFolder?.endsWith('/') ? rootFolder : `${rootFolder ?? '.'}/`;
     // console.log(root,'ROOOT');
-    return await glob(`${root}**/*.yml`);
+    return await glob(`${root}**/*.yml`, {
+        ignore: ['**/node_modules/**']
+    });
 }
 
 export async function specToJSON(specPath) {
