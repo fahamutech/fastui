@@ -1,6 +1,14 @@
-import {compose, ensurePathExist, firstUpperCase, ifDoElse, itOrEmptyList, snakeToCamel} from "./util.mjs";
+import {
+    compose,
+    ensureFileExist,
+    ensurePathExist,
+    firstUpperCase,
+    ifDoElse,
+    itOrEmptyList,
+    snakeToCamel
+} from "./util.mjs";
 import {getChildren, getEffects, getProps, getStates, getStyle} from "./modifier.mjs";
-import {writeFile} from "node:fs/promises";
+import {writeFile, appendFile} from "node:fs/promises";
 
 function sanitizeEffectDependency(data) {
     const mapWatch = watch => {
@@ -56,7 +64,7 @@ function getPropsStatement(props = {}) {
             v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
             ifDoElse(
                 v => `${v}`.trim().toLowerCase().startsWith('logics.'),
-                v => `${v}`.trim().replace(/^(logics.)/ig, ''),
+                v => `(...args)=>${`${v}`.trim().replace(/^(logics.)/ig, '')}({component:this,args})`,
                 v => `${v ?? ''}`.trim()
             )
         )
@@ -83,6 +91,47 @@ function getInputsStatement(data = {}) {
     return propsInputs.concat(statesInputs, effectsInputs).join(',');
 }
 
+async function getLogicsStatement(data = {}, path, projectPath) {
+    const pathParts = `${path}`.split('/');
+    pathParts.pop();
+    const pathSteps = pathParts.map(_ => '..');
+    const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
+    const map = x => `${x}`.trim().replace(/^(logics.)/ig, '');
+    const propsInputs = Object.values({...data?.modifier?.props ?? {}}).filter(filter).map(map);
+    const effects = {...data?.modifier?.effects ?? {}};
+    const effectsInputs = Object.keys(effects).reduce((a, b) => {
+        return [
+            ...a,
+            `${effects[b]?.body}`.trim().replace(/^(logics.)/ig, '')
+        ]
+    }, []);
+    const exports = Array.from([...propsInputs, ...effectsInputs].reduce((a, b) => a.add(b), new Set()));
+
+    const logicFileName = getFilenameFromBlueprintPath(path).trim() + '.mjs';
+    const logicImportPath = `${pathSteps.join('/')}/${pathParts.join('/')}/../logics/${logicFileName}`;
+    const logicFolderPath = pathParts.join('/') + '/../logics';
+    await ensurePathExist(logicFolderPath);
+    await ensureFileExist(`${logicFolderPath}/${logicFileName}`);
+    try {
+        const importedLogic = await import(`${projectPath}/${logicFolderPath}/${logicFileName}`);
+        for (const e of exports) {
+            if(importedLogic[e]===undefined){
+                await appendFile(`${logicFolderPath}/${logicFileName}`,`
+/**
+* @param data {{component: *, args: Array<*>}}
+*/
+export function ${e}(data) {
+    // TODO: Implement the logic
+    throw new Error('Method ${e} not implemented');
+}`)
+            }
+        }
+    } catch (e) {
+        console.log(e);
+    }
+    return `import {${exports?.join(',')}} from '${logicImportPath}'`
+}
+
 export function getBase(data) {
     const base = data?.base ?? '';
     // if (`${base}` === 'rectangle') {
@@ -97,7 +146,7 @@ export function getBase(data) {
     }
 }
 
-export async function composeComponent({data, path}) {
+export async function composeComponent({data, path, projectPath}) {
     if (!data) {
         return;
     }
@@ -109,9 +158,11 @@ export async function composeComponent({data, path}) {
     const effectsString = getEffectsStatement(getEffects(data));
     const propsString = getPropsStatement(getProps(data));
 
+    const logicsStatement = await getLogicsStatement(data, path, projectPath);
+
     const content = `
 import React from 'react';
-
+${logicsStatement}
 
 export function ${getFileName(path)}({${getInputsStatement(data)}}){
     ${statesInString}

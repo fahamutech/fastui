@@ -20,7 +20,7 @@ switch (command1) {
                 const specs = await readSpecs(argv[4]);
                 for (const spec of specs) {
                     const data = await specToJSON(spec);
-                    await composeComponent({data: data?.components, path: spec});
+                    await composeComponent({data: data?.components, path: spec, projectPath: process.cwd()});
                 }
                 done()
                 break;
