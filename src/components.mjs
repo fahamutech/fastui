@@ -158,7 +158,7 @@ export function ${e}(data) {
     return `import {${exports?.join(',')}} from '${logicImportPath}'`
 }
 
-export function getBase(data) {
+function getBase(data) {
     const base = data?.base ?? '';
     if (`${base}` === 'image') {
         return 'img';
