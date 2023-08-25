@@ -10,6 +10,20 @@ import {
 import {getChildren, getEffects, getProps, getStates, getStyle} from "./modifier.mjs";
 import {writeFile, appendFile} from "node:fs/promises";
 
+function getStateMapForLogicInput(states) {
+    return Object.keys(states).reduce((a, b) => {
+        return a.concat(`"${b}":${b}, "set${firstUpperCase(b)}": set${firstUpperCase(b)}`)
+    }, '');
+}
+
+function getInputsMapForLogicInput(data) {
+    return getInputsStatement(data)
+        .split(',')
+        .filter(x => x !== '')
+        .map(b => `"${b}":${b}`)
+        .join(',');
+}
+
 function sanitizeEffectDependency(data) {
     const mapWatch = watch => {
         if (`${watch}`.trim().toLowerCase().startsWith('states.')) {
@@ -44,7 +58,12 @@ function getStatesStatement(states = {}) {
         .join('\n\t');
 }
 
-function getEffectsStatement(effects = {}) {
+
+function getEffectsStatement(data) {
+    const effects = getEffects(data);
+    const states = getStates(data);
+    const statesMap = getStateMapForLogicInput(states);
+    const inputsMap = getInputsMapForLogicInput(data);
     const getDependencies = k => sanitizeEffectDependency(effects[k]?.watch ?? '');
     const getBody = k => `${effects[k]?.body}`.trim().toLowerCase().startsWith('logics.')
         ? `${effects[k]?.body}`.trim().replace(/^(logics.)/ig, '')
@@ -52,11 +71,15 @@ function getEffectsStatement(effects = {}) {
     return Object
         .keys(effects ?? {})
         .map(k => `/*${k}*/
-    React.useEffect(()=>${getBody(k)}({component:this}),[${getDependencies(k)}]);`)
+    React.useEffect(()=>${getBody(k)}({component:{states: {${statesMap}}, inputs: {${inputsMap}}},args:[]}),[${getDependencies(k)}]);`)
         .join('\n\t');
 }
 
-function getPropsStatement(props = {}) {
+function getPropsStatement(data) {
+    const props = getProps(data);
+    const states = getStates(data);
+    const statesMap = getStateMapForLogicInput(states);
+    const inputsMap = getInputsMapForLogicInput(data);
     const getValue = ifDoElse(
         v => `${v}`.trim().toLowerCase().startsWith('states.'),
         v => `${v}`.trim().replace(/^(states.)/ig, ''),
@@ -65,8 +88,8 @@ function getPropsStatement(props = {}) {
             v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
             ifDoElse(
                 v => `${v}`.trim().toLowerCase().startsWith('logics.'),
-                v => `(...args)=>${`${v}`.trim().replace(/^(logics.)/ig, '')}({component:this,args})`,
-                v => `${v ?? ''}`.trim()
+                v => `(...args)=>${`${v}`.trim().replace(/^(logics.)/ig, '')}({component:{states:{${statesMap}},inputs:{${inputsMap}}},args})`,
+                v => `${JSON.stringify(v?? '')}`.trim()
             )
         )
     )
@@ -92,7 +115,7 @@ function getInputsStatement(data = {}) {
     return propsInputs.concat(statesInputs, effectsInputs).join(',');
 }
 
-async function getLogicsStatement(data = {}, path, projectPath) {
+async function getLogicsStatement(data = {}, path = '', projectPath = '', states = {}) {
     const pathParts = `${path}`.split('/');
     pathParts.pop();
     const pathSteps = pathParts.filter(x => x !== 'blueprints').map(_ => '..');
@@ -119,7 +142,9 @@ async function getLogicsStatement(data = {}, path, projectPath) {
             if (importedLogic[e] === undefined) {
                 await appendFile(`${logicFolderPath}/${logicFileName}`, `
 /**
-* @param data {{component: *, args: Array<*>}}
+* @param data {
+* {component: {states: *,inputs: *}, args: Array<*>}
+* }
 */
 export function ${e}(data) {
     // TODO: Implement the logic
@@ -135,9 +160,6 @@ export function ${e}(data) {
 
 export function getBase(data) {
     const base = data?.base ?? '';
-    // if (`${base}` === 'rectangle') {
-    //     return 'div';
-    // } else
     if (`${base}` === 'image') {
         return 'img';
     } else if (`${base}` === 'text') {
@@ -156,10 +178,10 @@ export async function composeComponent({data, path, projectPath}) {
     const base = getBase(data);
 
     const statesInString = getStatesStatement(getStates(data))
-    const effectsString = getEffectsStatement(getEffects(data));
-    const propsString = getPropsStatement(getProps(data));
+    const effectsString = getEffectsStatement(data);
+    const propsString = getPropsStatement(data);
 
-    const logicsStatement = await getLogicsStatement(data, path, projectPath);
+    const logicsStatement = await getLogicsStatement(data, path, projectPath, getStates(data));
 
     const content = `
 import React from 'react';
