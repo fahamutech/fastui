@@ -59,7 +59,7 @@ function sanitizeEffectDependency(data) {
         if (`${watch}`.trim().toLowerCase().startsWith('inputs.')) {
             return `${watch}`.replace(/^(inputs.)/ig, '');
         }
-        return `"${watch}"`
+        return watch===undefined?undefined:`"${watch}"`
     };
     return Array.isArray(data) ? data.map(mapWatch).join(',') : mapWatch(data);
 }
@@ -87,7 +87,7 @@ function getStatesStatement(states = {}) {
 
 function getEffectsStatement(data) {
     const effects = getEffects(data);
-    const getDependencies = k => sanitizeEffectDependency(effects[k]?.watch ?? '');
+    const getDependencies = k => sanitizeEffectDependency(effects[k]?.watch);
     const getBody = k => `${effects[k]?.body}`.trim().toLowerCase().startsWith('logics.')
         ? `${effects[k]?.body}`.trim().replace(/^(logics.)/ig, '')
         : effects[k]?.body ?? '{}';
@@ -218,14 +218,18 @@ export async function composeComponent({data, path, projectPath}) {
 
     const statesMap = getStateMapForLogicInput(getStates(data));
     const inputsMap = getInputsMapForLogicInput(data);
-    const componentStatement = `const component = {states:{${statesMap}},inputs:{${inputsMap}}}`;
-    const styleStatement = `const style = ${getStyleStatement(data)}`;
+    const useMemoDependencies = [
+        ...Object.keys(getStates(data)),
+        getInputsStatement(data).split(',')
+    ].join(',');
+    const componentStatement = `const component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}])`;
+    const styleStatement = `const style = React.useMemo(()=>(${getStyleStatement(data)}),[${useMemoDependencies}])`;
 
     const content = `
 import React from 'react';
 ${logicsStatement}
 
-export function ${getFileName(path)}({${getInputsStatement(data)}}){
+export function ${getFileName(path)}(${getInputsStatement(data)===''?'':`{${getInputsStatement(data)}}`}){
     ${statesInString}
     
     ${componentStatement}
