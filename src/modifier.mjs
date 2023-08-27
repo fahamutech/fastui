@@ -13,7 +13,11 @@ export function getChildren(data) {
 }
 
 export function getStyle(data) {
-    return {...data?.modifier ?? {}, props: undefined, states: undefined, effects: undefined};
+    const modifier = {...data?.modifier ?? {}};
+    delete modifier.props;
+    delete modifier.states;
+    delete modifier.effects;
+    return modifier
 }
 
 export function getProps(data) {

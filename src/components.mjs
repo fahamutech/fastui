@@ -10,10 +10,37 @@ import {
 import {getChildren, getEffects, getProps, getStates, getStyle} from "./modifier.mjs";
 import {writeFile, appendFile} from "node:fs/promises";
 
+function getStyleStatement(data) {
+    const style = getStyle(data);
+    const getValue = ifDoElse(
+        v => `${v}`.trim().toLowerCase().startsWith('states.'),
+        v => `${v}`.trim().replace(/^(states.)/ig, ''),
+        ifDoElse(
+            v => `${v}`.trim().toLowerCase().startsWith('inputs.'),
+            v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
+            ifDoElse(
+                v => `${v}`.trim().toLowerCase().startsWith('logics.'),
+                v => `${`${v}`.trim().replace(/^(logics.)/ig, '')}({component,args: []})`,
+                v => `${JSON.stringify(v ?? '')}`.trim()
+            )
+        )
+    );
+    const styleParts = Object.keys(style).reduce((a, b) => {
+        return [
+            ...a,
+            `"${b}":${getValue(style[b])}`
+        ]
+    }, []);
+    return `{${styleParts.join(',')}}`;
+}
+
 function getStateMapForLogicInput(states) {
     return Object.keys(states).reduce((a, b) => {
-        return a.concat(`"${b}":${b}, "set${firstUpperCase(b)}": set${firstUpperCase(b)}`)
-    }, '');
+        return [
+            ...a,
+            `"${b}":${b}, "set${firstUpperCase(b)}": set${firstUpperCase(b)}`
+        ]
+    }, []).join(',');
 }
 
 function getInputsMapForLogicInput(data) {
@@ -58,12 +85,8 @@ function getStatesStatement(states = {}) {
         .join('\n\t');
 }
 
-
 function getEffectsStatement(data) {
     const effects = getEffects(data);
-    const states = getStates(data);
-    const statesMap = getStateMapForLogicInput(states);
-    const inputsMap = getInputsMapForLogicInput(data);
     const getDependencies = k => sanitizeEffectDependency(effects[k]?.watch ?? '');
     const getBody = k => `${effects[k]?.body}`.trim().toLowerCase().startsWith('logics.')
         ? `${effects[k]?.body}`.trim().replace(/^(logics.)/ig, '')
@@ -71,15 +94,12 @@ function getEffectsStatement(data) {
     return Object
         .keys(effects ?? {})
         .map(k => `/*${k}*/
-    React.useEffect(()=>${getBody(k)}({component:{states: {${statesMap}}, inputs: {${inputsMap}}},args:[]}),[${getDependencies(k)}]);`)
+    React.useEffect(()=>${getBody(k)}({component,args:[]}),[${getDependencies(k)}]);`)
         .join('\n\t');
 }
 
 function getPropsStatement(data) {
     const props = getProps(data);
-    const states = getStates(data);
-    const statesMap = getStateMapForLogicInput(states);
-    const inputsMap = getInputsMapForLogicInput(data);
     const getValue = ifDoElse(
         v => `${v}`.trim().toLowerCase().startsWith('states.'),
         v => `${v}`.trim().replace(/^(states.)/ig, ''),
@@ -88,8 +108,8 @@ function getPropsStatement(data) {
             v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
             ifDoElse(
                 v => `${v}`.trim().toLowerCase().startsWith('logics.'),
-                v => `(...args)=>${`${v}`.trim().replace(/^(logics.)/ig, '')}({component:{states:{${statesMap}},inputs:{${inputsMap}}},args})`,
-                v => `${JSON.stringify(v?? '')}`.trim()
+                v => `(...args)=>${`${v}`.trim().replace(/^(logics.)/ig, '')}({component,args})`,
+                v => `${JSON.stringify(v ?? '')}`.trim()
             )
         )
     )
@@ -103,6 +123,13 @@ function getPropsStatement(data) {
 function getInputsStatement(data = {}) {
     const filter = x => `${x}`.trim().toLowerCase().startsWith('inputs.');
     const map = x => `${x}`.trim().replace(/^(inputs.)/ig, '');
+    const styleInputs = Object.values({
+        ...data?.modifier ?? {},
+        props: undefined,
+        states: undefined,
+        effects: undefined
+    })
+        .filter(filter).map(map);
     const propsInputs = Object.values({...data?.modifier?.props ?? {}}).filter(filter).map(map);
     const statesInputs = Object.values({...data?.modifier?.states ?? {}}).filter(filter).map(map);
     const effects = {...data?.modifier?.effects ?? {}};
@@ -112,15 +139,21 @@ function getInputsStatement(data = {}) {
             ...itOrEmptyList(effects[b]?.watch).filter(filter).map(map)
         ]
     }, []);
-    return propsInputs.concat(statesInputs, effectsInputs).join(',');
+    return propsInputs.concat(statesInputs, effectsInputs, styleInputs).join(',');
 }
 
-async function getLogicsStatement(data = {}, path = '', projectPath = '', states = {}) {
+async function getLogicsStatement(data = {}, path = '', projectPath = '') {
     const pathParts = `${path}`.split('/');
     pathParts.pop();
     const pathSteps = pathParts.filter(x => x !== 'blueprints').map(_ => '..');
     const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
     const map = x => `${x}`.trim().replace(/^(logics.)/ig, '');
+    const styleInputs = Object.values({
+        ...data?.modifier ?? {},
+        props: undefined,
+        effects: undefined,
+        states: undefined
+    }).filter(filter).map(map);
     const propsInputs = Object.values({...data?.modifier?.props ?? {}}).filter(filter).map(map);
     const effects = {...data?.modifier?.effects ?? {}};
     const effectsInputs = Object.keys(effects).reduce((a, b) => {
@@ -129,7 +162,7 @@ async function getLogicsStatement(data = {}, path = '', projectPath = '', states
             `${effects[b]?.body}`.trim().replace(/^(logics.)/ig, '')
         ]
     }, []);
-    const exports = Array.from([...propsInputs, ...effectsInputs].reduce((a, b) => a.add(b), new Set()));
+    const exports = Array.from([...propsInputs, ...effectsInputs, ...styleInputs].reduce((a, b) => a.add(b), new Set()));
 
     const logicFileName = getFilenameFromBlueprintPath(path).trim() + '.mjs';
     const logicImportPath = `${pathSteps.join('/')}/${pathParts.join('/')}/../logics/${logicFileName}`;
@@ -181,7 +214,12 @@ export async function composeComponent({data, path, projectPath}) {
     const effectsString = getEffectsStatement(data);
     const propsString = getPropsStatement(data);
 
-    const logicsStatement = await getLogicsStatement(data, path, projectPath, getStates(data));
+    const logicsStatement = await getLogicsStatement(data, path, projectPath);
+
+    const statesMap = getStateMapForLogicInput(getStates(data));
+    const inputsMap = getInputsMapForLogicInput(data);
+    const componentStatement = `const component = {states:{${statesMap}},inputs:{${inputsMap}}}`;
+    const styleStatement = `const style = ${getStyleStatement(data)}`;
 
     const content = `
 import React from 'react';
@@ -190,11 +228,15 @@ ${logicsStatement}
 export function ${getFileName(path)}({${getInputsStatement(data)}}){
     ${statesInString}
     
+    ${componentStatement}
+    
+    ${styleStatement}
+    
     ${effectsString}
     
     return(
         <${base} 
-            style={${JSON.stringify(getStyle(data))}}
+            style={style}
             ${propsString}
         >
             ${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}
