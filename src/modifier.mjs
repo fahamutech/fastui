@@ -12,11 +12,11 @@ export function getChildren(data) {
     }
 }
 
-export function getStyle(data) {
-    if (`${data?.modifier?.style}`.trim().toLowerCase().startsWith('logics.')) {
-        return data?.modifier?.style ?? {};
+export function getStyles(data) {
+    if (`${data?.modifier?.styles}`.trim().toLowerCase().startsWith('logics.')) {
+        return data?.modifier?.styles ?? {};
     } else {
-        return {...data?.modifier?.style ?? {}};
+        return {...data?.modifier?.styles ?? {}};
     }
 }
 
@@ -34,4 +34,8 @@ export function getEffects(data) {
 
 export function getFrame(data) {
     return data?.modifier?.frame;
+}
+
+export function getExtend(data){
+    return data?.modifier?.extend;
 }

@@ -7,7 +7,7 @@ import {
     itOrEmptyList, justList,
     snakeToCamel
 } from "./util.mjs";
-import {getChildren, getEffects, getFrame, getProps, getStates, getStyle} from "./modifier.mjs";
+import {getChildren, getEffects, getExtend, getFrame, getProps, getStates, getStyles} from "./modifier.mjs";
 import {writeFile, appendFile} from "node:fs/promises";
 
 function getStyleMap(style) {
@@ -126,17 +126,17 @@ function getPropsStatement(data) {
 function getInputsStatement(data = {}) {
     const filter = x => `${x}`.trim().toLowerCase().startsWith('inputs.');
     const map = x => `${x}`.trim().replace(/^(inputs.)/ig, '');
-    const styleInputs = Object.values({...data?.modifier?.style ?? {}}).filter(filter).map(map);
-    const propsInputs = Object.values({...data?.modifier?.props ?? {}}).filter(filter).map(map);
-    const statesInputs = Object.values({...data?.modifier?.states ?? {}}).filter(filter).map(map);
-    const effects = {...data?.modifier?.effects ?? {}};
+    const styleInputs = Object.values(getStyles(data)).filter(filter).map(map);
+    const propsInputs = Object.values(getProps(data)).filter(filter).map(map);
+    const statesInputs = Object.values(getStates(data)).filter(filter).map(map);
+    const effects = getEffects(data);
     const effectsInputs = Object.keys(effects).reduce((a, b) => {
         return [
             ...a,
             ...itOrEmptyList(effects[b]?.watch).filter(filter).map(map)
         ]
     }, []);
-    return propsInputs.concat(statesInputs, effectsInputs, styleInputs,['view']).join(',');
+    return propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view']).join(',');
 }
 
 async function getLogicsStatement(data = {}, path = '', projectPath = '') {
@@ -150,7 +150,7 @@ async function getLogicsStatement(data = {}, path = '', projectPath = '') {
         compose(justList, map),
         x => Object.values(x).filter(filter).map(map)
     );
-    const styleInputs = getStyleInputs(getStyle(data));
+    const styleInputs = getStyleInputs(getStyles(data));
     const propsInputs = Object.values(getProps(data)).filter(filter).map(map);
     const effects = getEffects(data);
     const effectsInputs = Object.keys(effects).reduce((a, b) => {
@@ -253,6 +253,22 @@ function getFrameStatement(frame, child) {
     // }
 }
 
+function getExtendBase(extend) {
+    if (typeof extend === 'string' && extend.includes('.yml')) {
+        return firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(extend)));
+    }
+    return undefined;
+}
+
+async function getComponentsImportStatement(extend) {
+    if (typeof extend === 'string' && extend.includes('.yml')) {
+        const component = firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(extend)));
+        const importPath = `${extend}`.trim().startsWith('.') ? extend : `./${extend}`;
+        return `import {${component}} from '${importPath.replace('.yml', '.mjs')}';`
+    }
+    return '';
+}
+
 export async function composeComponent({data, path, projectPath}) {
     if (!data) {
         return;
@@ -266,6 +282,7 @@ export async function composeComponent({data, path, projectPath}) {
     const propsString = getPropsStatement(data);
 
     const logicsStatement = await getLogicsStatement(data, path, projectPath);
+    const componentsImportStatement = await getComponentsImportStatement(getExtend(data));
 
     const statesMap = getStateMapForLogicInput(getStates(data));
     const inputsMap = getInputsMapForLogicInput(data);
@@ -279,20 +296,26 @@ export async function composeComponent({data, path, projectPath}) {
         t => `const style = React.useMemo(()=>${`${t}`.replace(/^(logics.)|\(\)/ig, '')}({component,args:[]}),[component]);`,
         t => `const style = React.useMemo(()=>(${getStyleMap(t)}),[${useMemoDependencies}]);`
     )
-    const styleStatement = getStyleStatement(getStyle(data));
+    const styleStatement = getStyleStatement(getStyles(data));
 
-    // const frameStatement = getFrameStatement(getFrame(data));
+    const extendBase = getExtendBase(getExtend(data));
 
-    const contentView = `
+    const contentViewWithoutExtend = `
         <${base} 
             style={style}
             ${propsString}
         >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
     `;
+    const contentViewWithExtend = `
+        <${extendBase} view={${contentViewWithoutExtend}}></${extendBase}>
+    `;
+
+    const contentView = extendBase ? contentViewWithExtend : contentViewWithoutExtend;
 
     const content = `
 import React from 'react';
 ${logicsStatement}
+${componentsImportStatement}
 
 export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}){
     ${statesInString}
@@ -303,7 +326,7 @@ export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{
     
     ${effectsString}
     
-    return(${getFrameStatement(getFrame(data),contentView)});
+    return(${getFrameStatement(getFrame(data), contentView)});
 }
     `;
 
