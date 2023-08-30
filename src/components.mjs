@@ -7,7 +7,7 @@ import {
     itOrEmptyList, justList,
     snakeToCamel
 } from "./util.mjs";
-import {getChildren, getEffects, getProps, getStates, getStyle} from "./modifier.mjs";
+import {getChildren, getEffects, getFrame, getProps, getStates, getStyle} from "./modifier.mjs";
 import {writeFile, appendFile} from "node:fs/promises";
 
 function getStyleMap(style) {
@@ -136,7 +136,7 @@ function getInputsStatement(data = {}) {
             ...itOrEmptyList(effects[b]?.watch).filter(filter).map(map)
         ]
     }, []);
-    return propsInputs.concat(statesInputs, effectsInputs, styleInputs).join(',');
+    return propsInputs.concat(statesInputs, effectsInputs, styleInputs,['view']).join(',');
 }
 
 async function getLogicsStatement(data = {}, path = '', projectPath = '') {
@@ -201,6 +201,58 @@ function getBase(data) {
     }
 }
 
+function getFrameStatement(frame, child) {
+    const column = '{{display: "flex",position: "relative",flexDirection: "column"}}';
+    const row = '{{display: "flex",position: "relative",flexDirection: "row"}}';
+    const stack = '{{position: "relative"}}';
+    if (`${frame}`.trim().toLowerCase() === 'column.start') {
+        return `
+            <div style=${column}>
+                ${child}
+                {view}
+            </div>
+        `;
+    } else if (`${frame}`.trim().toLowerCase() === 'column.end') {
+        return `
+            <div style=${column}>
+                {view}
+                ${child}
+            </div>
+        `;
+    } else if (`${frame}`.trim().toLowerCase() === 'row.start') {
+        return `
+            <div style=${row}>
+                ${child}
+                {view}
+            </div>
+        `;
+    } else if (`${frame}`.trim().toLowerCase() === 'row.end') {
+        return `
+            <div style=${row}>
+                {view}
+                ${child}
+            </div>
+        `;
+    } else {
+        return `
+            <div style=${column}>
+                ${child}
+                {view}
+            </div>
+        `;
+    }
+    // else if(`${frame}`.trim().toLowerCase() === 'stack'){
+    //     return `
+    //         <div style="${stack}">
+    //
+    //             <div style="{{position: "absolute"}}">
+    //                 ${child}
+    //             </div>
+    //         </div>
+    //     `;
+    // }
+}
+
 export async function composeComponent({data, path, projectPath}) {
     if (!data) {
         return;
@@ -229,6 +281,15 @@ export async function composeComponent({data, path, projectPath}) {
     )
     const styleStatement = getStyleStatement(getStyle(data));
 
+    // const frameStatement = getFrameStatement(getFrame(data));
+
+    const contentView = `
+        <${base} 
+            style={style}
+            ${propsString}
+        >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
+    `;
+
     const content = `
 import React from 'react';
 ${logicsStatement}
@@ -242,12 +303,7 @@ export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{
     
     ${effectsString}
     
-    return(
-        <${base} 
-            style={style}
-            ${propsString}
-        >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
-    );
+    return(${getFrameStatement(getFrame(data),contentView)});
 }
     `;
 

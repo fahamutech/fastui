@@ -33,5 +33,5 @@ export function getEffects(data) {
 }
 
 export function getFrame(data) {
-    return {...data?.modifier?.frame ?? {}};
+    return data?.modifier?.frame;
 }
