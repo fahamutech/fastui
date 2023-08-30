@@ -4,11 +4,12 @@ import {
     ensurePathExist,
     firstUpperCase,
     ifDoElse,
-    itOrEmptyList, justList,
+    itOrEmptyList,
+    justList,
     snakeToCamel
 } from "./util.mjs";
 import {getChildren, getEffects, getExtend, getFrame, getProps, getStates, getStyles} from "./modifier.mjs";
-import {writeFile, appendFile} from "node:fs/promises";
+import {appendFile, writeFile} from "node:fs/promises";
 
 function getStyleMap(style) {
     const getValue = ifDoElse(
@@ -201,56 +202,52 @@ function getBase(data) {
     }
 }
 
-function getFrameStatement(frame, child) {
+/**
+ *
+ * @param frame
+ * @param onChild {(boolean)=>*}
+ * @return {string}
+ */
+function getFrameStatement(frame, onChild) {
     const column = '{{display: "flex",position: "relative",flexDirection: "column"}}';
     const row = '{{display: "flex",position: "relative",flexDirection: "row"}}';
-    const stack = '{{position: "relative"}}';
-    if (`${frame}`.trim().toLowerCase() === 'column.start') {
+    const withStack = `${frame}`.trim().toLowerCase().includes('.stack')
+    if (`${frame}`.trim().toLowerCase().startsWith('column.start')) {
         return `
             <div style=${column}>
-                ${child}
+                ${onChild(withStack)}
                 {view}
             </div>
         `;
-    } else if (`${frame}`.trim().toLowerCase() === 'column.end') {
+    } else if (`${frame}`.trim().toLowerCase().startsWith('column.end')) {
         return `
             <div style=${column}>
                 {view}
-                ${child}
+                ${onChild(withStack)}
             </div>
         `;
-    } else if (`${frame}`.trim().toLowerCase() === 'row.start') {
+    } else if (`${frame}`.trim().toLowerCase().startsWith('row.start')) {
         return `
             <div style=${row}>
-                ${child}
+                ${onChild(withStack)}
                 {view}
             </div>
         `;
-    } else if (`${frame}`.trim().toLowerCase() === 'row.end') {
+    } else if (`${frame}`.trim().toLowerCase().startsWith('row.end')) {
         return `
             <div style=${row}>
                 {view}
-                ${child}
+                ${onChild(withStack)}
             </div>
         `;
     } else {
         return `
             <div style=${column}>
-                ${child}
+                ${onChild(withStack)}
                 {view}
             </div>
         `;
     }
-    // else if(`${frame}`.trim().toLowerCase() === 'stack'){
-    //     return `
-    //         <div style="${stack}">
-    //
-    //             <div style="{{position: "absolute"}}">
-    //                 ${child}
-    //             </div>
-    //         </div>
-    //     `;
-    // }
 }
 
 function getExtendBase(extend) {
@@ -306,11 +303,19 @@ export async function composeComponent({data, path, projectPath}) {
             ${propsString}
         >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
     `;
-    const contentViewWithExtend = `
-        <${extendBase} view={${contentViewWithoutExtend}}></${extendBase}>
-    `;
+    const getContentViewWithExtend = withStack => {
+        if (withStack === true) {
+            return `
+                <${base}  style={style} ${propsString}><${extendBase}></${extendBase}></${base}>
+            `;
+        }
+        return `<${extendBase} view={${contentViewWithoutExtend}}></${extendBase}>`;
+    }
 
-    const contentView = extendBase ? contentViewWithExtend : contentViewWithoutExtend;
+    // const contentView = extendBase ? contentViewWithExtend : contentViewWithoutExtend;
+    const getContentView = withStack => {
+        return extendBase ? getContentViewWithExtend(withStack) : contentViewWithoutExtend;
+    }
 
     const content = `
 import React from 'react';
@@ -326,7 +331,7 @@ export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{
     
     ${effectsString}
     
-    return(${getFrameStatement(getFrame(data), contentView)});
+    return(${getFrameStatement(getFrame(data), getContentView)});
 }
     `;
 
