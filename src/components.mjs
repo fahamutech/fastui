@@ -4,14 +4,13 @@ import {
     ensurePathExist,
     firstUpperCase,
     ifDoElse,
-    itOrEmptyList,
+    itOrEmptyList, justList,
     snakeToCamel
 } from "./util.mjs";
 import {getChildren, getEffects, getProps, getStates, getStyle} from "./modifier.mjs";
 import {writeFile, appendFile} from "node:fs/promises";
 
-function getStyleStatement(data) {
-    const style = getStyle(data);
+function getStyleMap(style) {
     const getValue = ifDoElse(
         v => `${v}`.trim().toLowerCase().startsWith('states.'),
         v => `${v}`.trim().replace(/^(states.)/ig, ''),
@@ -146,9 +145,14 @@ async function getLogicsStatement(data = {}, path = '', projectPath = '') {
     const pathSteps = pathParts.filter(x => x !== 'blueprints').map(_ => '..');
     const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
     const map = x => `${x}`.trim().replace(/^(logics.)|\(\)/ig, '');
-    const styleInputs = Object.values({...data?.modifier?.style ?? {}}).filter(filter).map(map);
-    const propsInputs = Object.values({...data?.modifier?.props ?? {}}).filter(filter).map(map);
-    const effects = {...data?.modifier?.effects ?? {}};
+    const getStyleInputs = ifDoElse(
+        x => `${x}`.trim().toLowerCase().startsWith('logics.'),
+        compose(justList, map),
+        x => Object.values(x).filter(filter).map(map)
+    );
+    const styleInputs = getStyleInputs(getStyle(data));
+    const propsInputs = Object.values(getProps(data)).filter(filter).map(map);
+    const effects = getEffects(data);
     const effectsInputs = Object.keys(effects).reduce((a, b) => {
         return [
             ...a,
@@ -218,7 +222,12 @@ export async function composeComponent({data, path, projectPath}) {
         getInputsStatement(data).split(',')
     ].join(',');
     const componentStatement = `const component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}]);`;
-    const styleStatement = `const style = React.useMemo(()=>(${getStyleStatement(data)}),[${useMemoDependencies}]);`;
+    const getStyleStatement = ifDoElse(
+        t => `${t}`.trim().toLowerCase().startsWith('logics.'),
+        t => `const style = React.useMemo(()=>${`${t}`.replace(/^(logics.)|\(\)/ig, '')}({component,args:[]}),[component]);`,
+        t => `const style = React.useMemo(()=>(${getStyleMap(t)}),[${useMemoDependencies}]);`
+    )
+    const styleStatement = getStyleStatement(getStyle(data));
 
     const content = `
 import React from 'react';

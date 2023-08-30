@@ -13,7 +13,11 @@ export function getChildren(data) {
 }
 
 export function getStyle(data) {
-    return {...data?.modifier?.style ?? {}};
+    if (`${data?.modifier?.style}`.trim().toLowerCase().startsWith('logics.')) {
+        return data?.modifier?.style ?? {};
+    } else {
+        return {...data?.modifier?.style ?? {}};
+    }
 }
 
 export function getProps(data) {
