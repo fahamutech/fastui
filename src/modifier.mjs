@@ -13,11 +13,7 @@ export function getChildren(data) {
 }
 
 export function getStyle(data) {
-    const modifier = {...data?.modifier ?? {}};
-    delete modifier.props;
-    delete modifier.states;
-    delete modifier.effects;
-    return modifier
+    return {...data?.modifier?.style ?? {}};
 }
 
 export function getProps(data) {
@@ -30,4 +26,8 @@ export function getStates(data) {
 
 export function getEffects(data) {
     return {...data?.modifier?.effects ?? {}};
+}
+
+export function getFrame(data) {
+    return {...data?.modifier?.frame ?? {}};
 }

@@ -20,7 +20,7 @@ function getStyleStatement(data) {
             v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
             ifDoElse(
                 v => `${v}`.trim().toLowerCase().startsWith('logics.'),
-                v => `${`${v}`.trim().replace(/^(logics.)/ig, '')}({component,args: []})`,
+                v => `${`${v}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args: []})`,
                 v => `${JSON.stringify(v ?? '')}`.trim()
             )
         )
@@ -59,7 +59,7 @@ function sanitizeEffectDependency(data) {
         if (`${watch}`.trim().toLowerCase().startsWith('inputs.')) {
             return `${watch}`.replace(/^(inputs.)/ig, '');
         }
-        return watch===undefined?undefined:`"${watch}"`
+        return watch === undefined ? undefined : `"${watch}"`
     };
     return Array.isArray(data) ? data.map(mapWatch).join(',') : mapWatch(data);
 }
@@ -89,7 +89,7 @@ function getEffectsStatement(data) {
     const effects = getEffects(data);
     const getDependencies = k => sanitizeEffectDependency(effects[k]?.watch);
     const getBody = k => `${effects[k]?.body}`.trim().toLowerCase().startsWith('logics.')
-        ? `${effects[k]?.body}`.trim().replace(/^(logics.)/ig, '')
+        ? `${effects[k]?.body}`.trim().replace(/^(logics.)|\(\)/ig, '')
         : effects[k]?.body ?? '{}';
     return Object
         .keys(effects ?? {})
@@ -108,11 +108,15 @@ function getPropsStatement(data) {
             v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
             ifDoElse(
                 v => `${v}`.trim().toLowerCase().startsWith('logics.'),
-                v => `(...args)=>${`${v}`.trim().replace(/^(logics.)/ig, '')}({component,args})`,
+                ifDoElse(
+                    x => `${x}`.trim().endsWith('()'),
+                    x => `${`${x}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args:[]})`,
+                    x => `(...args)=>${`${x}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args})`
+                ),
                 v => `${JSON.stringify(v ?? '')}`.trim()
             )
         )
-    )
+    );
     return Object
         .keys(props)
         .filter(k => props[k] !== undefined && props[k] !== null)
@@ -123,13 +127,7 @@ function getPropsStatement(data) {
 function getInputsStatement(data = {}) {
     const filter = x => `${x}`.trim().toLowerCase().startsWith('inputs.');
     const map = x => `${x}`.trim().replace(/^(inputs.)/ig, '');
-    const styleInputs = Object.values({
-        ...data?.modifier ?? {},
-        props: undefined,
-        states: undefined,
-        effects: undefined
-    })
-        .filter(filter).map(map);
+    const styleInputs = Object.values({...data?.modifier?.style ?? {}}).filter(filter).map(map);
     const propsInputs = Object.values({...data?.modifier?.props ?? {}}).filter(filter).map(map);
     const statesInputs = Object.values({...data?.modifier?.states ?? {}}).filter(filter).map(map);
     const effects = {...data?.modifier?.effects ?? {}};
@@ -147,19 +145,16 @@ async function getLogicsStatement(data = {}, path = '', projectPath = '') {
     pathParts.pop();
     const pathSteps = pathParts.filter(x => x !== 'blueprints').map(_ => '..');
     const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
-    const map = x => `${x}`.trim().replace(/^(logics.)/ig, '');
-    const styleInputs = Object.values({
-        ...data?.modifier ?? {},
-        props: undefined,
-        effects: undefined,
-        states: undefined
-    }).filter(filter).map(map);
+    const map = x => `${x}`.trim().replace(/^(logics.)|\(\)/ig, '');
+    const styleInputs = Object.values({...data?.modifier?.style ?? {}}).filter(filter).map(map);
     const propsInputs = Object.values({...data?.modifier?.props ?? {}}).filter(filter).map(map);
     const effects = {...data?.modifier?.effects ?? {}};
     const effectsInputs = Object.keys(effects).reduce((a, b) => {
         return [
             ...a,
-            `${effects[b]?.body}`.trim().replace(/^(logics.)/ig, '')
+            `${effects[b]?.body}`
+                .trim()
+                .replace(/^(logics.)|\(\)/ig, '')
         ]
     }, []);
     const exports = Array.from([...propsInputs, ...effectsInputs, ...styleInputs].reduce((a, b) => a.add(b), new Set()));
@@ -188,7 +183,7 @@ export function ${e}(data) {
     } catch (e) {
         console.log(e);
     }
-    return `import {${exports?.join(',')}} from '${logicImportPath}'`
+    return `import {${exports?.join(',')}} from '${logicImportPath}';`
 }
 
 function getBase(data) {
@@ -222,14 +217,14 @@ export async function composeComponent({data, path, projectPath}) {
         ...Object.keys(getStates(data)),
         getInputsStatement(data).split(',')
     ].join(',');
-    const componentStatement = `const component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}])`;
-    const styleStatement = `const style = React.useMemo(()=>(${getStyleStatement(data)}),[${useMemoDependencies}])`;
+    const componentStatement = `const component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}]);`;
+    const styleStatement = `const style = React.useMemo(()=>(${getStyleStatement(data)}),[${useMemoDependencies}]);`;
 
     const content = `
 import React from 'react';
 ${logicsStatement}
 
-export function ${getFileName(path)}(${getInputsStatement(data)===''?'':`{${getInputsStatement(data)}}`}){
+export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}){
     ${statesInString}
     
     ${componentStatement}
@@ -242,14 +237,12 @@ export function ${getFileName(path)}(${getInputsStatement(data)===''?'':`{${getI
         <${base} 
             style={style}
             ${propsString}
-        >
-            ${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}
-        </${base}>
+        >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
     );
 }
     `;
 
     const srcPath = getSrcPathFromBlueprintPath(path);
     await ensurePathExist(srcPath);
-    await writeFile(srcPath, content);
+    await writeFile(srcPath, content.replace(/\s+/ig, ' '));
 }
