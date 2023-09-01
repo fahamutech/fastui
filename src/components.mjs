@@ -165,8 +165,8 @@ async function getLogicsStatement(data = {}, path = '', projectPath = '') {
     const exports = Array.from([...propsInputs, ...effectsInputs, ...styleInputs].reduce((a, b) => a.add(b), new Set()));
 
     const logicFileName = getFilenameFromBlueprintPath(path).trim() + '.mjs';
-    const logicImportPath = `${pathSteps.join('/')}/${pathParts.join('/')}/../logics/${logicFileName}`;
-    const logicFolderPath = pathParts.join('/') + '/../logics';
+    const logicImportPath = `${pathSteps.join('/')}/${pathParts.join('/')}/./logics/${logicFileName}`;
+    const logicFolderPath = pathParts.join('/') + '/./logics';
     await ensurePathExist(logicFolderPath);
     await ensureFileExist(`${logicFolderPath}/${logicFileName}`);
     try {
@@ -197,6 +197,8 @@ function getBase(data) {
         return 'img';
     } else if (`${base}` === 'text') {
         return 'span';
+    } else if (`${base}` === 'input') {
+        return 'input';
     } else {
         return 'div';
     }
