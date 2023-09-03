@@ -13,36 +13,45 @@ import {appendFile} from "node:fs/promises";
 
 /**
  *
- * @param frame {string}
+ * @param frame {string|object}
  * @param onChild {(boolean)=>*}
  * @return {string}
  */
 export function getFrameStatement(frame, onChild) {
-    const column = '{{display: "flex",position: "relative",flexDirection: "column"}}';
-    const row = '{{display: "flex",position: "relative",flexDirection: "row"}}';
-    const withStack = `${frame}`.trim().toLowerCase().includes('.stack')
-    if (`${frame}`.trim().toLowerCase().startsWith('column.start')) {
+    const {base, styles={}} = frame??{};
+    const frameBase = base ?? frame;
+
+    const column = `{${JSON.stringify({
+        ...styles,
+        ...{display: 'flex', flexDirection: 'column'}
+    })}}`;
+    const row = `{${JSON.stringify({
+        ...styles,
+        ...{display: 'flex', flexDirection: 'row'}
+    })}}`;
+    const withStack = `${frameBase}`.trim().toLowerCase().includes('.stack')
+    if (`${frameBase}`.trim().toLowerCase().startsWith('column.start')) {
         return `
             <div style=${column}>
                 ${onChild(withStack)}
                 {view}
             </div>
         `;
-    } else if (`${frame}`.trim().toLowerCase().startsWith('column.end')) {
+    } else if (`${frameBase}`.trim().toLowerCase().startsWith('column.end')) {
         return `
             <div style=${column}>
                 {view}
                 ${onChild(withStack)}
             </div>
         `;
-    } else if (`${frame}`.trim().toLowerCase().startsWith('row.start')) {
+    } else if (`${frameBase}`.trim().toLowerCase().startsWith('row.start')) {
         return `
             <div style=${row}>
                 ${onChild(withStack)}
                 {view}
             </div>
         `;
-    } else if (`${frame}`.trim().toLowerCase().startsWith('row.end')) {
+    } else if (`${frameBase}`.trim().toLowerCase().startsWith('row.end')) {
         return `
             <div style=${row}>
                 {view}
@@ -228,8 +237,8 @@ export function getInputsStatement(data = {}) {
             ...itOrEmptyList(effects[b]?.watch).filter(filter).map(map)
         ]
     }, []);
-    return Array.from(propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view','loopElement','loopIndex'])
-        .reduce((a,b)=>a.add(b),new Set()))
+    return Array.from(propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view', 'loopElement', 'loopIndex'])
+        .reduce((a, b) => a.add(b), new Set()))
         .join(',');
 }
 
@@ -376,7 +385,7 @@ function getStyleMap(style) {
     return `{${styleParts.join(',')}}`;
 }
 
-export function getStyleStatement(data){
+export function getStyleStatement(data) {
     const useMemoDependencies = getUseMemoDependencies(data);
     const style = getStyles(data);
     const getStyleStatement = ifDoElse(
