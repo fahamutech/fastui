@@ -52,3 +52,7 @@ export function getLeft(data){
 export function getRight(data){
     return data?.modifier?.right;
 }
+
+export function getFeed(data){
+    return data?.modifier?.feed;
+}

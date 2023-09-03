@@ -8,7 +8,7 @@ import {
     justList,
     snakeToCamel
 } from "../utils/index.mjs";
-import {getEffects, getExtend, getLeft, getProps, getRight, getStates, getStyles} from "./modifier.mjs";
+import {getEffects, getExtend, getFeed, getLeft, getProps, getRight, getStates, getStyles} from "./modifier.mjs";
 import {appendFile} from "node:fs/promises";
 
 /**
@@ -335,12 +335,13 @@ export function ${e}(data) {
  * @param data {*}
  * @return {string}
  */
-export  function getComponentsImportStatement(data) {
+export function getComponentsImportStatement(data) {
     const extend = getExtend(data);
     const left = getLeft(data);
     const right = getRight(data);
+    const feed = getFeed(data);
 
-    return [extend, left, right].map(x => {
+    return [extend, left, right, feed].map(x => {
         if (typeof x === 'string' && x.endsWith('.yml')) {
             const component = firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
             const importPath = `${x}`.trim().startsWith('.') ? x : `./${x}`;
@@ -348,4 +349,38 @@ export  function getComponentsImportStatement(data) {
         }
         return null;
     }).filter(y => y !== null).join('\n');
+}
+
+function getStyleMap(style) {
+    const getValue = ifDoElse(
+        v => `${v}`.trim().toLowerCase().startsWith('states.'),
+        v => `${v}`.trim().replace(/^(states.)/ig, ''),
+        ifDoElse(
+            v => `${v}`.trim().toLowerCase().startsWith('inputs.'),
+            v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
+            ifDoElse(
+                v => `${v}`.trim().toLowerCase().startsWith('logics.'),
+                v => `${`${v}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args: []})`,
+                v => `${JSON.stringify(v ?? '')}`.trim()
+            )
+        )
+    );
+    const styleParts = Object.keys(style).reduce((a, b) => {
+        return [
+            ...a,
+            `"${b}":${getValue(style[b])}`
+        ]
+    }, []);
+    return `{${styleParts.join(',')}}`;
+}
+
+export function getStyleStatement(data){
+    const useMemoDependencies = getUseMemoDependencies(data);
+    const style = getStyles(data);
+    const getStyleStatement = ifDoElse(
+        t => `${t}`.trim().toLowerCase().startsWith('logics.'),
+        t => `const style = React.useMemo(()=>${`${t}`.replace(/^(logics.)|\(\)/ig, '')}({component,args:[]}),[component]);`,
+        t => `const style = React.useMemo(()=>(${getStyleMap(t)}),[${useMemoDependencies}]);`
+    );
+    return getStyleStatement(style);
 }

@@ -1,14 +1,10 @@
-import {ensurePathExist} from "../utils/index.mjs";
-import {getChildren, getFrame, getStyles} from "./modifier.mjs";
-import {writeFile} from "node:fs/promises";
 import {
-    getBase,
     getComponentMemoStatement,
     getComponentsImportStatement,
     getEffectsStatement,
     getFileName,
+    getFilenameFromBlueprintPath,
     getFrameStatement,
-    getInputsStatement,
     getLogicsStatement,
     getPropsStatement,
     getSrcPathFromBlueprintPath,
@@ -16,33 +12,38 @@ import {
     getStyleStatement,
     prepareGetContentView
 } from "./index.mjs";
+import {getFeed, getFrame} from "./modifier.mjs";
+import {ensurePathExist, firstUpperCase, snakeToCamel} from "../utils/index.mjs";
+import {writeFile} from "node:fs/promises";
 
 function getContentViewWithoutExtend(data) {
-    const base = getBase(data);
+    const feed = getFeed(data);
     const propsString = getPropsStatement(data);
-    const children = getChildren(data);
-    return `
-        <${base} 
+    const getComponentName = x => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
+    const view = `
+        <div 
             style={style}
             ${propsString}
-        >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
+        >
+            {data?.map((item,index)=> (<div key={item?._key??keyIndex++}><${getComponentName(feed)} elementIndex={index} element={item}/></div>))}
+        </div>
     `;
+    // const view = `condition===true?${rightComponent}:${leftComponent}`;
+    return feed ? view : '<span/>';
 }
 
-
-export async function composeComponent({data, path, projectPath}) {
+export async function composeLoop({data, path, projectPath}) {
+    // console.log(data);
     if (!data) {
         return;
     }
-
-    const statesInString = getStatesStatement(data)
+    const statesInString = getStatesStatement(data);
     const effectsString = getEffectsStatement(data);
-
+    const componentStatement = getComponentMemoStatement(data);
     const logicsStatement = await getLogicsStatement(data, path, projectPath);
     const componentsImportStatement = getComponentsImportStatement(data);
-    const componentStatement = getComponentMemoStatement(data);
-
     const styleStatement = getStyleStatement(data);
+
     const viewWithoutExtend = getContentViewWithoutExtend(data);
 
     const content = `
@@ -50,15 +51,17 @@ import React from 'react';
 ${logicsStatement}
 ${componentsImportStatement}
 
-export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}){
+let keyIndex=0;
+
+export function ${getFileName(path)}({view}) {
     ${statesInString}
     
     ${componentStatement}
     
     ${styleStatement}
-    
+
     ${effectsString}
-    
+
     return(${getFrameStatement(getFrame(data), prepareGetContentView({data, viewWithoutExtend}))});
 }
     `;
