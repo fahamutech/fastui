@@ -6,6 +6,11 @@ export function snakeToCamel(str) {
         .replace(/_([a-z])/ig, (_, letter) => letter.toUpperCase());
 }
 
+/**
+ *
+ * @param str{string}
+ * @return {string}
+ */
 export function firstUpperCase(str) {
     return str.charAt(0).toUpperCase() + str.slice(1);
 }

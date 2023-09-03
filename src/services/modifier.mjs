@@ -1,3 +1,8 @@
+/**
+ *
+ * @param data
+ * @return {{type: string, value: (*|string)}|{type: string, value: string | undefined}}
+ */
 export function getChildren(data) {
     const modifier = {...data?.modifier} ?? {};
     const children = modifier?.props?.children;
@@ -38,4 +43,12 @@ export function getFrame(data) {
 
 export function getExtend(data){
     return data?.modifier?.extend;
+}
+
+export function getLeft(data){
+    return data?.modifier?.left;
+}
+
+export function getRight(data){
+    return data?.modifier?.right;
 }

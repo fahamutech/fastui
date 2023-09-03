@@ -2,9 +2,9 @@
   "name": "fastui-cli",
   "version": "0.1.0",
   "description": "",
-  "main": "./src/index_cli.mjs",
+  "main": "src/index.mjs",
   "bin": {
-    "fastui": "./src/index_cli.mjs"
+    "fastui": "src/index.mjs"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
