@@ -25,7 +25,7 @@ function getContentViewWithoutExtend(data) {
             style={style}
             ${propsString}
         >
-            {data?.map((item,index)=> (<div key={item?._key??keyIndex++}><${getComponentName(feed)} elementIndex={index} element={item}/></div>))}
+            {data?.map((item,index)=> (<div key={item?._key??keyIndex++}><${getComponentName(feed)} loopIndex={index} loopElement={item}/></div>))}
         </div>
     `;
     // const view = `condition===true?${rightComponent}:${leftComponent}`;
@@ -55,6 +55,9 @@ let keyIndex=0;
 
 export function ${getFileName(path)}({view}) {
     ${statesInString}
+    
+    const loopIndex = React.useMemo(()=>undefined,[]);
+    const loopElement = React.useMemo(()=>undefined,[]);
     
     ${componentStatement}
     

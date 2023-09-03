@@ -19,8 +19,8 @@ function getContentViewWithoutExtend(data) {
     const left = getLeft(data);
     const right = getRight(data);
     const getComponentName = x => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
-    const leftComponent = left ? `<${getComponentName(left)}/>` : '<span/>';
-    const rightComponent = right ? `<${getComponentName(right)}/>` : '<span/>';
+    const leftComponent = left ? `<${getComponentName(left)} loopIndex={loopIndex} loopElement={loopElement}/>` : '<span/>';
+    const rightComponent = right ? `<${getComponentName(right)} loopIndex={loopIndex} loopElement={loopElement}/>` : '<span/>';
     const view = `condition===true?${rightComponent}:${leftComponent}`;
     return extend ? view : `{${view}}`;
 }
@@ -43,7 +43,7 @@ import React from 'react';
 ${logicsStatement}
 ${componentsImportStatement}
 
-export function ${getFileName(path)}({view}) {
+export function ${getFileName(path)}({view,loopIndex,loopElement}) {
     ${statesInString}
     
     ${componentStatement}

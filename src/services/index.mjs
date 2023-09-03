@@ -155,8 +155,8 @@ export function prepareGetContentView({data, viewWithoutExtend}) {
 
     return function (withStack) {
         const contentViewWithExtend = withStack === true
-            ? `<${base}  style={style} ${propsString}><${extendBase}></${extendBase}></${base}>`
-            : `<${extendBase} view={${viewWithoutExtend}}></${extendBase}>`;
+            ? `<${base}  style={style} ${propsString}><${extendBase} loopIndex={loopIndex} loopElement={loopElement}></${extendBase}></${base}>`
+            : `<${extendBase} loopIndex={loopIndex} loopElement={loopElement} view={${viewWithoutExtend}}></${extendBase}>`;
 
         return extendBase ? contentViewWithExtend : viewWithoutExtend;
     };
@@ -228,7 +228,9 @@ export function getInputsStatement(data = {}) {
             ...itOrEmptyList(effects[b]?.watch).filter(filter).map(map)
         ]
     }, []);
-    return propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view']).join(',');
+    return Array.from(propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view','loopElement','loopIndex'])
+        .reduce((a,b)=>a.add(b),new Set()))
+        .join(',');
 }
 
 /**
