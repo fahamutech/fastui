@@ -5,7 +5,7 @@ import {join, resolve, sep as pathSep} from "node:path"
 import {readSpecs, specToJSON} from "../src/services/specs.mjs";
 import {composeComponent} from "../src/services/component.mjs";
 
-const specFile = " import React from 'react'; import {getColor} from '../test/blueprints/logics/test_comp.mjs'; export function TestComp({view,loopElement,loopIndex}){ const component = React.useMemo(()=>({states:{},inputs:{\"view\":view,\"loopElement\":loopElement,\"loopIndex\":loopIndex}}),[view,loopElement,loopIndex]); const style = React.useMemo(()=>({\"height\":54,\"backgroundColor\":\"blue\",\"color\":getColor({component,args: []})}),[view,loopElement,loopIndex]); return( <div style={{\"display\":\"flex\",\"flexDirection\":\"column\"}}> <div style={style} ></div> {view} </div> ); } ";
+const specFile = ` import React from 'react'; import {getColor} from '${join('..','test','blueprints','logics','test_comp.mjs')}'; export function TestComp({view,loopElement,loopIndex}){ const component = React.useMemo(()=>({states:{},inputs:{\"view\":view,\"loopElement\":loopElement,\"loopIndex\":loopIndex}}),[view,loopElement,loopIndex]); const style = React.useMemo(()=>({\"height\":54,\"backgroundColor\":\"blue\",\"color\":getColor({component,args: []})}),[view,loopElement,loopIndex]); return( <div style={{\"display\":\"flex\",\"flexDirection\":\"column\"}}> <div style={style} ></div> {view} </div> ); } `;
 const logicFile = `
 /**
 * @param data {
