@@ -1,7 +1,6 @@
-import child_process from "child_process";
 import {expect} from "chai";
 import {readFile} from "node:fs/promises";
-import {join, resolve, sep as pathSep} from "node:path"
+import {join, resolve} from "node:path"
 import {readSpecs, specToJSON} from "../src/services/specs.mjs";
 import {composeComponent} from "../src/services/component.mjs";
 
