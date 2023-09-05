@@ -322,7 +322,7 @@ export async function getLogicsStatement(data = {}, unParsedPath = '', projectPa
     const logicImportPath = pathJoin(
         pathSteps.join(pathSep), pathParts.join(pathSep), '.', 'logics', logicFileName
     );
-    // console.log(logicImportPath);
+    console.log(logicImportPath);
 
     // `${}/${}/./logics/${logicFileName}`;
     const logicFolderPath = pathJoin(pathParts.join(pathSep), '.', 'logics');
