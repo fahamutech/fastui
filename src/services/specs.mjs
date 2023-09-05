@@ -20,7 +20,7 @@ export async function readSpecs(unParsedRootFolder) {
     const root = rootFolder === pathSep
         ? `./`
         : rootFolder?.endsWith(pathSep)
-            ? rootFolder?.replace(pathSep,'/')
+            ? rootFolder
             : `${rootFolder ?? '.'}/`;
     const pattern = `${root.replace(pathSep,'/')}**/*.yml`;
     console.log(pattern,'----PATTERN----')
