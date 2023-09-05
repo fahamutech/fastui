@@ -1,5 +1,6 @@
 import {mkdir, appendFile} from 'node:fs/promises'
 import {createHash} from 'crypto';
+import {resolve as pathResolve} from "node:path";
 
 export function snakeToCamel(str) {
     return `${str}`
@@ -15,12 +16,13 @@ export function firstUpperCase(str) {
     return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-export function ensurePathExist(path) {
+export function ensurePathExist(unParsedPath) {
+    const path = pathResolve(unParsedPath);
     return mkdir(`${path}`.replace(/[a-zA-Z_]+(.)mjs$/ig, ''), {recursive: true});
 }
 
-export async function ensureFileExist(path) {
-    return await appendFile(path, '');
+export async function ensureFileExist(unParsedPath) {
+    return await appendFile(pathResolve(unParsedPath), '');
 }
 
 export const justIt = x => x;

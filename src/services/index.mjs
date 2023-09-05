@@ -10,6 +10,7 @@ import {
 } from "../utils/index.mjs";
 import {getEffects, getExtend, getFeed, getLeft, getProps, getRight, getStates, getStyles} from "./modifier.mjs";
 import {appendFile} from "node:fs/promises";
+import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 
 /**
  *
@@ -18,7 +19,7 @@ import {appendFile} from "node:fs/promises";
  * @return {string}
  */
 export function getFrameStatement(frame, onChild) {
-    const {base, styles={}} = frame??{};
+    const {base, styles = {}} = frame ?? {};
     const frameBase = base ?? frame;
 
     const column = `{${JSON.stringify({
@@ -87,17 +88,17 @@ export function getExtendBase(data) {
  * @return {string}
  */
 export function getFilenameFromBlueprintPath(path) {
-    return `${path}`.split('/').pop().replace('.yml', '');
+    return `${pathResolve(path)}`.split(pathSep).pop().replace('.yml', '');
 }
 
 export /**
- * @param path{string}
+ * @param unParsedPath{string}
  * @return {string}
  * */
-function getSrcPathFromBlueprintPath(path) {
-    const pathParts = `${path}`.split('/').filter(x => x !== 'blueprints');
-    return `${pathParts.join('/')}`
-        // .replace(/^(blueprints)/ig, 'src')
+function getSrcPathFromBlueprintPath(unParsedPath) {
+    const path = pathResolve(unParsedPath).replace(process.cwd(), '.');
+    const pathParts = `${path}`.split(pathSep).filter(x => x !== 'blueprints');
+    return `${pathParts.join(pathSep)}`
         .replace(/(.yml)/ig, '.mjs');
 }
 
@@ -286,14 +287,17 @@ export function getComponentMemoStatement(data) {
 /**
  *
  * @param data {*}
- * @param path {string}
+ * @param unParsedPath {string}
  * @param projectPath {string}
  * @return {Promise<string>}
  */
-export async function getLogicsStatement(data = {}, path = '', projectPath = '') {
-    const pathParts = `${path}`.split('/');
+export async function getLogicsStatement(data = {}, unParsedPath = '', projectPath = '') {
+    const cwd = process.cwd();
+    const path = pathResolve(unParsedPath).replace(cwd, '.');
+    // console.log(path);
+    const pathParts = `${path}`.split(pathSep);
     pathParts.pop();
-    const pathSteps = pathParts.filter(x => x !== 'blueprints').map(_ => '..');
+    const pathSteps = pathParts.filter(x => x !== 'blueprints' && x !== '.').map(_ => '..');
     const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
     const map = x => `${x}`.trim().replace(/^(logics.)|\(\)/ig, '');
     const getStyleInputs = ifDoElse(
@@ -315,15 +319,21 @@ export async function getLogicsStatement(data = {}, path = '', projectPath = '')
     const exports = Array.from([...propsInputs, ...effectsInputs, ...styleInputs].reduce((a, b) => a.add(b), new Set()));
 
     const logicFileName = getFilenameFromBlueprintPath(path).trim() + '.mjs';
-    const logicImportPath = `${pathSteps.join('/')}/${pathParts.join('/')}/./logics/${logicFileName}`;
-    const logicFolderPath = pathParts.join('/') + '/./logics';
+    const logicImportPath = pathJoin(
+        pathSteps.join(pathSep), pathParts.join(pathSep), '.', 'logics', logicFileName
+    );
+    // console.log(logicImportPath);
+
+    // `${}/${}/./logics/${logicFileName}`;
+    const logicFolderPath = pathJoin(pathParts.join(pathSep), '.', 'logics');
+    // pathParts.join(pathSep) + '/./logics';
     await ensurePathExist(logicFolderPath);
-    await ensureFileExist(`${logicFolderPath}/${logicFileName}`);
+    await ensureFileExist(pathJoin(logicFolderPath, logicFileName));
     try {
-        const importedLogic = await import(`${projectPath}/${logicFolderPath}/${logicFileName}`);
+        const importedLogic = await import(pathJoin(projectPath, logicFolderPath, logicFileName));
         for (const e of exports) {
             if (importedLogic[e] === undefined) {
-                await appendFile(`${logicFolderPath}/${logicFileName}`, `
+                await appendFile(pathJoin(logicFolderPath, logicFileName), `
 /**
 * @param data {
 * {component: {states: *,inputs: *}, args: Array<*>}
@@ -340,6 +350,7 @@ export function ${e}(data) {
     }
     return `import {${exports?.join(',')}} from '${logicImportPath}';`
 }
+
 
 /**
  *

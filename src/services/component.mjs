@@ -1,5 +1,5 @@
 import {ensurePathExist} from "../utils/index.mjs";
-import {getChildren, getFrame, getStyles} from "./modifier.mjs";
+import {getChildren, getFrame} from "./modifier.mjs";
 import {writeFile} from "node:fs/promises";
 import {
     getBase,

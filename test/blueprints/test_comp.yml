@@ -1,0 +1,7 @@
+component:
+  base: rectangle
+  modifier:
+    styles:
+      height: 54
+      backgroundColor: blue
+      color: logics.getColor

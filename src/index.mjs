@@ -11,8 +11,8 @@ const {argv} = process;
 const command1 = argv[2];
 
 function getMergedCondition(condition) {
-    const {base,styles={}} = condition?.modifier?.frame??{};
-    const frameBase  = base??condition?.modifier?.frame;
+    const {base, styles = {}} = condition?.modifier?.frame ?? {};
+    const frameBase = base ?? condition?.modifier?.frame;
     return condition ? {
         ...condition,
         base: 'rectangle',
@@ -28,9 +28,10 @@ function getMergedCondition(condition) {
         }
     } : undefined;
 }
+
 function getMergedLoop(loop) {
-    const {base,styles={}} = loop?.modifier?.frame??{};
-    const frameBase  = base??loop?.modifier?.frame;
+    const {base, styles = {}} = loop?.modifier?.frame ?? {};
+    const frameBase = base ?? loop?.modifier?.frame;
     return loop ? {
         ...loop,
         base: 'rectangle',
@@ -58,7 +59,7 @@ switch (command1) {
                 const specsPath = await readSpecs(argv[4]);
                 for (const specPath of specsPath) {
                     const data = await specToJSON(specPath);
-                    const {component, components, condition,loop} = JSON.parse(JSON.stringify(data??{}));
+                    const {component, components, condition, loop} = JSON.parse(JSON.stringify(data ?? {}));
                     const paths = {path: specPath, projectPath: process.cwd()};
                     await composeComponent({data: components ?? component, ...paths});
                     const mergedCondition = getMergedCondition(condition);

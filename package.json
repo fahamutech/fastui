@@ -1,5 +1,5 @@
 {
-  "name": "fastui-cli",
+  "name": "fastui-tools",
   "version": "0.1.0",
   "description": "",
   "main": "src/index.mjs",
@@ -7,14 +7,17 @@
     "fastui": "src/index.mjs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha test/index.specs.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "glob": "^10.3.3",
-    "js-yaml": "^4.1.0",
-    "react": "^18.2.0"
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "chai": "^4.3.8",
+    "mocha": "^10.2.0"
   }
 }
