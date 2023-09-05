@@ -18,14 +18,17 @@ export function getColor(data) {
 }`;
 
 describe('Specs', function () {
+    before(()=>{
+        console.log(process.cwd(),'++++++CWD+++++')
+    })
     describe('list', function () {
         it('should list specs of the selected folder', async function () {
             const resp = await readSpecs(`./test/blueprints`);
-            expect(resp).includes(join('test',pathSep,'blueprints',pathSep,'test_comp.yml'));
+            expect(resp).includes(join('test','blueprints','test_comp.yml'));
         });
         it('should list spec of the selected folder', async function () {
             const resp = await readSpecs(`./test/blueprints/test_comp.yml`);
-            expect(resp).includes(join('test',pathSep,'blueprints',pathSep,'test_comp.yml'));
+            expect(resp).includes(join('test','blueprints','test_comp.yml'));
         });
     });
 

@@ -1,7 +1,7 @@
 import {glob} from "glob";
 import * as yaml from "js-yaml"
 import {readFile} from 'node:fs/promises'
-import {join, resolve as pathResolve, sep as pathSep, parse} from 'node:path'
+import {join, resolve as pathResolve, sep as pathSep} from 'node:path'
 
 export async function readSpecs(unParsedRootFolder) {
     const cwd = process.cwd();
