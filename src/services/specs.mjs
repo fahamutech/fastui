@@ -12,7 +12,7 @@ export async function readSpecs(unParsedRootFolder) {
         const rootFileName = rootParts.pop();
         const pattern =
             `${rootParts.join('/')}/**/${rootFileName.replace('.yml', '')}.yml`;
-        console.log(pattern, '----PATTERN----')
+        // console.log(pattern, '----PATTERN----')
         return await glob(pattern, {
             ignore: ['**/node_modules/**']
         });
@@ -23,7 +23,7 @@ export async function readSpecs(unParsedRootFolder) {
             ? rootFolder
             : `${rootFolder ?? '.'}/`;
     const pattern = `${root.split(pathSep).join('/')}**/*.yml`;
-    console.log(pattern, '----PATTERN----')
+    // console.log(pattern, '----PATTERN----')
     return await glob(pattern, {
         ignore: ['**/node_modules/**']
     });

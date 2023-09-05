@@ -19,7 +19,7 @@ export function getColor(data) {
 
 describe('Specs', function () {
     before(()=>{
-        console.log(process.cwd(),'++++++CWD+++++')
+        // console.log(process.cwd(),'++++++CWD+++++')
     })
     describe('list', function () {
         it('should list specs of the selected folder', async function () {
