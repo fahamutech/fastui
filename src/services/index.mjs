@@ -11,6 +11,7 @@ import {
 import {getEffects, getExtend, getFeed, getLeft, getProps, getRight, getStates, getStyles} from "./modifier.mjs";
 import {appendFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
+import {pathToFileURL} from 'node:url';
 
 /**
  *
@@ -322,7 +323,7 @@ export async function getLogicsStatement(data = {}, unParsedPath = '', projectPa
     const logicImportPath = pathJoin(
         pathSteps.join(pathSep), pathParts.join(pathSep), '.', 'logics', logicFileName
     );
-    console.log(logicImportPath);
+    // console.log(logicImportPath);
 
     // `${}/${}/./logics/${logicFileName}`;
     const logicFolderPath = pathJoin(pathParts.join(pathSep), '.', 'logics');
@@ -330,7 +331,7 @@ export async function getLogicsStatement(data = {}, unParsedPath = '', projectPa
     await ensurePathExist(logicFolderPath);
     await ensureFileExist(pathJoin(logicFolderPath, logicFileName));
     try {
-        const importedLogic = await import(pathJoin(projectPath, logicFolderPath, logicFileName));
+        const importedLogic = await import(pathToFileURL(pathJoin(projectPath, logicFolderPath, logicFileName)));
         for (const e of exports) {
             if (importedLogic[e] === undefined) {
                 await appendFile(pathJoin(logicFolderPath, logicFileName), `
