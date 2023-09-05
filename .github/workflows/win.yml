@@ -28,5 +28,5 @@ jobs:
         cache: 'npm'
     - run: npm install
     - run: npm install -g .
-    - run: bash ls .\test\blueprints\**\*.yml
+    - run: dir .\test\blueprints
     - run: npm test
