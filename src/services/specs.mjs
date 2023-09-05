@@ -10,9 +10,11 @@ export async function readSpecs(unParsedRootFolder) {
     if (`${rootFolder}`.endsWith('.yml')) {
         const rootParts = `${rootFolder}`.split(pathSep);
         const rootFileName = rootParts.pop();
-        const pattern = `${rootParts.join(pathSep)}${pathSep}**${pathSep}${rootFileName.replace('.yml', '')}.yml`;
+        const pattern = join(rootParts.join(pathSep),'**',rootFileName.replace('.yml', ''),'.yml')
+            // `${rootParts.join(pathSep)}${pathSep}**${pathSep}${rootFileName.replace('.yml', '')}.yml`;
+        console.log(pattern,'----PATTERN----')
         return await glob(pattern, {
-            ignore: [join('**', pathSep, 'node_modules', pathSep, '**')]
+            ignore: [join('**', 'node_modules', '**')]
         });
     }
     const root = rootFolder === pathSep
@@ -20,8 +22,10 @@ export async function readSpecs(unParsedRootFolder) {
         : rootFolder?.endsWith(pathSep)
             ? rootFolder
             : `${rootFolder ?? '.'}${pathSep}`;
-    return await glob(`${root}**${pathSep}*.yml`, {
-        ignore: [join('**', pathSep, 'node_modules', pathSep, '**')]
+    const pattern = `${root}**${pathSep}*.yml`;
+    console.log(pattern,'----PATTERN----')
+    return await glob(pattern, {
+        ignore: [join('**', 'node_modules', '**')]
     });
 }
 
