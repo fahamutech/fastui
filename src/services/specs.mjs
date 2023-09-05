@@ -10,23 +10,22 @@ export async function readSpecs(unParsedRootFolder) {
     if (`${rootFolder}`.endsWith('.yml')) {
         const rootParts = `${rootFolder}`.split(pathSep);
         const rootFileName = rootParts.pop();
-        const pattern = join(rootParts.join(pathSep),'**',rootFileName.replace('.yml', ''))
-            .concat('.yml')
-            // `${rootParts.join(pathSep)}${pathSep}**${pathSep}${rootFileName.replace('.yml', '')}.yml`;
+        const pattern =
+            `${rootParts.join('/')}/**/${rootFileName.replace('.yml', '')}.yml`;
         console.log(pattern,'----PATTERN----')
         return await glob(pattern, {
-            ignore: [join('**', 'node_modules', '**')]
+            ignore: ['**/node_modules/**']
         });
     }
     const root = rootFolder === pathSep
-        ? `.${pathSep}`
+        ? `./`
         : rootFolder?.endsWith(pathSep)
-            ? rootFolder
-            : `${rootFolder ?? '.'}${pathSep}`;
-    const pattern = `${root}**${pathSep}*.yml`;
+            ? rootFolder?.replace(pathSep,'/')
+            : `${rootFolder ?? '.'}/`;
+    const pattern = `${root}**/*.yml`;
     console.log(pattern,'----PATTERN----')
     return await glob(pattern, {
-        ignore: [join('**', 'node_modules', '**')]
+        ignore: ['**/node_modules/**']
     });
 }
 
