@@ -10,7 +10,8 @@ export async function readSpecs(unParsedRootFolder) {
     if (`${rootFolder}`.endsWith('.yml')) {
         const rootParts = `${rootFolder}`.split(pathSep);
         const rootFileName = rootParts.pop();
-        const pattern = join(rootParts.join(pathSep),'**',rootFileName.replace('.yml', ''),'.yml')
+        const pattern = join(rootParts.join(pathSep),'**',rootFileName.replace('.yml', ''))
+            .concat('.yml')
             // `${rootParts.join(pathSep)}${pathSep}**${pathSep}${rootFileName.replace('.yml', '')}.yml`;
         console.log(pattern,'----PATTERN----')
         return await glob(pattern, {
