@@ -22,7 +22,7 @@ export async function readSpecs(unParsedRootFolder) {
         : rootFolder?.endsWith(pathSep)
             ? rootFolder
             : `${rootFolder ?? '.'}/`;
-    const pattern = `${root.replace(pathSep,'/')}**/*.yml`;
+    const pattern = `${root.replaceAll(pathSep,'/')}**/*.yml`;
     console.log(pattern,'----PATTERN----')
     return await glob(pattern, {
         ignore: ['**/node_modules/**']
