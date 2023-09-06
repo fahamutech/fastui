@@ -349,7 +349,7 @@ export function ${e}(data) {
     } catch (e) {
         console.log(e);
     }
-    return `import {${exports?.join(',')}} from '${logicImportPath}';`
+    return `import {${exports?.join(',')}} from '${logicImportPath?.split(pathSep)?.join('/')}';`
 }
 
 
