@@ -42,7 +42,7 @@ export async function ensureStartScript() {
     const {scripts = {}} = fileMap;
     const {start = 'echo \"no command\"'} = scripts;
     const startParts = `${start}`.split(joiner);
-    const lastScript = startParts.pop();
+    const lastScript = startParts.pop().trim();
     await writeFile(filePath, JSON.stringify({
         ...fileMap,
         scripts: {
