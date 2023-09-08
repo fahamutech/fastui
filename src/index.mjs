@@ -5,6 +5,8 @@ import {readSpecs, specToJSON} from "./services/specs.mjs";
 import {composeComponent} from "./services/component.mjs";
 import {composeCondition} from "./services/condition.mjs";
 import {composeLoop} from "./services/loop.mjs";
+import {ensureBlueprintFolderExist, ensureWatchFileExist} from "./services/helper.mjs";
+import {ensurePathExist} from "./utils/index.mjs";
 
 const {argv} = process;
 
@@ -73,6 +75,16 @@ switch (command1) {
                 notFound(specsCommand);
         }
         break;
+    case 'watch':
+        await ensureWatchFileExist();
+        done('INFO : Done create watch file');
+        break;
+    case 'init':
+        await ensureBlueprintFolderExist();
+        await ensureWatchFileExist();
+        done('INFO : Done initiate');
+        await ensurePathExist()
+        break;
     default:
         notFound(command1);
 }
@@ -81,6 +93,6 @@ function notFound(command) {
     console.log(`INFO : Command not found ${command1}`);
 }
 
-function done() {
-    console.log(`INFO : Done build specs`);
+function done(message = 'INFO : Done build specs') {
+    console.log(message);
 }

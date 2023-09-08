@@ -5,7 +5,7 @@ import {
     getFileName,
     getFilenameFromBlueprintPath,
     getFrameStatement,
-    getLogicsStatement,
+    getLogicsImportStatement,
     getSrcPathFromBlueprintPath,
     getStatesStatement,
     prepareGetContentView
@@ -33,7 +33,7 @@ export async function composeCondition({data, path, projectPath}) {
     const statesInString = getStatesStatement(data);
     const effectsString = getEffectsStatement(data);
     const componentStatement = getComponentMemoStatement(data);
-    const logicsStatement = await getLogicsStatement(data, path, projectPath);
+    const logicsStatement = await getLogicsImportStatement(data, path, projectPath);
     const componentsImportStatement = getComponentsImportStatement(data);
 
     const viewWithoutExtend = getContentViewWithoutExtend(data);

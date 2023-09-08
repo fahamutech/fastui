@@ -5,7 +5,7 @@ import {
     getFileName,
     getFilenameFromBlueprintPath,
     getFrameStatement,
-    getLogicsStatement,
+    getLogicsImportStatement,
     getPropsStatement,
     getSrcPathFromBlueprintPath,
     getStatesStatement,
@@ -32,15 +32,21 @@ function getContentViewWithoutExtend(data) {
     return feed ? view : '<span/>';
 }
 
+/**
+ *
+ * @param data {*} map of the specification
+ * @param path {string} specification path
+ * @param projectPath {string} project root path
+ * @return {Promise<void>}
+ */
 export async function composeLoop({data, path, projectPath}) {
-    // console.log(data);
     if (!data) {
         return;
     }
     const statesInString = getStatesStatement(data);
     const effectsString = getEffectsStatement(data);
-    const componentStatement = getComponentMemoStatement(data);
-    const logicsStatement = await getLogicsStatement(data, path, projectPath);
+    const componentMemoStatement = getComponentMemoStatement(data);
+    const logicsImportStatement = await getLogicsImportStatement(data, path, projectPath);
     const componentsImportStatement = getComponentsImportStatement(data);
     const styleStatement = getStyleStatement(data);
 
@@ -48,7 +54,7 @@ export async function composeLoop({data, path, projectPath}) {
 
     const content = `
 import React from 'react';
-${logicsStatement}
+${logicsImportStatement}
 ${componentsImportStatement}
 
 let keyIndex=0;
@@ -59,7 +65,7 @@ export function ${getFileName(path)}({view}) {
     const loopIndex = React.useMemo(()=>undefined,[]);
     const loopElement = React.useMemo(()=>undefined,[]);
     
-    ${componentStatement}
+    ${componentMemoStatement}
     
     ${styleStatement}
 

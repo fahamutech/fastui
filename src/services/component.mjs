@@ -9,7 +9,7 @@ import {
     getFileName,
     getFrameStatement,
     getInputsStatement,
-    getLogicsStatement,
+    getLogicsImportStatement,
     getPropsStatement,
     getSrcPathFromBlueprintPath,
     getStatesStatement,
@@ -38,7 +38,7 @@ export async function composeComponent({data, path, projectPath}) {
     const statesInString = getStatesStatement(data)
     const effectsString = getEffectsStatement(data);
 
-    const logicsStatement = await getLogicsStatement(data, path, projectPath);
+    const logicsStatement = await getLogicsImportStatement(data, path, projectPath);
     const componentsImportStatement = getComponentsImportStatement(data);
     const componentStatement = getComponentMemoStatement(data);
 

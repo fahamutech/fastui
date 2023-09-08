@@ -1,33 +1,23 @@
 import {expect} from "chai";
-import {readFile} from "node:fs/promises";
-import {join, resolve,sep} from "node:path"
+import {readFile,readdir} from "node:fs/promises";
+import {join, resolve} from "node:path"
 import {readSpecs, specToJSON} from "../src/services/specs.mjs";
 import {composeComponent} from "../src/services/component.mjs";
-
-const specFile = ` import React from 'react'; import {getColor} from '${join('..','test','blueprints','logics','test_comp.mjs').split(sep).join('/')}'; export function TestComp({view,loopElement,loopIndex}){ const component = React.useMemo(()=>({states:{},inputs:{\"view\":view,\"loopElement\":loopElement,\"loopIndex\":loopIndex}}),[view,loopElement,loopIndex]); const style = React.useMemo(()=>({\"height\":54,\"backgroundColor\":\"blue\",\"color\":getColor({component,args: []})}),[view,loopElement,loopIndex]); return( <div style={{\"display\":\"flex\",\"flexDirection\":\"column\"}}> <div style={style} ></div> {view} </div> ); } `;
-const logicFile = `
-/**
-* @param data {
-* {component: {states: *,inputs: *}, args: Array<*>}
-* }
-*/
-export function getColor(data) {
-    // TODO: Implement the logic
-    throw new Error('Method getColor not implemented');
-}`;
+import {ensureBlueprintFolderExist, ensureWatchFileExist} from "../src/services/helper.mjs";
+import {specFile,logicFile,watchFileContent} from './data.mjs'
 
 describe('Specs', function () {
-    before(()=>{
+    before(() => {
         // console.log(process.cwd(),'++++++CWD+++++')
     })
     describe('list', function () {
         it('should list specs of the selected folder', async function () {
             const resp = await readSpecs(`./test/blueprints`);
-            expect(resp).includes(join('test','blueprints','test_comp.yml'));
+            expect(resp).includes(join('test', 'blueprints', 'test_comp.yml'));
         });
         it('should list spec of the selected folder', async function () {
             const resp = await readSpecs(`./test/blueprints/test_comp.yml`);
-            expect(resp).includes(join('test','blueprints','test_comp.yml'));
+            expect(resp).includes(join('test', 'blueprints', 'test_comp.yml'));
         });
     });
 
@@ -49,6 +39,26 @@ describe('Specs', function () {
             const file = await readFile(resolve('./test/blueprints/logics/test_comp.mjs'));
             expect(file.toString().replace(/\s+/ig, ' '))
                 .eql(logicFile.replace(/\s+/ig, ' '));
+        });
+    });
+    describe('watch', function () {
+        const _fn=async ()=>{
+            await ensureWatchFileExist();
+            const file = await readFile(resolve(join('watch.mjs')));
+            expect(file.toString().replace(/\s+/ig, ' '))
+                .eql(watchFileContent.replace(/\s+/ig, ' '));
+        }
+        it('should create a watch file', async function () {
+            await _fn();
+        });
+        it('should replace existing watch file', async function () {
+            await _fn();
+        });
+    });
+    describe('init', function () {
+        it('should create a blueprint folder', async function () {
+            await ensureBlueprintFolderExist();
+            await readdir(resolve(join('src','blueprints')));
         });
     });
 });

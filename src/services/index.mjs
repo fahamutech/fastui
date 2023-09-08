@@ -287,12 +287,12 @@ export function getComponentMemoStatement(data) {
 
 /**
  *
- * @param data {*}
- * @param unParsedPath {string}
- * @param projectPath {string}
+ * @param data {*} map of the specification
+ * @param unParsedPath {string} specification path
+ * @param projectPath {string} project root path
  * @return {Promise<string>}
  */
-export async function getLogicsStatement(data = {}, unParsedPath = '', projectPath = '') {
+export async function getLogicsImportStatement(data = {}, unParsedPath = '', projectPath = '') {
     const cwd = process.cwd();
     const path = pathResolve(unParsedPath).replace(cwd, '.');
     // console.log(path);

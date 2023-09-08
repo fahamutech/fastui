@@ -5,3 +5,4 @@ node_modules
 /src/modules
 test/test_comp.mjs
 test/blueprints/logics
+watch.mjs
