@@ -83,7 +83,6 @@ switch (command1) {
         await ensureBlueprintFolderExist();
         await ensureWatchFileExist();
         done('INFO : Done initiate');
-        await ensurePathExist()
         break;
     default:
         notFound(command1);
