@@ -5,7 +5,12 @@ import {readSpecs, specToJSON} from "./services/specs.mjs";
 import {composeComponent} from "./services/component.mjs";
 import {composeCondition} from "./services/condition.mjs";
 import {composeLoop} from "./services/loop.mjs";
-import {ensureBlueprintFolderExist, ensureStartScript, ensureWatchFileExist} from "./services/helper.mjs";
+import {
+    ensureBlueprintFolderExist,
+    ensureSchemaFileExist,
+    ensureStartScript,
+    ensureWatchFileExist
+} from "./services/helper.mjs";
 
 const {argv} = process;
 
@@ -81,6 +86,7 @@ switch (command1) {
     case 'init':
         await ensureBlueprintFolderExist();
         await ensureWatchFileExist();
+        await ensureSchemaFileExist();
         await ensureStartScript();
         done('INFO : Done initiate');
         break;
