@@ -1980,7 +1980,7 @@ watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename)
         return;
     }
     const file = \`./src/blueprints/\${filename}\`;
-    const componentFile = \`./\${filename}\`.replace('.yml', '.mjs');
+    const componentFile = \`./\${filename}\`.replace('.yml', '.jsx');
     const componentName = firstUpperCase(snakeToCamel(getFileName(file)));
 
     // console.log(file, '------')
@@ -1988,7 +1988,7 @@ watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename)
         cwd: __dirname
     }, (error, stdout, stderr) => {
         if (!error) {
-            writeFile(\`./src/App.js\`, getContent(componentFile, componentName))
+            writeFile(\`./src/App.jsx\`, getContent(componentFile, componentName))
                 .catch(console.log);
         }
     });

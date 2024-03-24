@@ -99,7 +99,7 @@ function getSrcPathFromBlueprintPath(unParsedPath) {
     const path = pathResolve(unParsedPath).replace(process.cwd(), '.');
     const pathParts = `${path}`.split(pathSep).filter(x => x !== 'blueprints');
     return `${pathParts.join(pathSep)}`
-        .replace(/(.yml)/ig, '.mjs');
+        .replace(/(.yml)/ig, '.jsx');
 }
 
 /**
@@ -362,7 +362,7 @@ export function getComponentsImportStatement(data) {
         if (typeof x === 'string' && x.endsWith('.yml')) {
             const component = firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
             const importPath = `${x}`.trim().startsWith('.') ? x : `./${x}`;
-            return `import {${component}} from '${importPath.replace('.yml', '.mjs')}';`;
+            return `import {${component}} from '${importPath.replace('.yml', '.jsx')}';`;
         }
         return null;
     }).filter(y => y !== null).join('\n');
