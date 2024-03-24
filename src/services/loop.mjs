@@ -28,7 +28,6 @@ function getContentViewWithoutExtend(data) {
             {data?.map((item,index)=> (<div key={item?._key??keyIndex++}><${getComponentName(feed)} loopIndex={index} loopElement={item}/></div>))}
         </div>
     `;
-    // const view = `condition===true?${rightComponent}:${leftComponent}`;
     return feed ? view : '<span/>';
 }
 

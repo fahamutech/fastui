@@ -4,6 +4,9 @@
   "description": "FastUI component details",
   "type": "object",
   "properties": {
+    "app": {
+      "$ref": "#/$defs/component"
+    },
     "component": {
       "$ref": "#/$defs/component"
     },

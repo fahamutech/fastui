@@ -4,7 +4,7 @@
  * @return {{type: string, value: (*|string)}|{type: string, value: string | undefined}}
  */
 export function getChildren(data) {
-    const modifier = {...data?.modifier} ?? {};
+    const modifier = {...data?.modifier??{}};
     const children = modifier?.props?.children;
     if (`${children}`.trim().toLowerCase().startsWith('states.')) {
         return {type: 'state', value: `${children}`?.replace(/^(states.)/ig, '')};

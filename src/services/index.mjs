@@ -13,6 +13,15 @@ import {appendFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
+const getColumnStartFrame = ({column, withStack, onChild}) => {
+    return `
+        <div style=${column}>
+            ${onChild(withStack)}
+            {view}
+        </div>
+    `;
+}
+
 /**
  *
  * @param frame {string|object}
@@ -31,14 +40,9 @@ export function getFrameStatement(frame, onChild) {
         ...styles,
         ...{display: 'flex', flexDirection: 'row'}
     })}}`;
-    const withStack = `${frameBase}`.trim().toLowerCase().includes('.stack')
+    const withStack = `${frameBase}`.trim().toLowerCase().includes('.stack');
     if (`${frameBase}`.trim().toLowerCase().startsWith('column.start')) {
-        return `
-            <div style=${column}>
-                ${onChild(withStack)}
-                {view}
-            </div>
-        `;
+        return getColumnStartFrame({column,withStack,onChild});
     } else if (`${frameBase}`.trim().toLowerCase().startsWith('column.end')) {
         return `
             <div style=${column}>
@@ -61,12 +65,7 @@ export function getFrameStatement(frame, onChild) {
             </div>
         `;
     } else {
-        return `
-            <div style=${column}>
-                ${onChild(withStack)}
-                {view}
-            </div>
-        `;
+        return getColumnStartFrame({column,withStack,onChild});
     }
 }
 
@@ -190,7 +189,6 @@ export function getStatesStatement(data) {
         .join('\n\t');
 }
 
-
 function sanitizeEffectDependency(watch) {
     const mapWatch = watchItem => {
         if (`${watchItem}`.trim().toLowerCase().startsWith('states.')) {
@@ -295,10 +293,11 @@ export function getComponentMemoStatement(data) {
 export async function getLogicsImportStatement(data = {}, unParsedPath = '', projectPath = '') {
     const cwd = process.cwd();
     const path = pathResolve(unParsedPath).replace(cwd, '.');
-    // console.log(path);
     const pathParts = `${path}`.split(pathSep);
     pathParts.pop();
-    const pathSteps = pathParts.filter(x => x !== 'blueprints' && x !== '.').map(_ => '..');
+    const pathSteps = pathParts
+        .filter(x => x !== 'blueprints' && x !== '.')
+        .map(_ => '..');
     const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
     const map = x => `${x}`.trim().replace(/^(logics.)|\(\)/ig, '');
     const getStyleInputs = ifDoElse(
@@ -323,11 +322,7 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
     const logicImportPath = pathJoin(
         pathSteps.join(pathSep), pathParts.join(pathSep), '.', 'logics', logicFileName
     );
-    // console.log(logicImportPath);
-
-    // `${}/${}/./logics/${logicFileName}`;
     const logicFolderPath = pathJoin(pathParts.join(pathSep), '.', 'logics');
-    // pathParts.join(pathSep) + '/./logics';
     await ensurePathExist(logicFolderPath);
     await ensureFileExist(pathJoin(logicFolderPath, logicFileName));
     try {
@@ -351,7 +346,6 @@ export function ${e}(data) {
     }
     return `import {${exports?.join(',')}} from '${logicImportPath?.split(pathSep)?.join('/')}';`
 }
-
 
 /**
  *

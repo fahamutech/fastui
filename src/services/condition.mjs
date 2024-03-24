@@ -26,7 +26,6 @@ function getContentViewWithoutExtend(data) {
 }
 
 export async function composeCondition({data, path, projectPath}) {
-    // console.log(data);
     if (!data) {
         return;
     }

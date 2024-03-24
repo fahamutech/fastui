@@ -1943,17 +1943,54 @@ export async function ensureWatchFileExist() {
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {exec} from 'node:child_process';
+import {writeFile} from "node:fs/promises";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function getContent(componentFile, componentName) {
+    return \`
+import {\${componentName}} from "\${componentFile}";
+
+export function App() {
+    return (
+        <>
+            <\${componentName}/>
+        </>
+    );
+}
+
+export default App;\`;
+}
+
+function firstUpperCase(str) {
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+function getFileName(path) {
+    return path.split('/').pop().replace('.yml', '');
+}
+
+function snakeToCamel(str) {
+    return \`\${str}\`
+        .replace(/_([a-z])/ig, (_, letter) => letter.toUpperCase());
+}
 
 watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename) => {
     if (!\`\${filename}\`.endsWith('.yml') || \`\${filename}\`.endsWith('~')) {
         return;
     }
     const file = \`./src/blueprints/\${filename}\`;
+    const componentFile = \`./\${filename}\`.replace('.yml', '.mjs');
+    const componentName = firstUpperCase(snakeToCamel(getFileName(file)));
+
+    // console.log(file, '------')
     exec(\`fastui specs build \${file}\`, {
         cwd: __dirname
     }, (error, stdout, stderr) => {
+        if (!error) {
+            writeFile(\`./src/App.js\`, getContent(componentFile, componentName))
+                .catch(console.log);
+        }
     });
 });
 `);
@@ -1970,7 +2007,7 @@ export async function ensureStartScript() {
     const file = await readFile(filePath, {encoding: 'utf-8'});
     const fileMap = JSON.parse(`${file}`.trim().startsWith('{')?file:'"{}"');
     const {scripts = {}} = fileMap;
-    const {start = 'echo \"no command\"'} = scripts;
+    const {start = 'echo "no command"'} = scripts;
     const startParts = `${start}`.split(joiner);
     const lastScript = startParts.pop().trim();
     await writeFile(filePath, JSON.stringify({

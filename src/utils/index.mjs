@@ -1,5 +1,4 @@
-import {mkdir, appendFile} from 'node:fs/promises'
-import {createHash} from 'crypto';
+import {appendFile, mkdir} from 'node:fs/promises'
 import {resolve as pathResolve} from "node:path";
 
 export function snakeToCamel(str) {
@@ -29,18 +28,18 @@ export const justIt = x => x;
 
 export const compose = (...fns) =>
     (...args) =>
-        fns.reduceRight((res, fn) => [fn.call(null, ...res)], args)[0];
+        fns.reduceRight((res, fn) => [fn(...res)], args)[0];
 
-export function composeAsync(...fns) {
-    const _reversed = fns.reverse();
-    return async function a(...args) {
-        let _args = args;
-        for (const fn of _reversed) {
-            _args = [await fn.call(null, ..._args)];
-        }
-        return _args[0];
-    }
-}
+// export function composeAsync(...fns) {
+//     const _reversed = fns.reverse();
+//     return async function a(...args) {
+//         let _args = args;
+//         for (const fn of _reversed) {
+//             _args = [await fn.call(null, ..._args)];
+//         }
+//         return _args[0];
+//     }
+// }
 
 export const copyJson = (x) => JSON.parse(JSON.stringify(x));
 
@@ -57,13 +56,13 @@ const objectConstructor = ({}).constructor;
 export const appendIt = (property, it) => ifDoElse(
     x => x && x.constructor === objectConstructor,
     x => Object.assign(x, {[property]: it}),
-    _ => Object.assign({}, {[property]: it})
+    _ => ({[property]: it})
 );
 
 export const appendItFn = (property, itFn) => ifDoElse(
     x => x && x.constructor === objectConstructor,
     x => Object.assign(x, {[property]: itFn(x)}),
-    _ => Object.assign({}, {[property]: itFn(_)})
+    _ => ({[property]: itFn(_)})
 );
 
 export const replaceItFn = (property, replacer, itFn) => ifDoElse(
@@ -73,7 +72,7 @@ export const replaceItFn = (property, replacer, itFn) => ifDoElse(
         delete o[property];
         return o;
     },
-    _ => Object.assign({}, {[property]: itFn(_)})
+    _ => ({[property]: itFn(_)})
 );
 
 export const removeIt = property => ifDoElse(

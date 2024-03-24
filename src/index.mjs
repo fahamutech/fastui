@@ -53,20 +53,20 @@ function getMergedLoop(loop) {
     } : undefined;
 }
 
+const specsCommand = argv[3];
 switch (command1) {
     case 'specs':
-        const specsCommand = argv[3];
         switch (specsCommand) {
             case 'list':
                 console.log(await readSpecs(argv[4]));
                 done();
                 break;
             case 'build':
-                const specsPath = await readSpecs(argv[4]);
-                for (const specPath of specsPath) {
+                for (const specPath of await readSpecs(argv[4])) {
                     const data = await specToJSON(specPath);
-                    const {component, components, condition, loop} = JSON.parse(JSON.stringify(data ?? {}));
+                    const {component, components, condition, loop, app} = JSON.parse(JSON.stringify(data ?? {}));
                     const paths = {path: specPath, projectPath: process.cwd()};
+                    // await composeStartingComponent({data: app, ...paths});
                     await composeComponent({data: components ?? component, ...paths});
                     const mergedCondition = getMergedCondition(condition);
                     await composeCondition({data: mergedCondition, ...paths});
@@ -95,7 +95,7 @@ switch (command1) {
 }
 
 function notFound(command) {
-    console.log(`INFO : Command not found ${command1}`);
+    console.log(`INFO : Command not found ${command}`);
 }
 
 function done(message = 'INFO : Done build specs') {
