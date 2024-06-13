@@ -337,7 +337,7 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
 */
 export function ${e}(data) {
     // TODO: Implement the logic
-    throw new Error('Method ${e} not implemented');
+    // throw new Error('Method ${e} not implemented');
 }`)
             }
         }

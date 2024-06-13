@@ -141,3 +141,16 @@ export const justList = it => Array.isArray(it) ? it : [it];
 export const prepareGetFieldExists = field => x => justObject(x).hasOwnProperty(field);
 
 export const elementAt = i => arr => itOrEmptyList(arr)[i];
+
+export function justString(x){
+    return `${x??Math.random()}`;
+}
+
+export function maybeRandomName(x){
+    return (x==='' || x===null || x===undefined)?justString():x;
+}
+
+export function removeWhiteSpaces(x){
+    return x;
+    return `${x??''}`.replace(/\s+/ig, ' ');
+}

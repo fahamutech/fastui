@@ -13,7 +13,7 @@ import {
     prepareGetContentView
 } from "./index.mjs";
 import {getFeed, getFrame} from "./modifier.mjs";
-import {ensurePathExist, firstUpperCase, snakeToCamel} from "../utils/index.mjs";
+import {ensurePathExist, firstUpperCase, removeWhiteSpaces, snakeToCamel} from "../utils/index.mjs";
 import {writeFile} from "node:fs/promises";
 
 function getContentViewWithoutExtend(data) {
@@ -76,5 +76,5 @@ export function ${getFileName(path)}({view}) {
 
     const srcPath = getSrcPathFromBlueprintPath(path);
     await ensurePathExist(srcPath);
-    await writeFile(srcPath, content.replace(/\s+/ig, ' '));
+    await writeFile(srcPath, removeWhiteSpaces(content));
 }

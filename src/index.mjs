@@ -11,6 +11,13 @@ import {
     ensureStartScript,
     ensureWatchFileExist
 } from "./services/helper.mjs";
+import {
+    fetchFigmaFile,
+    getDesignDocument,
+    getPagesAndTraverseChildren,
+    walkFrameChildren
+} from "./services/automation/figma.mjs";
+import {join, resolve} from "node:path";
 
 const {argv} = process;
 
@@ -61,10 +68,21 @@ switch (command1) {
                 console.log(await readSpecs(argv[4]));
                 done();
                 break;
+            case 'automate':
+                await ensureBlueprintFolderExist();
+                const bluePrintPath = resolve(join(process.cwd(), 'src', 'blueprints'));
+                const data = await fetchFigmaFile({
+                    token: process.env.FIGMA_TOKEN,
+                    figFile: process.env.FIGMA_FILE
+                });
+                const document = getDesignDocument(data);
+                const pages = getPagesAndTraverseChildren(document);
+                await walkFrameChildren(pages, bluePrintPath);
+                break;
             case 'build':
                 for (const specPath of await readSpecs(argv[4])) {
                     const data = await specToJSON(specPath);
-                    const {component, components, condition, loop, app} = JSON.parse(JSON.stringify(data ?? {}));
+                    const {component, components, condition, loop} = JSON.parse(JSON.stringify(data ?? {}));
                     const paths = {path: specPath, projectPath: process.cwd()};
                     // await composeStartingComponent({data: app, ...paths});
                     await composeComponent({data: components ?? component, ...paths});
@@ -87,6 +105,7 @@ switch (command1) {
         await ensureBlueprintFolderExist();
         await ensureWatchFileExist();
         await ensureSchemaFileExist();
+        // await ensureConfigFileExist();
         await ensureStartScript();
         done('INFO : Done initiate');
         break;

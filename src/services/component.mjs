@@ -1,4 +1,4 @@
-import {ensurePathExist} from "../utils/index.mjs";
+import {ensurePathExist, removeWhiteSpaces} from "../utils/index.mjs";
 import {getChildren, getFrame} from "./modifier.mjs";
 import {writeFile} from "node:fs/promises";
 import {
@@ -65,7 +65,7 @@ export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{
 
     const srcPath = getSrcPathFromBlueprintPath(path);
     await ensurePathExist(srcPath);
-    await writeFile(srcPath, content.replace(/\s+/ig, ' '));
+    await writeFile(srcPath, removeWhiteSpaces(content));
 }
 
 export async function composeStartingComponent({data, path, projectPath}) {
@@ -105,5 +105,5 @@ export default App;
 
     const srcPath = `${projectPath}/src`
     await ensurePathExist(srcPath);
-    await writeFile(`${srcPath}/App.js`, content.replace(/\s+/ig, ' '));
+    await writeFile(`${srcPath}/App.js`, removeWhiteSpaces(content));
 }

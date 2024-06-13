@@ -1987,14 +1987,23 @@ watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename)
     exec(\`fastui specs build \${file}\`, {
         cwd: __dirname
     }, (error, stdout, stderr) => {
-        if (!error) {
-            writeFile(\`./src/App.jsx\`, getContent(componentFile, componentName))
-                .catch(console.log);
-        }
+        //if (!error) {
+          //  writeFile(\`./src/App.jsx\`, getContent(componentFile, componentName))
+            //    .catch(console.log);
+        //}
     });
 });
 `);
 }
+
+// export async function ensureConfigFileExist() {
+//     const filePath = resolve(join('fastui.rc.mjs'));
+//     await ensureFileExist(filePath);
+//     await writeFile(filePath, `export const FIGMA_TOKEN="";
+// export const FIGMA_FILE="";
+// `);
+// }
+
 export async function ensureBlueprintFolderExist() {
     const filePath = resolve(join('src', 'blueprints'));
     await ensurePathExist(filePath);
