@@ -22,27 +22,37 @@ const getColumnStartFrame = ({column, withStack, onChild}) => {
     `;
 }
 
+
+function defaultOnFrameColumn(styles) {
+    return `{${JSON.stringify({
+        ...styles,
+        ...{display: 'flex', flexDirection: 'column'}
+    })}}`;
+}
+
+function defaultOnFrameRow(styles) {
+    return `{${JSON.stringify({
+        ...styles,
+        ...{display: 'flex', flexDirection: 'row'}
+    })}}`;
+}
+
 /**
  *
  * @param frame {string|object}
  * @param onChild {(boolean)=>*}
+ * @param onFrameColumn
+ * @param onFrameRow
  * @return {string}
  */
-export function getFrameStatement(frame, onChild) {
+export function getFrameStatement(frame, onChild, onFrameColumn = defaultOnFrameColumn, onFrameRow = defaultOnFrameRow) {
     const {base, styles = {}} = frame ?? {};
     const frameBase = base ?? frame;
-
-    const column = `{${JSON.stringify({
-        ...styles,
-        ...{display: 'flex', flexDirection: 'column'}
-    })}}`;
-    const row = `{${JSON.stringify({
-        ...styles,
-        ...{display: 'flex', flexDirection: 'row'}
-    })}}`;
+    const column = onFrameColumn(styles);
+    const row = onFrameRow(styles);
     const withStack = `${frameBase}`.trim().toLowerCase().includes('.stack');
     if (`${frameBase}`.trim().toLowerCase().startsWith('column.start')) {
-        return getColumnStartFrame({column,withStack,onChild});
+        return getColumnStartFrame({column, withStack, onChild});
     } else if (`${frameBase}`.trim().toLowerCase().startsWith('column.end')) {
         return `
             <div style=${column}>
@@ -65,8 +75,24 @@ export function getFrameStatement(frame, onChild) {
             </div>
         `;
     } else {
-        return getColumnStartFrame({column,withStack,onChild});
+        return getColumnStartFrame({column, withStack, onChild});
     }
+}
+
+/**
+ *
+ * @param frame {string|object}
+ * @param onChild {(boolean)=>*}
+ * @return {string}
+ */
+export function getConditionFrameStatement(frame, onChild) {
+    const column = `{${JSON.stringify({
+        display: 'flex', flexDirection: 'column',
+    })}}`;
+    const row = `{${JSON.stringify({
+        display: 'flex', flexDirection: 'row',
+    })}}`;
+    return getFrameStatement(frame, onChild, () => column, () => row);
 }
 
 /**

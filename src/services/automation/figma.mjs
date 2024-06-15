@@ -28,14 +28,39 @@ export function getDesignDocument(data) {
     return data?.document?.children?.[0];
 }
 
+function transformLayoutAxisAlign(counterAxisAlignItems) {
+    switch (counterAxisAlignItems) {
+        // case 'MIN':
+        //     return 'flex-start';
+        // case 'MAX':
+        //     return 'flex-end';
+        case  'CENTER':
+            return 'center';
+        case 'SPACE_BETWEEN':
+            return 'space-between';
+        default:
+            return 'normal';
+    }
+}
+
+function transformLayoutWrap(layoutWrap) {
+    return `${layoutWrap ?? 'NOWRAP'}`.replaceAll('_', '').toLowerCase();
+}
+
+function transformLayoutSizing(layoutSizing, size) {
+    switch (layoutSizing) {
+        case 'FIXED':
+            return size;
+        // case 'HUG':
+        //     return undefined;
+        // case "FILL":
+        //     return undefined;
+        default:
+            return undefined;
+    }
+}
+
 function transformFrameChildren(frame, module) {
-    const viewFrame = {
-        base: frame?.layoutMode === 'HORIZONTAL' ? 'row.start' : 'column.start',
-        styles: {
-            [frame?.layoutMode === 'HORIZONTAL' ? 'paddingRight' : 'paddingBottom']: frame?.itemSpacing ?? 0,
-            flexWrap: `${frame?.layoutWrap ?? 'NOWRAP'}`.replaceAll('_', '').toLowerCase()
-        }
-    };
     const children = [];
     for (let i = 0; i < frame?.children?.length; i++) {
         const child = frame?.children[i];
@@ -44,7 +69,25 @@ function transformFrameChildren(frame, module) {
                 ...child,
                 module,
                 extendFrame: i > 0 ? `./${frame?.children[i - 1]?.name}.yml` : undefined,
-                mainFrame: viewFrame
+                mainFrame: {
+                    base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
+                    styles: {
+                        spaceValue:  frame?.itemSpacing ?? 0,
+                        paddingLeft: child?.paddingLeft,
+                        paddingRight: child?.paddingRight,
+                        paddingTop: child?.paddingTop,
+                        paddingBottom: child?.paddingBottom,
+                        flexWrap: transformLayoutWrap(child?.layoutWrap),
+                        justifyContent: frame?.layoutMode === 'VERTICAL'
+                            ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
+                            : transformLayoutAxisAlign(child?.primaryAxisAlignItems),
+                        alignItems: frame?.layoutMode === 'VERTICAL'
+                            ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
+                            : transformLayoutAxisAlign(child?.counterAxisAlignItems),
+                        ...getContainerLikeStyles(child),
+                        ...getSizeStyles(child)
+                    }
+                }
             };
             const f = transformFrameChildren(mChild, module);
             children.push(f);
@@ -52,8 +95,17 @@ function transformFrameChildren(frame, module) {
             const sc = {
                 ...child,
                 module,
+                style: {
+                    ...child?.style??{},
+                    [frame?.layoutMode === 'HORIZONTAL' ? 'marginRight' : 'marginBottom']: frame?.itemSpacing ?? 0,
+                },
                 extendFrame: i > 0 ? `./${frame?.children[i - 1]?.name}.yml` : undefined,
-                childFrame: viewFrame
+                childFrame: {
+                    base: frame?.layoutMode === 'HORIZONTAL' ? 'row.start' : 'column.start',
+                    styles: {
+                        flexWrap: transformLayoutWrap(frame?.layoutWrap)
+                    }
+                }
             }
             children.push(sc);
         }
@@ -79,7 +131,6 @@ export function getPagesAndTraverseChildren(document) {
             type: maybeRandomName(x?.type),
             module,
             children: pageChildren,
-            // extendFrame: last ? `./${last?.name}.yml` : undefined,
             mainFrame: {
                 base: x?.layoutMode === 'VERTICAL' ? 'column.start.stack' : 'row.start.stack',
                 styles: {
@@ -87,14 +138,38 @@ export function getPagesAndTraverseChildren(document) {
                     paddingRight: x?.paddingRight,
                     paddingTop: x?.paddingTop,
                     paddingBottom: x?.paddingBottom,
-                    // margin: isFrame?'auto':undefined,
-                    // maxWidth: x?.absoluteBoundingBox?.width,
-                    // minHeight: '100vh',
-                    backgroundColor: `rgba(${x?.backgroundColor?.r / 255},${x?.backgroundColor?.g / 255},${x?.backgroundColor?.b / 255},${x?.backgroundColor?.a / 255})`,
+                    minHeight: '100vh',
+                    ...getContainerLikeStyles(x),
                 }
             }
         }
     });
+}
+
+function getFillColor(child) {
+    return itOrEmptyList(child.fills)
+        .filter(x => x?.type === 'SOLID')
+        .map(y => `rgba(${y?.color?.r * 255},${y?.color?.g * 255},${y?.color?.b * 255},${y?.color?.a * 255})`)
+        .shift();
+}
+
+function getContainerLikeStyles(child) {
+    return {
+        ...child?.style ?? {},
+        borderRadius: child?.cornerRadius,
+        borderTopLeftRadius: child?.rectangleCornerRadii?.[0],
+        borderTopRightRadius: child?.rectangleCornerRadii?.[1],
+        borderBottomRightRadius: child?.rectangleCornerRadii?.[2],
+        borderBottomLeftRadius: child?.rectangleCornerRadii?.[3],
+        backgroundColor: getFillColor(child)
+    }
+}
+
+function getSizeStyles(child){
+    return {
+        width: transformLayoutSizing(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
+        height: transformLayoutSizing(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
+    }
 }
 
 export async function walkFrameChildren(children, srcPath) {
@@ -107,12 +182,16 @@ export async function walkFrameChildren(children, srcPath) {
             component: {
                 base: 'rectangle',
                 modifier: {
+                    props: {id: child?.name},
                     extend: child?.extendFrame,
-                    styles: child?.style ?? {},
+                    styles: {
+                        ...getContainerLikeStyles(child),
+                        ...getSizeStyles(child)
+                    },
                     frame: child?.childFrame,
                 }
             }
-        });
+        },undefined);
         await writeFile(filename, yamlData);
     }
 
@@ -129,9 +208,14 @@ export async function walkFrameChildren(children, srcPath) {
                     base: 'text',
                     modifier: {
                         extend: child?.extendFrame,
-                        styles: child?.style ?? {},
+                        styles: {
+                            ...child?.style ?? {},
+                            ...getSizeStyles(child),
+                            color: getFillColor(child)
+                        },
                         props: {
-                            children: 'states.value'
+                            children: 'states.value',
+                            id: child?.name
                         },
                         states: {
                             value: child?.characters,
@@ -149,12 +233,16 @@ export async function walkFrameChildren(children, srcPath) {
                         base: 'input',
                         modifier: {
                             extend: child?.extendFrame,
-                            styles: child?.style ?? {},
+                            styles: {
+                                ...getContainerLikeStyles(child),
+                                ...getSizeStyles(child),
+                            },
                             props: {
                                 type: 'text',
                                 value: 'states.value',
                                 onChange: 'logics.onTextChange',
-                                placeholder: 'Type here'
+                                placeholder: 'Type here',
+                                id: child?.name
                             },
                             states: {
                                 value: '',
@@ -170,12 +258,16 @@ export async function walkFrameChildren(children, srcPath) {
                         base: 'input',
                         modifier: {
                             extend: child?.extendFrame,
-                            styles: child?.style ?? {},
+                            styles: {
+                                ...getContainerLikeStyles(child),
+                                ...getSizeStyles(child)
+                            },
                             props: {
                                 type: 'password',
                                 value: 'states.value',
                                 onChange: 'logics.onTextChange',
-                                placeholder: 'Type here'
+                                placeholder: 'Type here',
+                                id: child?.name
                             },
                             states: {
                                 value: '',
