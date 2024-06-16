@@ -25,7 +25,7 @@ const command1 = argv[2];
 
 function getMergedCondition(condition) {
     const {base, styles = {}} = condition?.modifier?.frame ?? {};
-    const frameBase = base ?? condition?.modifier?.frame;
+    const frameBase = base ?? condition?.modifier?.frame??'column.start';
     return condition ? {
         ...condition,
         base: 'rectangle',
@@ -37,7 +37,7 @@ function getMergedCondition(condition) {
             },
             states: {condition: false},
             effects: {onStart: {body: 'logics.onStart', watch: []}},
-            props: {}
+            // props: {}
         }
     } : undefined;
 }

@@ -226,7 +226,7 @@ async function createTextInputComponent(filename, child, type = 'text') {
                     padding: '0 8px'
                 },
                 props: {
-                    type,
+                    type: 'states.inputType',
                     value: 'states.value',
                     onChange: 'logics.onTextChange',
                     placeholder: 'Type here',
@@ -239,6 +239,7 @@ async function createTextInputComponent(filename, child, type = 'text') {
                 },
                 states: {
                     value: '',
+                    inputType: type,
                     borderColor: getColor(child?.strokes),
                 },
                 frame: child?.childFrame,
@@ -248,64 +249,74 @@ async function createTextInputComponent(filename, child, type = 'text') {
     await writeFile(filename, yamlData);
 }
 
-export async function walkFrameChildren(children, srcPath) {
-    function getChildFileName(child) {
-        return resolve(join(srcPath, 'modules', child?.module ?? '', `${child?.name}.yml`));
-    }
-
-    async function createContainerComponent(filename, child, i) {
-        const yamlData = yaml.dump({
-            component: {
-                base: 'rectangle',
-                modifier: {
-                    props: {id: child?.name},
-                    extend: child?.extendFrame,
-                    styles: {
-                        ...getContainerLikeStyles(child),
-                        ...getSizeStyles(child)
-                    },
-                    frame: child?.childFrame,
-                }
+async function createContainerComponent(filename, child) {
+    const yamlData = yaml.dump({
+        component: {
+            base: 'rectangle',
+            modifier: {
+                props: {id: child?.name},
+                extend: child?.extendFrame,
+                styles: {
+                    ...getContainerLikeStyles(child),
+                    ...getSizeStyles(child)
+                },
+                frame: child?.childFrame,
             }
-        }, undefined);
-        await writeFile(filename, yamlData);
-    }
+        }
+    }, undefined);
+    await writeFile(filename, yamlData);
+}
 
+async function createConditionComponent(filename, child) {
+    const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
+    const last = child?.children?.[child?.children?.length - 1];
+    const yamlData = yaml.dump({
+        condition: {
+            modifier: {
+                extend: child?.extendFrame,
+                props: {
+                    id: child?.name,
+                    onClick: baseType === 'button' ? 'logics.onClick' : undefined
+                },
+                left: last ? `./${last?.name}.yml` : undefined,
+                frame: {
+                    base: child?.mainFrame?.base,
+                    styles: {
+                        ...child?.mainFrame?.styles,
+                        cursor: baseType === 'button' ? 'pointer' : undefined
+                    }
+                },
+            }
+        }
+    }, undefined);
+    await writeFile(filename, yamlData);
+}
+
+export async function walkFrameChildren(children, srcPath) {
     for (let i = 0; i < children.length; i++) {
         const child = children[i];
         const path = resolve(join(srcPath, 'modules', child?.module ?? ''));
-        const filename = getChildFileName(child)
+        const filename = resolve(join(srcPath, 'modules', child?.module ?? '', `${child?.name}.yml`));
         await ensurePathExist(path);
         await ensureFileExist(filename);
-
         if (child?.type === 'TEXT') {
             await createTextComponent(filename, child);
         } else if (child?.type === 'RECTANGLE') {
-            const baseType = `${child?.name}`.split('_').pop()
+            const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
             if (baseType === 'input') {
                 await createTextInputComponent(filename, child);
             } else if (baseType === 'password') {
                 await createTextInputComponent(filename, child, 'password');
             } else if (baseType === 'container') {
-                await createContainerComponent(filename, child, i);
+                await createContainerComponent(filename, child);
             } else {
-                await createContainerComponent(filename, child, i)
+                await createContainerComponent(filename, child)
             }
         } else if (child?.type === 'FRAME') {
-            const last = child?.children?.[child?.children?.length - 1];
-            const yamlData = yaml.dump({
-                condition: {
-                    modifier: {
-                        extend: child?.extendFrame,
-                        left: last ? `./${last?.name}.yml` : undefined,
-                        frame: child?.mainFrame,
-                    }
-                }
-            });
-            await writeFile(filename, yamlData);
+            await createConditionComponent(filename, child);
             await walkFrameChildren(child?.children, srcPath);
         } else {
-            await createContainerComponent(filename, child, i);
+            await createContainerComponent(filename, child);
         }
 
     }

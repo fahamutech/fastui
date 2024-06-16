@@ -422,15 +422,19 @@ export function getStyleStatement(data) {
 
     const style = getStyles(data);
     const stateDep = Object.values(style)
-        .filter(x => `${x}`.startsWith('states.'))
+        .filter(x => `${x}`.trim().toLowerCase().startsWith('states.'))
         .map(y => `${y}`.replaceAll('states.', '').trim())
     const inputDep = Object.values(style)
-        .filter(x => `${x}`.startsWith('inputs.'))
+        .filter(x => `${x}`.trim().toLowerCase().startsWith('inputs.'))
         .map(y => `${y}`.replaceAll('inputs.', '').trim())
     const hasLogicDep = Object.values(style)
-        .filter(x => `${x}`.startsWith('logics.'))
+        .filter(x => `${x}`.trim().toLowerCase().startsWith('logics.'))
         .length > 0;
-    const dependencies = [...stateDep, ...inputDep, ...[hasLogicDep ? 'component' : undefined]].join(',');
+    const dependencies = Array.from([
+        ...stateDep,
+        ...inputDep,
+        ...[hasLogicDep ? 'component' : undefined]
+    ].reduce((a, b) => a.add(b), new Set())).join(',');
     const getStyleStatement = ifDoElse(
         t => `${t}`.trim().toLowerCase().startsWith('logics.'),
         t => `const style = React.useMemo(()=>${`${t}`.replace(/^(logics.)|\(\)/ig, '')}({component,args:[]}),[component]);`,

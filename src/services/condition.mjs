@@ -5,7 +5,7 @@ import {
     getEffectsStatement,
     getFileName,
     getFilenameFromBlueprintPath,
-    getLogicsImportStatement,
+    getLogicsImportStatement, getPropsStatement,
     getSrcPathFromBlueprintPath,
     getStatesStatement,
     prepareGetContentView
@@ -28,10 +28,12 @@ function getContentViewWithoutExtend(data) {
         spaceValue: undefined
     }
     const styleString = JSON.stringify(styleWithFrameDirection);
+    const propsString = getPropsStatement(data);
+    // console.log(propsString,'-----',data)
 
     const getComponentName = x => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
-    const leftComponent = left ? `<div style={${styleString}}><${getComponentName(left)} loopIndex={loopIndex} loopElement={loopElement}/></div>` : '<span/>';
-    const rightComponent = right ? `<div style={${styleString}}><${getComponentName(right)} loopIndex={loopIndex} loopElement={loopElement}/></div>` : '<span/>';
+    const leftComponent = left ? `<div style={${styleString}} ${propsString}><${getComponentName(left)} loopIndex={loopIndex} loopElement={loopElement}/></div>` : '<span/>';
+    const rightComponent = right ? `<div style={${styleString}} ${propsString}><${getComponentName(right)} loopIndex={loopIndex} loopElement={loopElement}/></div>` : '<span/>';
     const view = `condition===true?${rightComponent}:${leftComponent}`;
     return extend ? view : `{${view}}`;
 }
