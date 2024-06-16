@@ -241,7 +241,7 @@ export function getEffectsStatement(data) {
     return Object
         .keys(effects ?? {})
         .map(k => `/*${k}*/
-    React.useEffect(()=>${getBody(k)}({component,args:[]}),[${getDependencies(k)}]);`)
+    React.useEffect(()=>${getBody(k)}({component,args:[]}),[component,${getDependencies(k) ?? ``}]);`)
         .join('\n\t');
 }
 
@@ -306,7 +306,7 @@ export function getComponentMemoStatement(data) {
     const useMemoDependencies = getUseMemoDependencies(data);
     const statesMap = getStateMapForLogicInput(getStates(data));
     const inputsMap = getInputsMapForLogicInput(data);
-    return `const component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}]);`;
+    return `// eslint-disable-next-line no-unused-vars\nconst component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}]);`;
 }
 
 /**
@@ -418,12 +418,23 @@ function getStyleMap(style) {
 }
 
 export function getStyleStatement(data) {
-    const useMemoDependencies = getUseMemoDependencies(data);
+    // const useMemoDependencies = getUseMemoDependencies(data);
+
     const style = getStyles(data);
+    const stateDep = Object.values(style)
+        .filter(x => `${x}`.startsWith('states.'))
+        .map(y => `${y}`.replaceAll('states.', '').trim())
+    const inputDep = Object.values(style)
+        .filter(x => `${x}`.startsWith('inputs.'))
+        .map(y => `${y}`.replaceAll('inputs.', '').trim())
+    const hasLogicDep = Object.values(style)
+        .filter(x => `${x}`.startsWith('logics.'))
+        .length > 0;
+    const dependencies = [...stateDep, ...inputDep, ...[hasLogicDep ? 'component' : undefined]].join(',');
     const getStyleStatement = ifDoElse(
         t => `${t}`.trim().toLowerCase().startsWith('logics.'),
         t => `const style = React.useMemo(()=>${`${t}`.replace(/^(logics.)|\(\)/ig, '')}({component,args:[]}),[component]);`,
-        t => `const style = React.useMemo(()=>(${getStyleMap(t)}),[${useMemoDependencies}]);`
+        t => `const style = React.useMemo(()=>(${getStyleMap(t)}),[${dependencies}]);`
     );
     return getStyleStatement(style);
 }

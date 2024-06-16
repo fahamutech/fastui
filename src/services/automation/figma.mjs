@@ -72,7 +72,7 @@ function transformFrameChildren(frame, module) {
                 mainFrame: {
                     base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                     styles: {
-                        spaceValue:  frame?.itemSpacing ?? 0,
+                        spaceValue: frame?.itemSpacing ?? 0,
                         paddingLeft: child?.paddingLeft,
                         paddingRight: child?.paddingRight,
                         paddingTop: child?.paddingTop,
@@ -96,7 +96,7 @@ function transformFrameChildren(frame, module) {
                 ...child,
                 module,
                 style: {
-                    ...child?.style??{},
+                    ...child?.style ?? {},
                     [frame?.layoutMode === 'HORIZONTAL' ? 'marginRight' : 'marginBottom']: frame?.itemSpacing ?? 0,
                 },
                 extendFrame: i > 0 ? `./${frame?.children[i - 1]?.name}.yml` : undefined,
@@ -146,11 +146,25 @@ export function getPagesAndTraverseChildren(document) {
     });
 }
 
-function getFillColor(child) {
-    return itOrEmptyList(child.fills)
+function getColor(source) {
+    return itOrEmptyList(source)
         .filter(x => x?.type === 'SOLID')
         .map(y => `rgba(${y?.color?.r * 255},${y?.color?.g * 255},${y?.color?.b * 255},${y?.color?.a * 255})`)
         .shift();
+}
+
+function getBorderStyles(child) {
+    if (itOrEmptyList(child?.strokes).length === 0) {
+        return {};
+    }
+    return {
+        borderTopWidth: child?.individualStrokeWeights?.top ?? child?.strokeWeight,
+        borderLeftWidth: child?.individualStrokeWeights?.left ?? child?.strokeWeight,
+        borderRightWidth: child?.individualStrokeWeights?.right ?? child?.strokeWeight,
+        borderBottomWidth: child?.individualStrokeWeights?.bottom ?? child?.strokeWeight,
+        borderColor: getColor(child?.strokes),
+        borderStyle: itOrEmptyList(child?.strokeDashes).length > 0 ? 'dashed' : 'solid'
+    }
 }
 
 function getContainerLikeStyles(child) {
@@ -161,15 +175,77 @@ function getContainerLikeStyles(child) {
         borderTopRightRadius: child?.rectangleCornerRadii?.[1],
         borderBottomRightRadius: child?.rectangleCornerRadii?.[2],
         borderBottomLeftRadius: child?.rectangleCornerRadii?.[3],
-        backgroundColor: getFillColor(child)
+        backgroundColor: getColor(child?.fills),
+        ...getBorderStyles(child)
     }
 }
 
-function getSizeStyles(child){
+function getSizeStyles(child) {
     return {
         width: transformLayoutSizing(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
         height: transformLayoutSizing(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
     }
+}
+
+async function createTextComponent(filename, child) {
+    const yamlData = yaml.dump({
+        component: {
+            base: 'text',
+            modifier: {
+                extend: child?.extendFrame,
+                styles: {
+                    ...child?.style ?? {},
+                    ...getSizeStyles(child),
+                    color: getColor(child?.fills)
+                },
+                props: {
+                    children: 'states.value',
+                    id: child?.name
+                },
+                states: {
+                    value: child?.characters,
+                },
+                frame: child?.childFrame,
+            }
+        }
+    })
+    await writeFile(filename, yamlData);
+}
+
+async function createTextInputComponent(filename, child, type = 'text') {
+    const yamlData = yaml.dump({
+        component: {
+            base: 'input',
+            modifier: {
+                extend: child?.extendFrame,
+                styles: {
+                    ...getContainerLikeStyles(child),
+                    ...getSizeStyles(child),
+                    borderColor: 'states.borderColor',
+                    fontSize: 15,
+                    padding: '0 8px'
+                },
+                props: {
+                    type,
+                    value: 'states.value',
+                    onChange: 'logics.onTextChange',
+                    placeholder: 'Type here',
+                    id: child?.name
+                },
+                effects: {
+                    onStart: {
+                        body: 'logics.onStart'
+                    }
+                },
+                states: {
+                    value: '',
+                    borderColor: getColor(child?.strokes),
+                },
+                frame: child?.childFrame,
+            }
+        }
+    }, undefined);
+    await writeFile(filename, yamlData);
 }
 
 export async function walkFrameChildren(children, srcPath) {
@@ -177,7 +253,7 @@ export async function walkFrameChildren(children, srcPath) {
         return resolve(join(srcPath, 'modules', child?.module ?? '', `${child?.name}.yml`));
     }
 
-    async function defaultContent(filename, child, i) {
+    async function createContainerComponent(filename, child, i) {
         const yamlData = yaml.dump({
             component: {
                 base: 'rectangle',
@@ -191,7 +267,7 @@ export async function walkFrameChildren(children, srcPath) {
                     frame: child?.childFrame,
                 }
             }
-        },undefined);
+        }, undefined);
         await writeFile(filename, yamlData);
     }
 
@@ -203,84 +279,17 @@ export async function walkFrameChildren(children, srcPath) {
         await ensureFileExist(filename);
 
         if (child?.type === 'TEXT') {
-            const yamlData = yaml.dump({
-                component: {
-                    base: 'text',
-                    modifier: {
-                        extend: child?.extendFrame,
-                        styles: {
-                            ...child?.style ?? {},
-                            ...getSizeStyles(child),
-                            color: getFillColor(child)
-                        },
-                        props: {
-                            children: 'states.value',
-                            id: child?.name
-                        },
-                        states: {
-                            value: child?.characters,
-                        },
-                        frame: child?.childFrame,
-                    }
-                }
-            })
-            await writeFile(filename, yamlData);
+            await createTextComponent(filename, child);
         } else if (child?.type === 'RECTANGLE') {
             const baseType = `${child?.name}`.split('_').pop()
             if (baseType === 'input') {
-                const yamlData = yaml.dump({
-                    component: {
-                        base: 'input',
-                        modifier: {
-                            extend: child?.extendFrame,
-                            styles: {
-                                ...getContainerLikeStyles(child),
-                                ...getSizeStyles(child),
-                            },
-                            props: {
-                                type: 'text',
-                                value: 'states.value',
-                                onChange: 'logics.onTextChange',
-                                placeholder: 'Type here',
-                                id: child?.name
-                            },
-                            states: {
-                                value: '',
-                            },
-                            frame: child?.childFrame,
-                        }
-                    }
-                });
-                await writeFile(filename, yamlData);
+                await createTextInputComponent(filename, child);
             } else if (baseType === 'password') {
-                const yamlData = yaml.dump({
-                    component: {
-                        base: 'input',
-                        modifier: {
-                            extend: child?.extendFrame,
-                            styles: {
-                                ...getContainerLikeStyles(child),
-                                ...getSizeStyles(child)
-                            },
-                            props: {
-                                type: 'password',
-                                value: 'states.value',
-                                onChange: 'logics.onTextChange',
-                                placeholder: 'Type here',
-                                id: child?.name
-                            },
-                            states: {
-                                value: '',
-                            },
-                            frame: child?.childFrame,
-                        }
-                    }
-                })
-                await writeFile(filename, yamlData);
+                await createTextInputComponent(filename, child, 'password');
             } else if (baseType === 'container') {
-                await defaultContent(filename, child, i)
+                await createContainerComponent(filename, child, i);
             } else {
-                await defaultContent(filename, child, i)
+                await createContainerComponent(filename, child, i)
             }
         } else if (child?.type === 'FRAME') {
             const last = child?.children?.[child?.children?.length - 1];
@@ -296,7 +305,7 @@ export async function walkFrameChildren(children, srcPath) {
             await writeFile(filename, yamlData);
             await walkFrameChildren(child?.children, srcPath);
         } else {
-            await defaultContent(filename, child, i);
+            await createContainerComponent(filename, child, i);
         }
 
     }
