@@ -25,7 +25,7 @@ const command1 = argv[2];
 
 function getMergedCondition(condition) {
     const {base, styles = {}} = condition?.modifier?.frame ?? {};
-    const frameBase = base ?? condition?.modifier?.frame??'column.start';
+    const frameBase = base ?? condition?.modifier?.frame ?? 'column.start';
     return condition ? {
         ...condition,
         base: 'rectangle',
@@ -71,13 +71,12 @@ switch (command1) {
             case 'automate':
                 await ensureBlueprintFolderExist();
                 const bluePrintPath = resolve(join(process.cwd(), 'src', 'blueprints'));
-                const data = await fetchFigmaFile({
-                    token: process.env.FIGMA_TOKEN,
-                    figFile: process.env.FIGMA_FILE
-                });
+                const token = process.env.FIGMA_TOKEN;
+                const figFile = process.env.FIGMA_FILE;
+                const data = await fetchFigmaFile({token, figFile});
                 const document = getDesignDocument(data);
                 const pages = getPagesAndTraverseChildren(document);
-                await walkFrameChildren(pages, bluePrintPath);
+                await walkFrameChildren({children: pages, srcPath: bluePrintPath, token,figFile});
                 break;
             case 'build':
                 for (const specPath of await readSpecs(argv[4])) {

@@ -1,8 +1,9 @@
 import axios from "axios";
 import {ensureFileExist, ensurePathExist, itOrEmptyList, justString, maybeRandomName} from "../../utils/index.mjs";
 import {join, resolve} from "node:path";
-import {writeFile} from "node:fs/promises";
+import {stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
+import {createWriteStream} from "node:fs";
 
 /**
  *
@@ -17,6 +18,76 @@ export async function fetchFigmaFile({token, figFile}) {
         }
     });
     return data;
+}
+
+async function downloadImage(imageUrl, imageRef, filePath) {
+    // try {
+    const response = await axios({
+        url: imageUrl,
+        method: 'GET',
+        responseType: 'stream',
+    });
+
+    // const contentType = response.headers['content-type'];
+    // const fileExtension = contentType.split('/')[1];
+    const imagePath = resolve(join(filePath, `${imageRef}.png`));
+    await ensureFileExist(imagePath);
+    const writer = createWriteStream(imagePath);
+
+    response.data.pipe(writer);
+
+    return new Promise((then, reject) => {
+        writer.on('finish', () => then(imagePath));
+        writer.on('error', reject);
+    });
+    // } catch (error) {
+    //     console.error('Error downloading image:', error);
+    //     throw error;
+    // }
+}
+
+
+async function fetchFigmaImagesUrl({token, figFile, srcPath, nodeId}) {
+    const url = `https://api.figma.com/v1/images/${figFile}?format=png&ids=${nodeId}`;
+    // console.log(url);
+    const {data} = await axios.get(url, {
+        headers: {
+            'X-Figma-Token': token
+        }
+    });
+    // console.log(data)
+    return data?.images?.[nodeId];
+}
+
+async function getFigmaImagePath({token, figFile, srcPath, imageRef, child}) {
+    if (!imageRef) {
+        return undefined;
+    }
+    const nodeId = child?.id;
+    const folderPath = resolve(join(srcPath, '..', '..', 'public', 'images', 'figma'));
+    await ensurePathExist(folderPath);
+    const imageName = `${imageRef}.png`;
+    const imageRelativePath = `/images/figma/${imageName}`;
+    // [
+    // '../', ...child?.module?.split('/').map(() => '../'), 'images/figma', `/${imageName}`
+    // ].join('');
+    try {
+        const imagePath = join(folderPath, imageName);
+        await stat(imagePath);
+        // console.log(imagePath);
+        // console.log(srcPath);
+        return imageRelativePath;
+    } catch (e) {
+        const url = await fetchFigmaImagesUrl({token, figFile, srcPath, nodeId});
+        if (url) {
+            // const imagePath =
+                await downloadImage(url, imageRef, folderPath);
+            // console.log(imagePath);
+            // console.log(srcPath);
+            return imageRelativePath;
+        }
+        return undefined;
+    }
 }
 
 /**
@@ -292,7 +363,42 @@ async function createConditionComponent(filename, child) {
     await writeFile(filename, yamlData);
 }
 
-export async function walkFrameChildren(children, srcPath) {
+function getImageRef(source) {
+    return itOrEmptyList(source)
+        .filter(x => x?.type === 'IMAGE')
+        .map(y => y?.imageRef)
+        .shift();
+}
+
+async function createImageComponent({filename, child, token, srcPath, figFile}) {
+    const yamlData = yaml.dump({
+        component: {
+            base: 'image',
+            modifier: {
+                props: {
+                    id: child?.name,
+                    alt: child?.name,
+                    src: await getFigmaImagePath({
+                        token,
+                        figFile,
+                        srcPath,
+                        imageRef: getImageRef(child?.fills),
+                        child,
+                    })
+                },
+                extend: child?.extendFrame,
+                styles: {
+                    ...getContainerLikeStyles(child),
+                    ...getSizeStyles(child)
+                },
+                frame: child?.childFrame,
+            }
+        }
+    }, undefined);
+    await writeFile(filename, yamlData);
+}
+
+export async function walkFrameChildren({children, srcPath, token, figFile}) {
     for (let i = 0; i < children.length; i++) {
         const child = children[i];
         const path = resolve(join(srcPath, 'modules', child?.module ?? ''));
@@ -307,6 +413,8 @@ export async function walkFrameChildren(children, srcPath) {
                 await createTextInputComponent(filename, child);
             } else if (baseType === 'password') {
                 await createTextInputComponent(filename, child, 'password');
+            } else if (baseType === 'image') {
+                await createImageComponent({filename, child, srcPath, token, figFile});
             } else if (baseType === 'container') {
                 await createContainerComponent(filename, child);
             } else {
@@ -314,7 +422,7 @@ export async function walkFrameChildren(children, srcPath) {
             }
         } else if (child?.type === 'FRAME') {
             await createConditionComponent(filename, child);
-            await walkFrameChildren(child?.children, srcPath);
+            await walkFrameChildren({children: child?.children, srcPath, token, figFile});
         } else {
             await createContainerComponent(filename, child);
         }
