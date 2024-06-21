@@ -58,11 +58,8 @@ ${componentsImportStatement}
 
 let keyIndex=0;
 
-export function ${getFileName(path)}({view}) {
+export function ${getFileName(path)}({view,loopIndex,loopElement}) {
     ${statesInString}
-    
-    const loopIndex = React.useMemo(()=>undefined,[]);
-    const loopElement = React.useMemo(()=>undefined,[]);
     
     ${componentMemoStatement}
     

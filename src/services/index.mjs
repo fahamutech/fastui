@@ -22,7 +22,6 @@ const getColumnStartFrame = ({column, withStack, onChild}) => {
     `;
 }
 
-
 function defaultOnFrameColumn(styles) {
     return `{${JSON.stringify({
         ...styles,
@@ -166,7 +165,11 @@ export function getPropsStatement(data) {
                     x => `${`${x}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args:[]})`,
                     x => `(...args)=>${`${x}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args})`
                 ),
-                v => `${JSON.stringify(v ?? '')}`.trim()
+                ifDoElse(
+                    t => `${t}`.startsWith("'_'+"),
+                    t => `${t}`,
+                    t => `${JSON.stringify(t ?? '')}`.trim()
+                ),
             )
         )
     );
@@ -176,7 +179,6 @@ export function getPropsStatement(data) {
         .map(k => `${k}={${getValue(props[k])}}`)
         .join('\n\t\t\t')
 }
-
 
 /**
  *
@@ -241,7 +243,8 @@ export function getEffectsStatement(data) {
     return Object
         .keys(effects ?? {})
         .map(k => `/*${k}*/
-    React.useEffect(()=>${getBody(k)}({component,args:[]}),[component,${getDependencies(k) ?? ``}]);`)
+    React.useEffect(()=>${getBody(k)}({component,args:[]}),
+    /* eslint-disable-line react-hooks/exhaustive-deps */[${getDependencies(k) ?? ``}]);`)
         .join('\n\t');
 }
 
@@ -263,9 +266,9 @@ export function getInputsStatement(data = {}) {
             ...itOrEmptyList(effects[b]?.watch).filter(filter).map(map)
         ]
     }, []);
-    return Array.from(propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view', 'loopElement', 'loopIndex'])
-        .reduce((a, b) => a.add(b), new Set()))
-        .join(',');
+    let inputs = propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view', 'loopElement', 'loopIndex']);
+    inputs = inputs.filter(x=>!`${x}`.trim().startsWith('loopElement.'));
+    return Array.from(inputs.reduce((a, b) => a.add(b), new Set())).join(',');
 }
 
 /**

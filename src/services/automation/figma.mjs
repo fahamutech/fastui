@@ -21,15 +21,11 @@ export async function fetchFigmaFile({token, figFile}) {
 }
 
 async function downloadImage(imageUrl, imageRef, filePath) {
-    // try {
     const response = await axios({
         url: imageUrl,
         method: 'GET',
         responseType: 'stream',
     });
-
-    // const contentType = response.headers['content-type'];
-    // const fileExtension = contentType.split('/')[1];
     const imagePath = resolve(join(filePath, `${imageRef}.png`));
     await ensureFileExist(imagePath);
     const writer = createWriteStream(imagePath);
@@ -40,22 +36,16 @@ async function downloadImage(imageUrl, imageRef, filePath) {
         writer.on('finish', () => then(imagePath));
         writer.on('error', reject);
     });
-    // } catch (error) {
-    //     console.error('Error downloading image:', error);
-    //     throw error;
-    // }
 }
 
 
-async function fetchFigmaImagesUrl({token, figFile, srcPath, nodeId}) {
+async function fetchFigmaImagesUrl({token, figFile, nodeId}) {
     const url = `https://api.figma.com/v1/images/${figFile}?format=png&ids=${nodeId}`;
-    // console.log(url);
     const {data} = await axios.get(url, {
         headers: {
             'X-Figma-Token': token
         }
     });
-    // console.log(data)
     return data?.images?.[nodeId];
 }
 
@@ -68,22 +58,14 @@ async function getFigmaImagePath({token, figFile, srcPath, imageRef, child}) {
     await ensurePathExist(folderPath);
     const imageName = `${imageRef}.png`;
     const imageRelativePath = `/images/figma/${imageName}`;
-    // [
-    // '../', ...child?.module?.split('/').map(() => '../'), 'images/figma', `/${imageName}`
-    // ].join('');
     try {
         const imagePath = join(folderPath, imageName);
         await stat(imagePath);
-        // console.log(imagePath);
-        // console.log(srcPath);
         return imageRelativePath;
     } catch (e) {
-        const url = await fetchFigmaImagesUrl({token, figFile, srcPath, nodeId});
+        const url = await fetchFigmaImagesUrl({token, figFile, nodeId});
         if (url) {
-            // const imagePath =
-                await downloadImage(url, imageRef, folderPath);
-            // console.log(imagePath);
-            // console.log(srcPath);
+            await downloadImage(url, imageRef, folderPath);
             return imageRelativePath;
         }
         return undefined;
@@ -119,27 +101,39 @@ function transformLayoutWrap(layoutWrap) {
 }
 
 function transformLayoutSizing(layoutSizing, size) {
-    switch (layoutSizing) {
-        case 'FIXED':
-            return size;
-        // case 'HUG':
-        //     return undefined;
-        // case "FILL":
-        //     return undefined;
-        default:
-            return undefined;
+    if (layoutSizing === 'FIXED') {
+        return size;
+    } else {
+        return undefined;
     }
 }
 
-function transformFrameChildren(frame, module) {
+function transformFrameChildren(frame, module, isLoopElement) {
     const children = [];
     for (let i = 0; i < frame?.children?.length; i++) {
         const child = frame?.children[i];
         if (child?.type === 'FRAME') {
+            const baseType = getBaseType(child);
+            const isLoop = baseType === 'loop';
+            if (isLoop && child?.children?.length > 1) {
+                child.children = [child?.children?.[0]];
+            }
             const mChild = {
                 ...child,
                 module,
                 extendFrame: i > 0 ? `./${frame?.children[i - 1]?.name}.yml` : undefined,
+                isLoopElement,
+                styles: isLoop ? {
+                    display: 'flex',
+                    flexDirection: child?.layoutMode === 'VERTICAL' ? 'column' : 'row',
+                    flexWrap: transformLayoutWrap(child?.layoutWrap),
+                    justifyContent: child?.layoutMode === 'VERTICAL'
+                        ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
+                        : transformLayoutAxisAlign(child?.primaryAxisAlignItems),
+                    alignItems: child?.layoutMode === 'VERTICAL'
+                        ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
+                        : transformLayoutAxisAlign(child?.counterAxisAlignItems),
+                } : child.styles,
                 mainFrame: {
                     base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                     styles: {
@@ -160,12 +154,13 @@ function transformFrameChildren(frame, module) {
                     }
                 }
             };
-            const f = transformFrameChildren(mChild, module);
+            const f = transformFrameChildren(mChild, module, isLoop ? true : isLoopElement);
             children.push(f);
         } else {
             const sc = {
                 ...child,
                 module,
+                isLoopElement,
                 style: {
                     ...child?.style ?? {},
                     [frame?.layoutMode === 'HORIZONTAL' ? 'marginRight' : 'marginBottom']: frame?.itemSpacing ?? 0,
@@ -195,7 +190,7 @@ export function getPagesAndTraverseChildren(document) {
 
     return itOrEmptyList(document?.children).map(x => {
         const module = replaceName(x?.name).includes('/') ? replaceName(x?.name) : null;
-        const pageChildren = transformFrameChildren(x, module)?.children;
+        const pageChildren = transformFrameChildren(x, module, false)?.children;
         return {
             ...x,
             name: maybeRandomName(replaceModule(x?.name)),
@@ -239,6 +234,13 @@ function getBorderStyles(child) {
 }
 
 function getContainerLikeStyles(child) {
+    // const backGroundImage = await getFigmaImagePath({
+    //     token,
+    //     figFile,
+    //     srcPath,
+    //     imageRef: getImageRef(child?.fills),
+    //     child,
+    // })
     return {
         ...child?.style ?? {},
         borderRadius: child?.cornerRadius,
@@ -247,6 +249,7 @@ function getContainerLikeStyles(child) {
         borderBottomRightRadius: child?.rectangleCornerRadii?.[2],
         borderBottomLeftRadius: child?.rectangleCornerRadii?.[3],
         backgroundColor: getColor(child?.fills),
+        // backgroundImage:
         ...getBorderStyles(child)
     }
 }
@@ -270,7 +273,7 @@ async function createTextComponent(filename, child) {
                     color: getColor(child?.fills)
                 },
                 props: {
-                    children: 'states.value',
+                    children: child?.isLoopElement ? `inputs.loopElement.${child?.name}` : 'states.value',
                     id: child?.name
                 },
                 states: {
@@ -346,7 +349,7 @@ async function createConditionComponent(filename, child) {
             modifier: {
                 extend: child?.extendFrame,
                 props: {
-                    id: child?.name,
+                    id: child?.isLoopElement ? `'_'+loopIndex+'${child?.name}'` : child?.name,
                     onClick: baseType === 'button' ? 'logics.onClick' : undefined
                 },
                 left: last ? `./${last?.name}.yml` : undefined,
@@ -363,6 +366,32 @@ async function createConditionComponent(filename, child) {
     await writeFile(filename, yamlData);
 }
 
+function getBaseType(child) {
+    return (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
+}
+
+async function createLoopComponent(filename, child) {
+    const last = child?.children?.[0];
+    const yamlData = yaml.dump({
+        loop: {
+            modifier: {
+                extend: child?.extendFrame,
+                styles: {
+                    ...child.styles,
+                    overflow: 'scroll'
+                },
+                props: {
+                    id: child?.name,
+                    // onClick: baseType === 'button' ? 'logics.onClick' : undefined
+                },
+                feed: last ? `./${last?.name}.yml` : undefined,
+                frame: child?.mainFrame
+            }
+        }
+    }, undefined);
+    await writeFile(filename, yamlData);
+}
+
 function getImageRef(source) {
     return itOrEmptyList(source)
         .filter(x => x?.type === 'IMAGE')
@@ -371,6 +400,13 @@ function getImageRef(source) {
 }
 
 async function createImageComponent({filename, child, token, srcPath, figFile}) {
+    const srcUrl = await getFigmaImagePath({
+        token,
+        figFile,
+        srcPath,
+        imageRef: getImageRef(child?.fills),
+        child,
+    });
     const yamlData = yaml.dump({
         component: {
             base: 'image',
@@ -378,13 +414,7 @@ async function createImageComponent({filename, child, token, srcPath, figFile}) 
                 props: {
                     id: child?.name,
                     alt: child?.name,
-                    src: await getFigmaImagePath({
-                        token,
-                        figFile,
-                        srcPath,
-                        imageRef: getImageRef(child?.fills),
-                        child,
-                    })
+                    src: child?.isLoopElement?`inputs.loopElement.${child?.name}??'${srcUrl}'`:srcUrl
                 },
                 extend: child?.extendFrame,
                 styles: {
@@ -398,35 +428,44 @@ async function createImageComponent({filename, child, token, srcPath, figFile}) 
     await writeFile(filename, yamlData);
 }
 
+async function handleRectangleComponent({child, filename, srcPath, token, figFile}) {
+    const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
+    if (baseType === 'input') {
+        await createTextInputComponent(filename, child);
+    } else if (baseType === 'password') {
+        await createTextInputComponent(filename, child, 'password');
+    } else if (baseType === 'image') {
+        await createImageComponent({filename, child, srcPath, token, figFile});
+    } else {
+        await createContainerComponent(filename, child)
+    }
+}
+
 export async function walkFrameChildren({children, srcPath, token, figFile}) {
-    for (let i = 0; i < children.length; i++) {
-        const child = children[i];
+    for (const element of children ?? []) {
+        const child = structuredClone(element);
         const path = resolve(join(srcPath, 'modules', child?.module ?? ''));
         const filename = resolve(join(srcPath, 'modules', child?.module ?? '', `${child?.name}.yml`));
         await ensurePathExist(path);
         await ensureFileExist(filename);
         if (child?.type === 'TEXT') {
-            await createTextComponent(filename, child);
+            await createTextComponent(filename, structuredClone(child));
         } else if (child?.type === 'RECTANGLE') {
-            const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
-            if (baseType === 'input') {
-                await createTextInputComponent(filename, child);
-            } else if (baseType === 'password') {
-                await createTextInputComponent(filename, child, 'password');
-            } else if (baseType === 'image') {
-                await createImageComponent({filename, child, srcPath, token, figFile});
-            } else if (baseType === 'container') {
-                await createContainerComponent(filename, child);
-            } else {
-                await createContainerComponent(filename, child)
-            }
+            const data = {child, srcPath, figFile, token, filename};
+            await handleRectangleComponent(structuredClone(data));
         } else if (child?.type === 'FRAME') {
-            await createConditionComponent(filename, child);
-            await walkFrameChildren({children: child?.children, srcPath, token, figFile});
+            const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
+            if (baseType === 'loop') {
+                // console.log('MANAGE LOOP ELEMENT');
+                await createLoopComponent(filename, structuredClone(child));
+                await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
+            } else {
+                await createConditionComponent(filename, structuredClone(child));
+                await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
+            }
         } else {
-            await createContainerComponent(filename, child);
+            await createContainerComponent(filename, structuredClone(child));
         }
-
     }
 }
 
