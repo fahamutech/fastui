@@ -261,6 +261,12 @@ function getSizeStyles(child) {
     }
 }
 
+function sanitizedNameForLoopElement(name) {
+    return `${name}`.trim()
+        .replaceAll('_text','')
+        .replaceAll('_image','')
+}
+
 async function createTextComponent(filename, child) {
     const yamlData = yaml.dump({
         component: {
@@ -273,7 +279,7 @@ async function createTextComponent(filename, child) {
                     color: getColor(child?.fills)
                 },
                 props: {
-                    children: child?.isLoopElement ? `inputs.loopElement.${child?.name}` : 'states.value',
+                    children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}` : 'states.value',
                     id: child?.name
                 },
                 states: {
@@ -349,7 +355,7 @@ async function createConditionComponent(filename, child) {
             modifier: {
                 extend: child?.extendFrame,
                 props: {
-                    id: child?.isLoopElement ? `'_'+loopIndex+'${child?.name}'` : child?.name,
+                    id: child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child?.name)}'` : child?.name,
                     onClick: baseType === 'button' ? 'logics.onClick' : undefined
                 },
                 left: last ? `./${last?.name}.yml` : undefined,
@@ -414,7 +420,7 @@ async function createImageComponent({filename, child, token, srcPath, figFile}) 
                 props: {
                     id: child?.name,
                     alt: child?.name,
-                    src: child?.isLoopElement?`inputs.loopElement.${child?.name}??'${srcUrl}'`:srcUrl
+                    src: child?.isLoopElement?`inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??'${srcUrl}'`:srcUrl
                 },
                 extend: child?.extendFrame,
                 styles: {
