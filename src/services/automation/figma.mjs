@@ -279,7 +279,7 @@ async function createTextComponent(filename, child) {
                     color: getColor(child?.fills)
                 },
                 props: {
-                    children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}` : 'states.value',
+                    children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??value` : 'states.value',
                     id: child?.name
                 },
                 states: {
