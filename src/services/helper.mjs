@@ -2,6 +2,95 @@ import {ensureFileExist, ensurePathExist} from "../utils/index.mjs";
 import {join, resolve} from "node:path";
 import {readFile, writeFile} from "node:fs/promises";
 import os from "os";
+import {getFileName} from "./index.mjs";
+
+/**
+ *
+ * @param pages {{name: string, module: string}[]}
+ * @param initialId {string}
+ * @return {Promise<*>}
+ */
+export async function ensureAppRouteFileExist({pages, initialId}) {
+    const rawInitialPage = pages
+        .filter(x => x?.id === initialId)
+        .shift();
+    const initialPage = (rawInitialPage?.name ?? 'home').replace('_page', '').trim();
+    const componentFilePath = resolve(join('src', 'AppRoute.jsx'))
+    const stateFilePath = resolve(join('src', 'routing.mjs'))
+    await ensureFileExist(componentFilePath);
+    await ensureFileExist(stateFilePath);
+    const importTrans = page => `import {${getFileName(page.name)}} from './modules/${page.module.replace(/^\/+/g, '')}/${page.name}';`;
+    await writeFile(stateFilePath, `
+import {BehaviorSubject, distinctUntilChanged} from "rxjs";
+
+const currentRoute = new BehaviorSubject('');
+
+/**
+ *
+ * @param route {string}
+ */
+export function setCurrentRoute(route) {
+    currentRoute.next(route);
+    window.history.pushState({route}, route, \`/\${route}\`);
+}
+
+/**
+ *
+ * @param fn {function}
+ */
+export function listeningForRouteChange(fn) {
+    return currentRoute.pipe(distinctUntilChanged()).subscribe(fn);
+}
+
+export function getCurrentRouteValue() {
+    return currentRoute.value;
+}
+
+window.onpopstate = function (value) {
+    setCurrentRoute(value?.state?.route ?? 'home');
+}
+    `)
+    await writeFile(componentFilePath, `import React,{useState,useEffect} from 'react';
+import {listeningForRouteChange} from './routing.mjs';
+${pages.map(importTrans).join('\n')}
+
+function getRoute(current) {
+    switch (current) {
+        ${pages.map(page => {
+        return `
+        case '${page?.name?.replaceAll('_page', '')}':
+            return <${getFileName(page.name)}/>`
+    }).join('\n')}
+        default:
+            return <${rawInitialPage ? getFileName(rawInitialPage?.name) : ''}/>
+    }
+}
+
+export function AppRoute(){
+    const [current,setCurrent] = useState('${initialPage}');
+    
+    useEffect(() => {
+        const subs = listeningForRouteChange(setCurrent);
+        return () => subs.unsubscribe();
+    }, []);
+    
+    useEffect(() => {
+        switch (window.location.pathname) {
+            ${pages.map(page => {
+        return `
+            case '/${page?.name?.replaceAll('_page', '')}':
+                setCurrent('${page?.name?.replaceAll('_page', '')}');
+                break;`
+    }).join('\n')}
+            default:
+                setCurrent('${initialPage}');
+        }
+    }, []);
+    
+    return getRoute(current);
+}
+    `);
+}
 
 export async function ensureSchemaFileExist() {
     const filePath = resolve(join('fastui.schema.json'));
@@ -1936,6 +2025,7 @@ export async function ensureSchemaFileExist() {
   }
 }`);
 }
+
 export async function ensureWatchFileExist() {
     const filePath = resolve(join('watch.mjs'));
     await ensureFileExist(filePath);
@@ -2008,13 +2098,14 @@ export async function ensureBlueprintFolderExist() {
     const filePath = resolve(join('src', 'blueprints'));
     await ensurePathExist(filePath);
 }
+
 export async function ensureStartScript() {
     const isWin = os.platform() === 'win32';
     const joiner = isWin ? '|' : '&';
     const filePath = resolve(join('package.json'));
     await ensureFileExist(filePath);
     const file = await readFile(filePath, {encoding: 'utf-8'});
-    const fileMap = JSON.parse(`${file}`.trim().startsWith('{')?file:'"{}"');
+    const fileMap = JSON.parse(`${file}`.trim().startsWith('{') ? file : '"{}"');
     const {scripts = {}} = fileMap;
     const {start = 'echo "no command"'} = scripts;
     const startParts = `${start}`.split(joiner);

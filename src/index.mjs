@@ -6,6 +6,7 @@ import {composeComponent} from "./services/component.mjs";
 import {composeCondition} from "./services/condition.mjs";
 import {composeLoop} from "./services/loop.mjs";
 import {
+    ensureAppRouteFileExist,
     ensureBlueprintFolderExist,
     ensureSchemaFileExist,
     ensureStartScript,
@@ -70,13 +71,22 @@ switch (command1) {
                 break;
             case 'automate':
                 await ensureBlueprintFolderExist();
-                const bluePrintPath = resolve(join(process.cwd(), 'src', 'blueprints'));
+                const srcPath = resolve(join(process.cwd(), 'src', 'blueprints'));
                 const token = process.env.FIGMA_TOKEN;
                 const figFile = process.env.FIGMA_FILE;
                 const data = await fetchFigmaFile({token, figFile});
                 const document = getDesignDocument(data);
-                const pages = getPagesAndTraverseChildren(document);
-                await walkFrameChildren({children: pages, srcPath: bluePrintPath, token,figFile});
+                const children = await getPagesAndTraverseChildren({document, srcPath, token, figFile});
+                // console.log(JSON.stringify(children,null,2))
+                await walkFrameChildren({children, srcPath, token, figFile});
+                await ensureAppRouteFileExist({
+                    pages: children.map(x => ({
+                        name: x?.name,
+                        module: x?.module,
+                        id: x?.id
+                    })),
+                    initialId: document?.flowStartingPoints?.[0]?.nodeId
+                });
                 break;
             case 'build':
                 for (const specPath of await readSpecs(argv[4])) {

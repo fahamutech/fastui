@@ -108,11 +108,18 @@ function transformLayoutSizing(layoutSizing, size) {
     }
 }
 
-function transformFrameChildren(frame, module, isLoopElement) {
+async function transformFrameChildren({frame, module, isLoopElement, token, figFile, srcPath}) {
     const children = [];
     for (let i = 0; i < frame?.children?.length; i++) {
         const child = frame?.children[i];
         if (child?.type === 'FRAME') {
+            const backGroundImage = await getFigmaImagePath({
+                token,
+                figFile,
+                srcPath,
+                imageRef: getImageRef(child?.fills),
+                child,
+            })
             const baseType = getBaseType(child);
             const isLoop = baseType === 'loop';
             if (isLoop && child?.children?.length > 1) {
@@ -149,12 +156,19 @@ function transformFrameChildren(frame, module, isLoopElement) {
                         alignItems: frame?.layoutMode === 'VERTICAL'
                             ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
                             : transformLayoutAxisAlign(child?.counterAxisAlignItems),
-                        ...getContainerLikeStyles(child),
+                        ...getContainerLikeStyles(child, backGroundImage),
                         ...getSizeStyles(child)
                     }
                 }
             };
-            const f = transformFrameChildren(mChild, module, isLoop ? true : isLoopElement);
+            const f = await transformFrameChildren({
+                frame: mChild,
+                module,
+                isLoopElement: isLoop ? true : isLoopElement,
+                token,
+                srcPath,
+                figFile
+            });
             children.push(f);
         } else {
             const sc = {
@@ -182,34 +196,41 @@ function transformFrameChildren(frame, module, isLoopElement) {
 /**
  *
  * @param document
- * @return  {*[]}
+ * @param token
+ * @param figFile
+ * @param srcPath
+ * @return  {Promise<*[]>}
  */
-export function getPagesAndTraverseChildren(document) {
+export async function getPagesAndTraverseChildren({document, token, figFile, srcPath}) {
     const replaceModule = v => justString(v).replaceAll(/(\[.*])/g, '').trim();
     const replaceName = t => justString(t).replaceAll(/(.*\[)|(].*)/g, '').trim();
-
-    return itOrEmptyList(document?.children).map(x => {
-        const module = replaceName(x?.name).includes('/') ? replaceName(x?.name) : null;
-        const pageChildren = transformFrameChildren(x, module, false)?.children;
-        return {
-            ...x,
-            name: maybeRandomName(replaceModule(x?.name)),
-            type: maybeRandomName(x?.type),
+    const pages = [];
+    for (const page of document?.children ?? []) {
+        const a = {token, figFile, srcPath, imageRef: getImageRef(page?.fills), child: page}
+        const backGroundImage = await getFigmaImagePath(a)
+        const module = replaceName(page?.name).includes('/') ? replaceName(page?.name) : null;
+        const b = {frame: page, module, isLoopElement: false, token, srcPath, figFile};
+        const pageChildren = await transformFrameChildren(b);
+        pages.push({
+            ...page,
+            name: maybeRandomName(replaceModule(page?.name)),
+            type: maybeRandomName(page?.type),
             module,
-            children: pageChildren,
+            children: pageChildren?.children ?? [],
             mainFrame: {
-                base: x?.layoutMode === 'VERTICAL' ? 'column.start.stack' : 'row.start.stack',
+                base: page?.layoutMode === 'VERTICAL' ? 'column.start.stack' : 'row.start.stack',
                 styles: {
-                    paddingLeft: x?.paddingLeft,
-                    paddingRight: x?.paddingRight,
-                    paddingTop: x?.paddingTop,
-                    paddingBottom: x?.paddingBottom,
+                    paddingLeft: page?.paddingLeft,
+                    paddingRight: page?.paddingRight,
+                    paddingTop: page?.paddingTop,
+                    paddingBottom: page?.paddingBottom,
                     minHeight: '100vh',
-                    ...getContainerLikeStyles(x),
+                    ...getContainerLikeStyles(page, backGroundImage),
                 }
             }
-        }
-    });
+        })
+    }
+    return pages;
 }
 
 function getColor(source) {
@@ -233,14 +254,13 @@ function getBorderStyles(child) {
     }
 }
 
-function getContainerLikeStyles(child) {
-    // const backGroundImage = await getFigmaImagePath({
-    //     token,
-    //     figFile,
-    //     srcPath,
-    //     imageRef: getImageRef(child?.fills),
-    //     child,
-    // })
+/**
+ *
+ * @param child
+ * @param backGroundImage
+ * @return {object}
+ */
+function getContainerLikeStyles(child, backGroundImage) {
     return {
         ...child?.style ?? {},
         borderRadius: child?.cornerRadius,
@@ -249,7 +269,8 @@ function getContainerLikeStyles(child) {
         borderBottomRightRadius: child?.rectangleCornerRadii?.[2],
         borderBottomLeftRadius: child?.rectangleCornerRadii?.[3],
         backgroundColor: getColor(child?.fills),
-        // backgroundImage:
+        backgroundSize: backGroundImage ? 'cover' : undefined,
+        backgroundImage: backGroundImage ? `url("${backGroundImage}")` : undefined,
         ...getBorderStyles(child)
     }
 }
@@ -263,8 +284,8 @@ function getSizeStyles(child) {
 
 function sanitizedNameForLoopElement(name) {
     return `${name}`.trim()
-        .replaceAll('_text','')
-        .replaceAll('_image','')
+        .replaceAll('_text', '')
+        .replaceAll('_image', '')
 }
 
 async function createTextComponent(filename, child) {
@@ -299,7 +320,7 @@ async function createTextInputComponent(filename, child, type = 'text') {
             modifier: {
                 extend: child?.extendFrame,
                 styles: {
-                    ...getContainerLikeStyles(child),
+                    ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child),
                     borderColor: 'states.borderColor',
                     fontSize: 15,
@@ -329,7 +350,7 @@ async function createTextInputComponent(filename, child, type = 'text') {
     await writeFile(filename, yamlData);
 }
 
-async function createContainerComponent(filename, child) {
+async function createContainerComponent(filename, child, backgroundImage) {
     const yamlData = yaml.dump({
         component: {
             base: 'rectangle',
@@ -337,7 +358,7 @@ async function createContainerComponent(filename, child) {
                 props: {id: child?.name},
                 extend: child?.extendFrame,
                 styles: {
-                    ...getContainerLikeStyles(child),
+                    ...getContainerLikeStyles(child, backgroundImage),
                     ...getSizeStyles(child)
                 },
                 frame: child?.childFrame,
@@ -420,11 +441,11 @@ async function createImageComponent({filename, child, token, srcPath, figFile}) 
                 props: {
                     id: child?.name,
                     alt: child?.name,
-                    src: child?.isLoopElement?`inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??'${srcUrl}'`:srcUrl
+                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??'${srcUrl}'` : srcUrl
                 },
                 extend: child?.extendFrame,
                 styles: {
-                    ...getContainerLikeStyles(child),
+                    ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child)
                 },
                 frame: child?.childFrame,
@@ -443,7 +464,14 @@ async function handleRectangleComponent({child, filename, srcPath, token, figFil
     } else if (baseType === 'image') {
         await createImageComponent({filename, child, srcPath, token, figFile});
     } else {
-        await createContainerComponent(filename, child)
+        const backGroundImage = await getFigmaImagePath({
+            token,
+            figFile,
+            srcPath,
+            imageRef: getImageRef(child?.fills),
+            child,
+        })
+        await createContainerComponent(filename, child, backGroundImage)
     }
 }
 
@@ -470,7 +498,14 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
                 await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
             }
         } else {
-            await createContainerComponent(filename, structuredClone(child));
+            const backGroundImage = await getFigmaImagePath({
+                token,
+                figFile,
+                srcPath,
+                imageRef: getImageRef(child?.fills),
+                child,
+            })
+            await createContainerComponent(filename, structuredClone(child), backGroundImage);
         }
     }
 }
