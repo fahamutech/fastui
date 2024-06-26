@@ -10,7 +10,7 @@ import {
     ensureBlueprintFolderExist,
     ensureSchemaFileExist,
     ensureStartScript,
-    ensureWatchFileExist
+    ensureWatchFileExist, loadEnvFile
 } from "./services/helper.mjs";
 import {
     fetchFigmaFile,
@@ -25,7 +25,7 @@ const {argv} = process;
 const command1 = argv[2];
 
 function getMergedCondition(condition) {
-    const {base, styles = {}} = condition?.modifier?.frame ?? {};
+    const {base, styles = {},id} = condition?.modifier?.frame ?? {};
     const frameBase = base ?? condition?.modifier?.frame ?? 'column.start';
     return condition ? {
         ...condition,
@@ -33,6 +33,7 @@ function getMergedCondition(condition) {
         modifier: {
             ...condition?.modifier ?? {},
             frame: {
+                id,
                 base: `${frameBase}`.replace(/(\.\s*stack)/ig, ''),
                 styles,
             },
@@ -44,7 +45,7 @@ function getMergedCondition(condition) {
 }
 
 function getMergedLoop(loop) {
-    const {base, styles = {}} = loop?.modifier?.frame ?? {};
+    const {base, styles = {}, id} = loop?.modifier?.frame ?? {};
     const frameBase = base ?? loop?.modifier?.frame;
     return loop ? {
         ...loop,
@@ -52,6 +53,7 @@ function getMergedLoop(loop) {
         modifier: {
             ...loop?.modifier ?? {},
             frame: {
+                id,
                 base: `${frameBase}`.replace(/(\.\s*stack)/ig, ''),
                 styles,
             },
@@ -72,12 +74,13 @@ switch (command1) {
             case 'automate':
                 await ensureBlueprintFolderExist();
                 const srcPath = resolve(join(process.cwd(), 'src', 'blueprints'));
+                await loadEnvFile();
+                // console.log(process.env);
                 const token = process.env.FIGMA_TOKEN;
                 const figFile = process.env.FIGMA_FILE;
                 const data = await fetchFigmaFile({token, figFile});
                 const document = getDesignDocument(data);
                 const children = await getPagesAndTraverseChildren({document, srcPath, token, figFile});
-                // console.log(JSON.stringify(children,null,2))
                 await walkFrameChildren({children, srcPath, token, figFile});
                 await ensureAppRouteFileExist({
                     pages: children.map(x => ({
@@ -91,9 +94,9 @@ switch (command1) {
             case 'build':
                 for (const specPath of await readSpecs(argv[4])) {
                     const data = await specToJSON(specPath);
+                    // console.log(JSON.stringify(data,null,2), specPath);
                     const {component, components, condition, loop} = JSON.parse(JSON.stringify(data ?? {}));
                     const paths = {path: specPath, projectPath: process.cwd()};
-                    // await composeStartingComponent({data: app, ...paths});
                     await composeComponent({data: components ?? component, ...paths});
                     const mergedCondition = getMergedCondition(condition);
                     await composeCondition({data: mergedCondition, ...paths});
@@ -114,7 +117,6 @@ switch (command1) {
         await ensureBlueprintFolderExist();
         await ensureWatchFileExist();
         await ensureSchemaFileExist();
-        // await ensureConfigFileExist();
         await ensureStartScript();
         done('INFO : Done initiate');
         break;

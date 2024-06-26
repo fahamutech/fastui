@@ -4,6 +4,23 @@ import {readFile, writeFile} from "node:fs/promises";
 import os from "os";
 import {getFileName} from "./index.mjs";
 
+export async function loadEnvFile() {
+    try {
+        const filePath = resolve(join('./.env'));
+        await ensureFileExist(filePath)
+        const data = await readFile(filePath, 'utf-8');
+        const lines = data.split('\n');
+        lines.forEach(line => {
+            if (!line.startsWith('#') && line.trim() !== '') {
+                const [key, value] = line.split('=');
+                process.env[key.trim()] = value.trim().replace(/^['"]|['"]$/g, '');
+            }
+        });
+    } catch (err) {
+        // console.error(`Error loading .env file: ${err.message}`);
+    }
+}
+
 /**
  *
  * @param pages {{name: string, module: string}[]}
@@ -62,12 +79,12 @@ function getRoute(current) {
             return <${getFileName(page.name)}/>`
     }).join('\n')}
         default:
-            return <${rawInitialPage ? getFileName(rawInitialPage?.name) : ''}/>
+            return <></>
     }
 }
 
 export function AppRoute(){
-    const [current,setCurrent] = useState('${initialPage}');
+    const [current,setCurrent] = useState('');
     
     useEffect(() => {
         const subs = listeningForRouteChange(setCurrent);

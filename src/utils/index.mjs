@@ -152,5 +152,11 @@ export function maybeRandomName(x){
 
 export function removeWhiteSpaces(x){
     return x;
-    return `${x??''}`.replace(/\s+/ig, ' ');
+    // return `${x??''}`.replace(/\s+/ig, ' ');
+}
+
+export function sanitizeFullColon(x){
+    return `${x}`
+        .replaceAll(/^'|^"|'$|"$/g, '')
+        .replaceAll(':', '_');
 }

@@ -13,14 +13,14 @@ import {appendFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
-const getColumnStartFrame = ({column, withStack, onChild}) => {
-    return `
-        <div style=${column}>
-            ${onChild(withStack)}
-            {view}
-        </div>
-    `;
-}
+// const getColumnStartFrame = ({column, withStack, onChild}) => {
+//     return `
+//         <div style=${column}>
+//             ${onChild(withStack)}
+//             {view}
+//         </div>
+//     `;
+// }
 
 function defaultOnFrameColumn(styles) {
     return `{${JSON.stringify({
@@ -45,36 +45,47 @@ function defaultOnFrameRow(styles) {
  * @return {string}
  */
 export function getFrameStatement(frame, onChild, onFrameColumn = defaultOnFrameColumn, onFrameRow = defaultOnFrameRow) {
-    const {base, styles = {}} = frame ?? {};
+    const {base, styles = {}, id=''} = frame ?? {};
+    console.log(id, '------');
     const frameBase = base ?? frame;
     const column = onFrameColumn(styles);
     const row = onFrameRow(styles);
     const withStack = `${frameBase}`.trim().toLowerCase().includes('.stack');
     if (`${frameBase}`.trim().toLowerCase().startsWith('column.start')) {
-        return getColumnStartFrame({column, withStack, onChild});
+        return `
+            <div id={'${id}'} style=${column}>
+                ${onChild(withStack)}
+                {view}
+            </div>
+        `
     } else if (`${frameBase}`.trim().toLowerCase().startsWith('column.end')) {
         return `
-            <div style=${column}>
+            <div id={'${id}'} style=${column}>
                 {view}
                 ${onChild(withStack)}
             </div>
         `;
     } else if (`${frameBase}`.trim().toLowerCase().startsWith('row.start')) {
         return `
-            <div style=${row}>
+            <div id={'${id}'} style=${row}>
                 ${onChild(withStack)}
                 {view}
             </div>
         `;
     } else if (`${frameBase}`.trim().toLowerCase().startsWith('row.end')) {
         return `
-            <div style=${row}>
+            <div id={'${id}'} style=${row}>
                 {view}
                 ${onChild(withStack)}
             </div>
         `;
     } else {
-        return getColumnStartFrame({column, withStack, onChild});
+        return `
+            <div id={'${id}'} style=${column}>
+                ${onChild(withStack)}
+                {view}
+            </div>
+        `
     }
 }
 
@@ -267,7 +278,7 @@ export function getInputsStatement(data = {}) {
         ]
     }, []);
     let inputs = propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view', 'loopElement', 'loopIndex']);
-    inputs = inputs.filter(x=>!`${x}`.trim().startsWith('loopElement.'));
+    inputs = inputs.filter(x => !`${x}`.trim().startsWith('loopElement.'));
     return Array.from(inputs.reduce((a, b) => a.add(b), new Set())).join(',');
 }
 

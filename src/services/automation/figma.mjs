@@ -1,5 +1,12 @@
 import axios from "axios";
-import {ensureFileExist, ensurePathExist, itOrEmptyList, justString, maybeRandomName} from "../../utils/index.mjs";
+import {
+    ensureFileExist,
+    ensurePathExist,
+    itOrEmptyList,
+    justString,
+    maybeRandomName,
+    sanitizeFullColon
+} from "../../utils/index.mjs";
 import {join, resolve} from "node:path";
 import {stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
@@ -12,12 +19,16 @@ import {createWriteStream} from "node:fs";
  * @return {Promise<any>}
  */
 export async function fetchFigmaFile({token, figFile}) {
-    const {data} = await axios.get(`https://api.figma.com/v1/files/${figFile}`, {
-        headers: {
-            'X-Figma-Token': token
-        }
-    });
-    return data;
+    try {
+        const {data} = await axios.get(`https://api.figma.com/v1/files/${figFile}`, {
+            headers: {
+                'X-Figma-Token': token
+            }
+        });
+        return data;
+    } catch (e) {
+        console.log(e?.response?.data ?? e?.data ?? e?.message ?? e?.toString() ?? 'Fail to retrieve figma file');
+    }
 }
 
 async function downloadImage(imageUrl, imageRef, filePath) {
@@ -111,7 +122,7 @@ function transformLayoutSizing(layoutSizing, size) {
 async function transformFrameChildren({frame, module, isLoopElement, token, figFile, srcPath}) {
     const children = [];
     for (let i = 0; i < frame?.children?.length; i++) {
-        const child = frame?.children[i];
+        const child = frame?.children[i] ?? {};
         if (child?.type === 'FRAME') {
             const backGroundImage = await getFigmaImagePath({
                 token,
@@ -143,6 +154,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 } : child.styles,
                 mainFrame: {
                     base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
+                    id: sanitizeFullColon(`${child?.name ?? ''}_${child?.id}_frame`),
                     styles: {
                         spaceValue: frame?.itemSpacing ?? 0,
                         paddingLeft: child?.paddingLeft,
@@ -156,8 +168,9 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         alignItems: frame?.layoutMode === 'VERTICAL'
                             ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
                             : transformLayoutAxisAlign(child?.counterAxisAlignItems),
+                        width: transformLayoutSizing(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
+                        height: transformLayoutSizing(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
                         ...getContainerLikeStyles(child, backGroundImage),
-                        ...getSizeStyles(child)
                     }
                 }
             };
@@ -182,6 +195,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 extendFrame: i > 0 ? `./${frame?.children[i - 1]?.name}.yml` : undefined,
                 childFrame: {
                     base: frame?.layoutMode === 'HORIZONTAL' ? 'row.start' : 'column.start',
+                    id: sanitizeFullColon(`${child?.name ?? ''}_${child?.id}_frame`),
                     styles: {
                         flexWrap: transformLayoutWrap(frame?.layoutWrap)
                     }
@@ -213,12 +227,13 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
         const pageChildren = await transformFrameChildren(b);
         pages.push({
             ...page,
-            name: maybeRandomName(replaceModule(page?.name)),
+            name: replaceModule(page?.name),
             type: maybeRandomName(page?.type),
             module,
             children: pageChildren?.children ?? [],
             mainFrame: {
                 base: page?.layoutMode === 'VERTICAL' ? 'column.start.stack' : 'row.start.stack',
+                id: sanitizeFullColon(`${replaceModule(page?.name)}_${page?.id}_frame`),
                 styles: {
                     paddingLeft: page?.paddingLeft,
                     paddingRight: page?.paddingRight,
@@ -301,7 +316,7 @@ async function createTextComponent(filename, child) {
                 },
                 props: {
                     children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??value` : 'states.value',
-                    id: child?.name
+                    id: sanitizeFullColon(`${child?.name}_${child?.id}`)
                 },
                 states: {
                     value: child?.characters,
@@ -331,7 +346,7 @@ async function createTextInputComponent(filename, child, type = 'text') {
                     value: 'states.value',
                     onChange: 'logics.onTextChange',
                     placeholder: 'Type here',
-                    id: child?.name
+                    id: sanitizeFullColon(`${child?.name}_${child?.id}`)
                 },
                 effects: {
                     onStart: {
@@ -355,7 +370,7 @@ async function createContainerComponent(filename, child, backgroundImage) {
         component: {
             base: 'rectangle',
             modifier: {
-                props: {id: child?.name},
+                props: {id: sanitizeFullColon(`${child?.name}_${child?.id}`)},
                 extend: child?.extendFrame,
                 styles: {
                     ...getContainerLikeStyles(child, backgroundImage),
@@ -376,12 +391,13 @@ async function createConditionComponent(filename, child) {
             modifier: {
                 extend: child?.extendFrame,
                 props: {
-                    id: child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child?.name)}'` : child?.name,
+                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child?.name)}_${child?.id}'` : `${child?.name}_${child?.id}`),
                     onClick: baseType === 'button' ? 'logics.onClick' : undefined
                 },
                 left: last ? `./${last?.name}.yml` : undefined,
                 frame: {
                     base: child?.mainFrame?.base,
+                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child?.name)}_${child?.id}_frame'` : `${child?.name}_${child?.id}_frame`),
                     styles: {
                         ...child?.mainFrame?.styles,
                         cursor: baseType === 'button' ? 'pointer' : undefined
@@ -408,7 +424,7 @@ async function createLoopComponent(filename, child) {
                     overflow: 'scroll'
                 },
                 props: {
-                    id: child?.name,
+                    id: sanitizeFullColon(`${child?.name}_${child?.id}`),
                     // onClick: baseType === 'button' ? 'logics.onClick' : undefined
                 },
                 feed: last ? `./${last?.name}.yml` : undefined,
@@ -439,7 +455,7 @@ async function createImageComponent({filename, child, token, srcPath, figFile}) 
             base: 'image',
             modifier: {
                 props: {
-                    id: child?.name,
+                    id: sanitizeFullColon(`${child?.name}_${child?.id}`),
                     alt: child?.name,
                     src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??'${srcUrl}'` : srcUrl
                 },

@@ -5,7 +5,7 @@ import {resolve as pathResolve, sep as pathSep} from 'node:path'
 
 export async function readSpecs(unParsedRootFolder) {
     const cwd = process.cwd();
-    const rootFolder = pathResolve(unParsedRootFolder).replace(cwd, '.');
+    const rootFolder = pathResolve(unParsedRootFolder??'').replace(cwd, '.');
     if (`${rootFolder}`.endsWith('.yml')) {
         const rootParts = `${rootFolder}`.split(pathSep);
         const rootFileName = rootParts.pop();
