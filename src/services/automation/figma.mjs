@@ -329,7 +329,8 @@ async function createTextComponent(filename, child) {
                 styles: {
                     ...child?.style ?? {},
                     ...getSizeStyles(child),
-                    color: getColor(child?.fills)
+                    color: getColor(child?.fills),
+                    fontStyle: child?.style?.italic?'italic':undefined
                 },
                 props: {
                     children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??value` : 'states.value',
