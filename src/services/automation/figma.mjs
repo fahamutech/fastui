@@ -94,10 +94,10 @@ export function getDesignDocument(data) {
 
 function transformLayoutAxisAlign(counterAxisAlignItems) {
     switch (counterAxisAlignItems) {
-        // case 'MIN':
-        //     return 'flex-start';
-        // case 'MAX':
-        //     return 'flex-end';
+        case 'MIN':
+            return 'flex-start';
+        case 'MAX':
+            return 'flex-end';
         case  'CENTER':
             return 'center';
         case 'SPACE_BETWEEN':
@@ -111,7 +111,7 @@ function transformLayoutWrap(layoutWrap) {
     return `${layoutWrap ?? 'NOWRAP'}`.replaceAll('_', '').toLowerCase();
 }
 
-function transformLayoutSizing(layoutSizing, size) {
+function getSize(layoutSizing, size) {
     if (layoutSizing === 'FIXED') {
         return size;
     } else {
@@ -151,7 +151,15 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     alignItems: child?.layoutMode === 'VERTICAL'
                         ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
                         : transformLayoutAxisAlign(child?.counterAxisAlignItems),
-                } : child.styles,
+                    flex: frame?.layoutMode === 'VERTICAL'
+                        ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
+                        : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
+                } : {
+                    ...child.styles??{},
+                    flex: frame?.layoutMode === 'VERTICAL'
+                        ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
+                        : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
+                },
                 mainFrame: {
                     base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                     id: sanitizeFullColon(`${child?.name ?? ''}_${child?.id}_frame`),
@@ -162,14 +170,17 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         paddingTop: child?.paddingTop,
                         paddingBottom: child?.paddingBottom,
                         flexWrap: transformLayoutWrap(child?.layoutWrap),
+                        flex: frame?.layoutMode === 'VERTICAL'
+                            ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
+                            : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
                         justifyContent: frame?.layoutMode === 'VERTICAL'
                             ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
                             : transformLayoutAxisAlign(child?.primaryAxisAlignItems),
                         alignItems: frame?.layoutMode === 'VERTICAL'
                             ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
                             : transformLayoutAxisAlign(child?.counterAxisAlignItems),
-                        width: transformLayoutSizing(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
-                        height: transformLayoutSizing(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
+                        width: getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
+                        height: getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
                         ...getContainerLikeStyles(child, backGroundImage),
                     }
                 }
@@ -191,13 +202,19 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 style: {
                     ...child?.style ?? {},
                     [frame?.layoutMode === 'HORIZONTAL' ? 'marginRight' : 'marginBottom']: frame?.itemSpacing ?? 0,
+                    flex: frame?.layoutMode === 'VERTICAL'
+                        ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
+                        : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
                 },
                 extendFrame: i > 0 ? `./${frame?.children[i - 1]?.name}.yml` : undefined,
                 childFrame: {
                     base: frame?.layoutMode === 'HORIZONTAL' ? 'row.start' : 'column.start',
                     id: sanitizeFullColon(`${child?.name ?? ''}_${child?.id}_frame`),
                     styles: {
-                        flexWrap: transformLayoutWrap(frame?.layoutWrap)
+                        flexWrap: transformLayoutWrap(frame?.layoutWrap),
+                        flex: frame?.layoutMode === 'VERTICAL'
+                            ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
+                            : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
                     }
                 }
             }
@@ -292,8 +309,8 @@ function getContainerLikeStyles(child, backGroundImage) {
 
 function getSizeStyles(child) {
     return {
-        width: transformLayoutSizing(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
-        height: transformLayoutSizing(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
+        width: getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
+        height: getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
     }
 }
 
@@ -390,6 +407,7 @@ async function createConditionComponent(filename, child) {
         condition: {
             modifier: {
                 extend: child?.extendFrame,
+                styles: child.styles,
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child?.name)}_${child?.id}'` : `${child?.name}_${child?.id}`),
                     onClick: baseType === 'button' ? 'logics.onClick' : undefined
@@ -400,7 +418,8 @@ async function createConditionComponent(filename, child) {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child?.name)}_${child?.id}_frame'` : `${child?.name}_${child?.id}_frame`),
                     styles: {
                         ...child?.mainFrame?.styles,
-                        cursor: baseType === 'button' ? 'pointer' : undefined
+                        cursor: baseType === 'button' ? 'pointer' : undefined,
+                        overflow: 'auto',
                     }
                 },
             }
@@ -421,14 +440,21 @@ async function createLoopComponent(filename, child) {
                 extend: child?.extendFrame,
                 styles: {
                     ...child.styles,
-                    overflow: 'scroll'
+                    overflow: 'auto'
                 },
                 props: {
                     id: sanitizeFullColon(`${child?.name}_${child?.id}`),
                     // onClick: baseType === 'button' ? 'logics.onClick' : undefined
                 },
                 feed: last ? `./${last?.name}.yml` : undefined,
-                frame: child?.mainFrame
+                frame: {
+                    base: child?.mainFrame?.base,
+                    id: child?.mainFrame?.id,
+                    styles: {
+                        ...child?.mainFrame?.styles,
+                        overflow: 'auto',
+                    }
+                },
             }
         }
     }, undefined);
@@ -457,12 +483,13 @@ async function createImageComponent({filename, child, token, srcPath, figFile}) 
                 props: {
                     id: sanitizeFullColon(`${child?.name}_${child?.id}`),
                     alt: child?.name,
-                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??'${srcUrl}'` : srcUrl
+                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??'${srcUrl}'` : srcUrl,
                 },
                 extend: child?.extendFrame,
                 styles: {
                     ...getContainerLikeStyles(child, null),
-                    ...getSizeStyles(child)
+                    ...getSizeStyles(child),
+                    objectFit: 'cover'
                 },
                 frame: child?.childFrame,
             }

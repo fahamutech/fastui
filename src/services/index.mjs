@@ -8,7 +8,17 @@ import {
     justList,
     snakeToCamel
 } from "../utils/index.mjs";
-import {getEffects, getExtend, getFeed, getLeft, getProps, getRight, getStates, getStyles} from "./modifier.mjs";
+import {
+    getEffects,
+    getExtend,
+    getFeed,
+    getFrame,
+    getLeft,
+    getProps,
+    getRight,
+    getStates,
+    getStyles
+} from "./modifier.mjs";
 import {appendFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -46,7 +56,7 @@ function defaultOnFrameRow(styles) {
  */
 export function getFrameStatement(frame, onChild, onFrameColumn = defaultOnFrameColumn, onFrameRow = defaultOnFrameRow) {
     const {base, styles = {}, id=''} = frame ?? {};
-    console.log(id, '------');
+    // console.log(id, '------');
     const frameBase = base ?? frame;
     const column = onFrameColumn(styles);
     const row = onFrameRow(styles);
@@ -91,15 +101,19 @@ export function getFrameStatement(frame, onChild, onFrameColumn = defaultOnFrame
 
 /**
  *
- * @param frame {string|object}
+ * @param data {object}
  * @param onChild {(boolean)=>*}
  * @return {string}
  */
-export function getConditionFrameStatement(frame, onChild) {
+export function getConditionFrameStatement(data, onChild) {
+    const frame = getFrame(data);
+    const styles = getStyles(data);
     const column = `{${JSON.stringify({
+        ...styles,
         display: 'flex', flexDirection: 'column',
     })}}`;
     const row = `{${JSON.stringify({
+        ...styles,
         display: 'flex', flexDirection: 'row',
     })}}`;
     return getFrameStatement(frame, onChild, () => column, () => row);
@@ -179,7 +193,8 @@ export function getPropsStatement(data) {
                 ifDoElse(
                     t => `${t}`.startsWith("'_'+"),
                     t => `${t}`,
-                    t => `${JSON.stringify(t ?? '')}`.trim()
+                    t => `${JSON.stringify(t ?? '')}`
+                        .replaceAll(/^"|"$/ig,"'")
                 ),
             )
         )

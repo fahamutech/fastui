@@ -10,7 +10,8 @@ import {
     ensureBlueprintFolderExist,
     ensureSchemaFileExist,
     ensureStartScript,
-    ensureWatchFileExist, loadEnvFile
+    ensureWatchFileExist,
+    loadEnvFile
 } from "./services/helper.mjs";
 import {
     fetchFigmaFile,
@@ -25,7 +26,7 @@ const {argv} = process;
 const command1 = argv[2];
 
 function getMergedCondition(condition) {
-    const {base, styles = {},id} = condition?.modifier?.frame ?? {};
+    const {base, styles = {}, id} = condition?.modifier?.frame ?? {};
     const frameBase = base ?? condition?.modifier?.frame ?? 'column.start';
     return condition ? {
         ...condition,
@@ -68,7 +69,7 @@ switch (command1) {
     case 'specs':
         switch (specsCommand) {
             case 'list':
-                console.log(await readSpecs(argv[4]));
+                // console.log(await readSpecs(argv[4]));
                 done();
                 break;
             case 'automate':

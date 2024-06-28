@@ -62,7 +62,7 @@ export function ${getFileName(path)}({view,loopIndex,loopElement}) {
 
     ${effectsString}
 
-    return(${getConditionFrameStatement(getFrame(data), prepareGetContentView({data, viewWithoutExtend}))});
+    return(${getConditionFrameStatement(data, prepareGetContentView({data, viewWithoutExtend}))});
 }
     `;
 
