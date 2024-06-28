@@ -37,7 +37,9 @@ async function downloadImage(imageUrl, imageRef, filePath) {
         method: 'GET',
         responseType: 'stream',
     });
-    const imagePath = resolve(join(filePath, `${imageRef}.png`));
+    const contentType = response?.headers?.['content-type'];
+    const contentExtension = `${contentType}`.split('/')[1] ?? 'png';
+    const imagePath = resolve(join(filePath, `${imageRef}.${contentExtension}`));
     await ensureFileExist(imagePath);
     const writer = createWriteStream(imagePath);
 
@@ -50,14 +52,17 @@ async function downloadImage(imageUrl, imageRef, filePath) {
 }
 
 
-async function fetchFigmaImagesUrl({token, figFile, nodeId}) {
-    const url = `https://api.figma.com/v1/images/${figFile}?format=png&ids=${nodeId}`;
-    const {data} = await axios.get(url, {
-        headers: {
-            'X-Figma-Token': token
-        }
-    });
-    return data?.images?.[nodeId];
+async function fetchFigmaImagesUrl({token, figFile, nodeId, imageRef}) {
+    if(nodeId){
+        const axiosConfig = {headers: {'X-Figma-Token': token}};
+        const url = `https://api.figma.com/v1/images/${figFile}?format=png&ids=${nodeId}`;
+        const {data} = await axios.get(url, axiosConfig);
+        return data?.images?.[nodeId];
+    }
+    const axiosConfig = {headers: {'X-Figma-Token': token}};
+    const allImagesUrl = `https://api.figma.com/v1/files/${figFile}/images`;
+    const allImagesResponse = await axios.get(allImagesUrl, axiosConfig);
+    return allImagesResponse?.data?.meta?.images?.[imageRef];
 }
 
 async function getFigmaImagePath({token, figFile, srcPath, imageRef, child}) {
@@ -74,7 +79,7 @@ async function getFigmaImagePath({token, figFile, srcPath, imageRef, child}) {
         await stat(imagePath);
         return imageRelativePath;
     } catch (e) {
-        const url = await fetchFigmaImagesUrl({token, figFile, nodeId});
+        const url = await fetchFigmaImagesUrl({token, figFile, nodeId, imageRef});
         if (url) {
             await downloadImage(url, imageRef, folderPath);
             return imageRelativePath;
@@ -129,7 +134,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 figFile,
                 srcPath,
                 imageRef: getImageRef(child?.fills),
-                child,
+                child: undefined
             })
             const baseType = getBaseType(child);
             const isLoop = baseType === 'loop';
@@ -155,7 +160,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                         : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
                 } : {
-                    ...child.styles??{},
+                    ...child.styles ?? {},
                     flex: frame?.layoutMode === 'VERTICAL'
                         ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                         : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
@@ -237,7 +242,7 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
     const replaceName = t => justString(t).replaceAll(/(.*\[)|(].*)/g, '').trim();
     const pages = [];
     for (const page of document?.children ?? []) {
-        const a = {token, figFile, srcPath, imageRef: getImageRef(page?.fills), child: page}
+        const a = {token, figFile, srcPath, imageRef: getImageRef(page?.fills)}
         const backGroundImage = await getFigmaImagePath(a)
         const module = replaceName(page?.name).includes('/') ? replaceName(page?.name) : null;
         const b = {frame: page, module, isLoopElement: false, token, srcPath, figFile};
@@ -302,6 +307,7 @@ function getContainerLikeStyles(child, backGroundImage) {
         borderBottomLeftRadius: child?.rectangleCornerRadii?.[3],
         backgroundColor: getColor(child?.fills),
         backgroundSize: backGroundImage ? 'cover' : undefined,
+        backgroundPosition: backGroundImage ? 'center' : undefined,
         backgroundImage: backGroundImage ? `url("${backGroundImage}")` : undefined,
         ...getBorderStyles(child)
     }
@@ -330,7 +336,7 @@ async function createTextComponent(filename, child) {
                     ...child?.style ?? {},
                     ...getSizeStyles(child),
                     color: getColor(child?.fills),
-                    fontStyle: child?.style?.italic?'italic':undefined
+                    fontStyle: child?.style?.italic ? 'italic' : undefined
                 },
                 props: {
                     children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??value` : 'states.value',
