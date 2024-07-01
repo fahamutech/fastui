@@ -55,7 +55,7 @@ function defaultOnFrameRow(styles) {
  * @return {string}
  */
 export function getFrameStatement(frame, onChild, onFrameColumn = defaultOnFrameColumn, onFrameRow = defaultOnFrameRow) {
-    const {base, styles = {}, id=''} = frame ?? {};
+    const {base, styles = {}, id = ''} = frame ?? {};
     // console.log(id, '------');
     const frameBase = base ?? frame;
     const column = onFrameColumn(styles);
@@ -194,7 +194,7 @@ export function getPropsStatement(data) {
                     t => `${t}`.startsWith("'_'+"),
                     t => `${t}`,
                     t => `${JSON.stringify(t ?? '')}`
-                        .replaceAll(/^"|"$/ig,"'")
+                        .replaceAll(/^"|"$/ig, "'")
                 ),
             )
         )

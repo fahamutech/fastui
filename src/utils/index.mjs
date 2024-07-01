@@ -18,7 +18,7 @@ export function firstUpperCase(str) {
 export function ensurePathExist(unParsedPath) {
     const path = pathResolve(unParsedPath);
     return mkdir(`${path}`
-        .replace(/([a-zA-Z_-]+(.)mjs$)|([a-zA-Z_-]+(.)jsx$)/ig, ''), {recursive: true});
+        .replace(/([a-zA-Z\d_-]+(.)mjs$)|([a-zA-Z\d_-]+(.)jsx$)/ig, ''), {recursive: true});
 }
 
 export async function ensureFileExist(unParsedPath) {
