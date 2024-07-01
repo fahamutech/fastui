@@ -3,6 +3,6 @@ node_modules
 .vscode
 /src/blueprints/
 /src/modules
-test/test_comp.mjs
-test/blueprints/logics
+test/modules/
+test/blueprints/modules/logics
 watch.mjs
