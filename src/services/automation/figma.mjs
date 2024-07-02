@@ -128,6 +128,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
     const children = [];
     for (let i = 0; i < frame?.children?.length; i++) {
         const child = frame?.children[i] ?? {};
+        const isLastChild = (frame?.children?.length - 1) === i;
         if (child?.type === 'FRAME') {
             const backGroundImage = await getFigmaImagePath({
                 token,
@@ -174,7 +175,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                     id: sanitizeFullColon(`${name ?? ''}_frame`),
                     styles: {
-                        spaceValue: frame?.itemSpacing ?? 0,
+                        spaceValue: isLastChild ? 0 : frame?.itemSpacing ?? 0,
                         paddingLeft: child?.paddingLeft,
                         paddingRight: child?.paddingRight,
                         paddingTop: child?.paddingTop,
