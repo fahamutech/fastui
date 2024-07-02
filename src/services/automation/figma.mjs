@@ -255,6 +255,11 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
     const replaceName = t => justString(t).replaceAll(/(.*\[)|(].*)/g, '').trim();
     const pages = [];
     for (const page of document?.children ?? []) {
+        id2nameMapCache[page?.id] = {
+            name: replaceModule(page?.name),
+            type: replaceModule(page?.name)?.split('_')?.pop(),
+            module: replaceName(page?.name)
+        }
         const a = {token, figFile, srcPath, imageRef: getImageRef(page?.fills)}
         const backGroundImage = await getFigmaImagePath(a)
         const module = replaceName(page?.name).includes('/') ? replaceName(page?.name) : null;
@@ -422,8 +427,15 @@ async function createContainerComponent(filename, child, backgroundImage) {
     await writeFile(filename, yamlData);
 }
 
-async function createConditionComponent(filename, child) {
+async function createConditionComponent({filename, child, srcPath}) {
     const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
+    // if (baseType === 'button' && id2nameMapCache[child?.transitionNodeID]) {
+        // const route = id2nameMapCache[child?.transitionNodeID];
+        // const logicPath = resolve(join(srcPath, 'modules', route?.module ?? '', 'logics', `${child?.name}.mjs`));
+        // console.log(logicPath);
+        // await ensureFileExist(logicPath);
+        // const logicPathCon
+    // }
     const last = child?.children?.[child?.children?.length - 1];
     const yamlData = yaml.dump({
         condition: {
@@ -465,8 +477,7 @@ async function createLoopComponent(filename, child) {
                     overflow: 'auto'
                 },
                 props: {
-                    id: sanitizeFullColon(`${child?.name}`),
-                    // onClick: baseType === 'button' ? 'logics.onClick' : undefined
+                    id: sanitizeFullColon(`${child?.name}`)
                 },
                 feed: last ? `./${last?.name}.yml` : undefined,
                 frame: {
@@ -562,7 +573,7 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
                 await createLoopComponent(filename, structuredClone(child));
                 await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
             } else {
-                await createConditionComponent(filename, structuredClone(child));
+                await createConditionComponent({filename, child: structuredClone(child), srcPath});
                 await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
             }
         } else {

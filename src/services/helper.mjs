@@ -63,11 +63,15 @@ const currentRoute = new BehaviorSubject('');
 /**
  *
  * @param route {string}
+ * @param pushToState{boolean}
  */
-export function setCurrentRoute(route) {
+export function setCurrentRoute(route,pushToState=true) {
     beforeNavigate({prev:currentRoute.value,next:route},(nextRoute)=>{
+        nextRoute = nextRoute?.trim()?.replace(/^\\//ig,'')??'';
         currentRoute.next(nextRoute);
-        window.history.pushState({}, '', \`/\${route}\`);
+       if(pushToState){
+           window.history.pushState({}, '', \`/\${nextRoute}\`);
+       }
     });
 }
 
@@ -90,7 +94,7 @@ window.onpopstate = function (_) {
     });
 }`);
     await writeFile(componentFilePath, `import {useState,useEffect} from 'react';
-import {listeningForRouteChange} from './routing.mjs';
+import {listeningForRouteChange,setCurrentRoute} from './routing.mjs';
 ${pages.map(importTrans).join('\n')}
 
 function getRoute(current) {
@@ -129,7 +133,7 @@ export function AppRoute(){
     }, []);
 
     useEffect(() => {
-        setCurrent(handlePathToRouteName(window.location.pathname))
+        setCurrentRoute(handlePathToRouteName(window.location.pathname),false)
     }, []);
     
     return getRoute(current);
