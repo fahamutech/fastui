@@ -12,6 +12,8 @@ import {stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
 import {createWriteStream} from "node:fs";
 
+const id2nameMapCache = {};
+
 /**
  *
  * @param token
@@ -328,8 +330,8 @@ function getContainerLikeStyles(child, backGroundImage) {
 
 function getSizeStyles(child) {
     return {
-        width: getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
-        height: getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
+        width: getSize(child?.layoutSizingHorizontal, child?.absoluteBoundingBox?.width),
+        height: getSize(child?.layoutSizingVertical, child?.absoluteBoundingBox?.height),
     }
 }
 

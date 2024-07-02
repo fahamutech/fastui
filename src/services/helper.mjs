@@ -32,13 +32,31 @@ export async function ensureAppRouteFileExist({pages, initialId}) {
         .filter(x => x?.id === initialId)
         .shift();
     const initialPage = (rawInitialPage?.name ?? 'home').replace('_page', '').trim();
-    const componentFilePath = resolve(join('src', 'AppRoute.jsx'))
-    const stateFilePath = resolve(join('src', 'routing.mjs'))
+    const componentFilePath = resolve(join('src', 'AppRoute.jsx'));
+    const stateFilePath = resolve(join('src', 'routing.mjs'));
+    const guardFilePath = resolve(join('src', 'routing_guard.mjs'));
     await ensureFileExist(componentFilePath);
     await ensureFileExist(stateFilePath);
+    await ensureFileExist(guardFilePath);
     const importTrans = page => `import {${getFileName(page.name)}} from './modules/${page.module.replace(/^\/+/g, '')}/${page.name}';`;
+    const guardFileContents = await import(guardFilePath);
+    const shouldWriteGuardFs = typeof guardFileContents?.beforeNavigate !== "function";
+    if (shouldWriteGuardFs){
+        await writeFile(guardFilePath, `
+/**
+ * 
+ * @param prev {string}
+ * @param next {string}
+ * @param callback {(next:string)=>*}
+ */
+export function beforeNavigate({prev,next},callback){
+    callback(next);
+}`);
+    }
+
     await writeFile(stateFilePath, `
 import {BehaviorSubject, distinctUntilChanged} from "rxjs";
+import {beforeNavigate} from './routing_guard.mjs';
 
 const currentRoute = new BehaviorSubject('');
 
@@ -47,8 +65,10 @@ const currentRoute = new BehaviorSubject('');
  * @param route {string}
  */
 export function setCurrentRoute(route) {
-    currentRoute.next(route);
-    window.history.pushState({route}, route, \`/\${route}\`);
+    beforeNavigate({prev:currentRoute.value,next:route},(nextRoute)=>{
+        currentRoute.next(nextRoute);
+        window.history.pushState({}, '', \`/\${route}\`);
+    });
 }
 
 /**
@@ -63,11 +83,13 @@ export function getCurrentRouteValue() {
     return currentRoute.value;
 }
 
-window.onpopstate = function (value) {
-    setCurrentRoute(value?.state?.route ?? 'home');
-}
-    `)
-    await writeFile(componentFilePath, `import React,{useState,useEffect} from 'react';
+window.onpopstate = function (_) {
+    const path = window.location.pathname.replace(/^\\//ig,'');
+    beforeNavigate({prev:currentRoute.value,next:path},(nextRoute)=>{
+        currentRoute.next(nextRoute);
+    });
+}`);
+    await writeFile(componentFilePath, `import {useState,useEffect} from 'react';
 import {listeningForRouteChange} from './routing.mjs';
 ${pages.map(importTrans).join('\n')}
 
@@ -83,25 +105,31 @@ function getRoute(current) {
     }
 }
 
+function handlePathToRouteName(pathname){
+    pathname = pathname?.startsWith('/')?pathname:\`/\${pathname}\`;
+    switch (pathname) {
+        ${pages.map(page => {
+    return `
+        case '/${page?.name?.replaceAll('_page', '')}':
+            return '${page?.name?.replaceAll('_page', '')}';`
+}).join('\n')}
+        default:
+            return '${initialPage}';
+    }
+}
+
 export function AppRoute(){
     const [current,setCurrent] = useState('');
     
     useEffect(() => {
-        const subs = listeningForRouteChange(setCurrent);
+        const subs = listeningForRouteChange(value => {
+            setCurrent(handlePathToRouteName(value));
+        });
         return () => subs.unsubscribe();
     }, []);
-    
+
     useEffect(() => {
-        switch (window.location.pathname) {
-            ${pages.map(page => {
-        return `
-            case '/${page?.name?.replaceAll('_page', '')}':
-                setCurrent('${page?.name?.replaceAll('_page', '')}');
-                break;`
-    }).join('\n')}
-            default:
-                setCurrent('${initialPage}');
-        }
+        setCurrent(handlePathToRouteName(window.location.pathname))
     }, []);
     
     return getRoute(current);
