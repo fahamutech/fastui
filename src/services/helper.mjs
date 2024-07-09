@@ -55,7 +55,7 @@ export function beforeNavigate({prev,next},callback){
     }
 
     await writeFile(stateFilePath, `
-import {BehaviorSubject, distinctUntilChanged} from "rxjs";
+import {BehaviorSubject} from "rxjs";
 import {beforeNavigate} from './routing_guard.mjs';
 
 const currentRoute = new BehaviorSubject('');
@@ -80,7 +80,7 @@ export function setCurrentRoute(route,pushToState=true) {
  * @param fn {function}
  */
 export function listeningForRouteChange(fn) {
-    return currentRoute.pipe(distinctUntilChanged()).subscribe(fn);
+    return currentRoute.subscribe(fn);
 }
 
 export function getCurrentRouteValue() {

@@ -177,7 +177,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                     id: sanitizeFullColon(`${name ?? ''}_frame`),
                     styles: {
-                        spaceValue: isLastChild ? 0 : frame?.itemSpacing ?? 0,
+                        spaceValue: (isLastChild && !isLoopElement) ? 0 : frame?.itemSpacing ?? 0,
                         paddingLeft: child?.paddingLeft,
                         paddingRight: child?.paddingRight,
                         paddingTop: child?.paddingTop,
@@ -340,10 +340,13 @@ function getSizeStyles(child) {
     }
 }
 
-function sanitizedNameForLoopElement(name) {
+function sanitizedNameForLoopElement(child) {
+    const id = child?.id??'';
+    const name = child?.name;
     return `${name}`.trim()
         .replaceAll('_text', '')
         .replaceAll('_image', '')
+        .replaceAll(`i${id?.replaceAll(':','_')}_`,'')
 }
 
 async function createTextComponent(filename, child) {
@@ -359,7 +362,7 @@ async function createTextComponent(filename, child) {
                     fontStyle: child?.style?.italic ? 'italic' : undefined
                 },
                 props: {
-                    children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??value` : 'states.value',
+                    children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??value` : 'states.value',
                     id: sanitizeFullColon(`${child?.name}`)
                 },
                 states: {
@@ -443,13 +446,13 @@ async function createConditionComponent({filename, child, srcPath}) {
                 extend: child?.extendFrame,
                 styles: child.styles,
                 props: {
-                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child?.name)}'` : `${child?.name}`),
+                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
                     onClick: baseType === 'button' ? 'logics.onClick' : undefined
                 },
                 left: last ? `./${last?.name}.yml` : undefined,
                 frame: {
                     base: child?.mainFrame?.base,
-                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child?.name)}_frame'` : `${child?.name}_frame`),
+                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}_frame'` : `${child?.name}_frame`),
                     styles: {
                         ...child?.mainFrame?.styles,
                         cursor: baseType === 'button' ? 'pointer' : undefined,
@@ -516,7 +519,7 @@ async function createImageComponent({filename, child, token, srcPath, figFile}) 
                 props: {
                     id: sanitizeFullColon(`${child?.name}`),
                     alt: child?.name,
-                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child?.name)}??'${srcUrl}'` : srcUrl,
+                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??'${srcUrl}'` : srcUrl,
                 },
                 extend: child?.extendFrame,
                 styles: {
