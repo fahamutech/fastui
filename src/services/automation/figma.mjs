@@ -448,16 +448,22 @@ async function handleNavigations({srcPath, child}) {
 
     await writeFile(logicPath, `import {setCurrentRoute} from '../${modulePaths}../../routing.mjs';\n${lNwS}`);
 
-    // console.log(lNwS);
-
     const setRouteRegex = /setCurrentRoute\s*\(\s*.*\s*\)\s*;*\s*/g;
     const onClickSignatureRegex = /onClick\s*\(\s*data\s*\)\s*\{/g;
 
     const onClickFnString = logicImportFile?.onClick?.toString() ?? '';
     if (onClickFnString && onClickFnString !== '') {
-        const newOnClickString = onClickFnString
-            .replaceAll(setRouteRegex, '')
-            .replaceAll(onClickSignatureRegex, `onClick(data) {\n    setCurrentRoute(${JSON.stringify(route)});`);
+        let newOnClickString;
+        if (setRouteRegex.test(onClickFnString)) {
+            newOnClickString = onClickFnString
+                .replaceAll(setRouteRegex, `setCurrentRoute(${JSON.stringify(route)});\n   `);
+        } else {
+            newOnClickString = onClickFnString
+                .replaceAll(onClickSignatureRegex, `onClick(data) {\n    setCurrentRoute(${JSON.stringify(route)});`);
+        }
+        // const newOnClickString = onClickFnString
+        //     .replaceAll(setRouteRegex, `setCurrentRoute(${JSON.stringify(route)});\n   `);
+        // .replaceAll(onClickSignatureRegex, `onClick(data) {\n    setCurrentRoute(${JSON.stringify(route)});`);
         const logicFileNwString = (await readFile(logicPath)).toString()
             .replace(onClickFnString, newOnClickString)
         await writeFile(logicPath, logicFileNwString);
@@ -630,7 +636,5 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
             await createContainerComponent(filename, structuredClone(child), backGroundImage);
         }
     }
-    // console.log(JSON.stringify(id2nameMapCache,null,2))
-    // console.log('--------------')
 }
 
