@@ -62,11 +62,11 @@ const currentRoute = new BehaviorSubject('');
 
 /**
  *
- * @param route {string}
+ * @param route {string|{name: string, type: string, module: string}}
  * @param pushToState{boolean}
  */
 export function setCurrentRoute(route,pushToState=true) {
-    beforeNavigate({prev:currentRoute.value,next:route},(nextRoute)=>{
+    beforeNavigate({prev:currentRoute.value,next:route?.module??route},(nextRoute)=>{
         nextRoute = nextRoute?.trim()?.replace(/^\\//ig,'')??'';
         currentRoute.next(nextRoute);
        if(pushToState){
@@ -86,12 +86,13 @@ export function listeningForRouteChange(fn) {
 export function getCurrentRouteValue() {
     return currentRoute.value;
 }
-
-window.onpopstate = function (_) {
-    const path = window.location.pathname.replace(/^\\//ig,'');
-    beforeNavigate({prev:currentRoute.value,next:path},(nextRoute)=>{
-        currentRoute.next(nextRoute);
-    });
+if (typeof window !== 'undefined') {
+    window.onpopstate = function (_) {
+        const path = window.location.pathname.replace(/^\\//ig,'');
+        beforeNavigate({prev:currentRoute.value,next:path},(nextRoute)=>{
+            currentRoute.next(nextRoute);
+        });
+    } 
 }`);
     await writeFile(componentFilePath, `import {useState,useEffect} from 'react';
 import {listeningForRouteChange,setCurrentRoute} from './routing.mjs';

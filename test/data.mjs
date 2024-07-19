@@ -28,5 +28,4 @@ export const logicFile = `
 */
 export function getColor(data) {
     // TODO: Implement the logic
-    // throw new Error('Method getColor not implemented');
 }`;

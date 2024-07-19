@@ -8,7 +8,7 @@ import {
     sanitizeFullColon
 } from "../../utils/index.mjs";
 import {join, resolve} from "node:path";
-import {stat, writeFile} from "node:fs/promises";
+import {appendFile, readFile, stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
 import {createWriteStream} from "node:fs";
 
@@ -255,14 +255,13 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
     const replaceName = t => justString(t).replaceAll(/(.*\[)|(].*)/g, '').trim();
     const pages = [];
     for (const page of document?.children ?? []) {
-        id2nameMapCache[page?.id] = {
-            name: replaceModule(page?.name),
-            type: replaceModule(page?.name)?.split('_')?.pop(),
-            module: replaceName(page?.name)
-        }
+        const nAry = replaceModule(page?.name)?.split('_')
+        const type = nAry.pop();
+        const name = nAry.join('');
+        const module = /*replaceName(page?.name).includes('/') ? */replaceName(page?.name)/* : null;*/
+        id2nameMapCache[page?.id] = {name, type, module}
         const a = {token, figFile, srcPath, imageRef: getImageRef(page?.fills)}
         const backGroundImage = await getFigmaImagePath(a)
-        const module = replaceName(page?.name).includes('/') ? replaceName(page?.name) : null;
         const b = {frame: page, module, isLoopElement: false, token, srcPath, figFile};
         const pageChildren = await transformFrameChildren(b);
         pages.push({
@@ -341,12 +340,12 @@ function getSizeStyles(child) {
 }
 
 function sanitizedNameForLoopElement(child) {
-    const id = child?.id??'';
+    const id = child?.id ?? '';
     const name = child?.name;
     return `${name}`.trim()
         .replaceAll('_text', '')
         .replaceAll('_image', '')
-        .replaceAll(`i${id?.replaceAll(':','_')}_`,'')
+        .replaceAll(`i${id?.replaceAll(':', '_')}_`, '')
 }
 
 async function createTextComponent(filename, child) {
@@ -430,15 +429,57 @@ async function createContainerComponent(filename, child, backgroundImage) {
     await writeFile(filename, yamlData);
 }
 
+async function handleNavigations({srcPath, child}) {
+    const route = id2nameMapCache[child?.transitionNodeID];
+
+    const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
+
+    await ensurePathExist(logicPath);
+    await ensureFileExist(logicPath);
+    // const logicFileBuffer = await readFile(logicPath);
+    const logicImportFile = await import(logicPath);
+
+    const importSetRouteRegex = /import\s*\{\s*setCurrentRoute\s*}\s*from\s*.*routing.mjs['"]\s*;*\s*/g;
+    const importSetRouteMixerRegex = /setCurrentRoute\s*,|,\s*setCurrentRoute/g;
+    const lNwS = (await readFile(logicPath)).toString()
+        .replace(importSetRouteMixerRegex, '')
+        .replace(importSetRouteRegex, '')
+    const modulePaths = child?.module?.split('/')?.filter(x => x !== '')?.map(() => '../')?.join('') ?? '';
+
+    await writeFile(logicPath, `import {setCurrentRoute} from '../${modulePaths}../../routing.mjs';\n${lNwS}`);
+
+    // console.log(lNwS);
+
+    const setRouteRegex = /setCurrentRoute\s*\(\s*.*\s*\)\s*;*\s*/g;
+    const onClickSignatureRegex = /onClick\s*\(\s*data\s*\)\s*\{/g;
+
+    const onClickFnString = logicImportFile?.onClick?.toString() ?? '';
+    if (onClickFnString && onClickFnString !== '') {
+        const newOnClickString = onClickFnString
+            .replaceAll(setRouteRegex, '')
+            .replaceAll(onClickSignatureRegex, `onClick(data) {\n    setCurrentRoute(${JSON.stringify(route)});`);
+        const logicFileNwString = (await readFile(logicPath)).toString()
+            .replace(onClickFnString, newOnClickString)
+        await writeFile(logicPath, logicFileNwString);
+    } else {
+        await appendFile(logicPath, `
+/**
+* @param data {
+* {component: {states: *,inputs: *}, args: Array<*>}
+* }
+*/
+export function onClick(data) {
+    setCurrentRoute(${JSON.stringify(route)});
+    // TODO: Implement the logic
+}`);
+    }
+}
+
 async function createConditionComponent({filename, child, srcPath}) {
     const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
-    // if (baseType === 'button' && id2nameMapCache[child?.transitionNodeID]) {
-        // const route = id2nameMapCache[child?.transitionNodeID];
-        // const logicPath = resolve(join(srcPath, 'modules', route?.module ?? '', 'logics', `${child?.name}.mjs`));
-        // console.log(logicPath);
-        // await ensureFileExist(logicPath);
-        // const logicPathCon
-    // }
+    if (baseType === 'button' && id2nameMapCache[child?.transitionNodeID]) {
+        await handleNavigations({srcPath, child});
+    }
     const last = child?.children?.[child?.children?.length - 1];
     const yamlData = yaml.dump({
         condition: {
@@ -572,7 +613,6 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
         } else if (child?.type === 'FRAME') {
             const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
             if (baseType === 'loop') {
-                // console.log('MANAGE LOOP ELEMENT');
                 await createLoopComponent(filename, structuredClone(child));
                 await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
             } else {
@@ -590,5 +630,7 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
             await createContainerComponent(filename, structuredClone(child), backGroundImage);
         }
     }
+    // console.log(JSON.stringify(id2nameMapCache,null,2))
+    // console.log('--------------')
 }
 
