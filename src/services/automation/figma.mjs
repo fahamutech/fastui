@@ -40,7 +40,8 @@ async function downloadImage(imageUrl, imageRef, filePath) {
         responseType: 'stream',
     });
     const contentType = response?.headers?.['content-type'];
-    const contentExtension = `${contentType}`.split('/')[1] ?? 'png';
+    let contentExtension = `${contentType}`.split('/')[1] ?? 'png';
+    contentExtension = contentExtension.split('+')[0];
     const imagePath = resolve(join(filePath, `${imageRef}.${contentExtension}`));
     await ensureFileExist(imagePath);
     const writer = createWriteStream(imagePath);
@@ -54,10 +55,10 @@ async function downloadImage(imageUrl, imageRef, filePath) {
 }
 
 
-async function fetchFigmaImagesUrl({token, figFile, nodeId, imageRef}) {
+async function fetchFigmaImagesUrl({token, figFile, nodeId, format, imageRef}) {
     if (nodeId) {
         const axiosConfig = {headers: {'X-Figma-Token': token}};
-        const url = `https://api.figma.com/v1/images/${figFile}?format=png&ids=${nodeId}`;
+        const url = `https://api.figma.com/v1/images/${figFile}?format=${format ?? 'png'}&ids=${nodeId}`;
         const {data} = await axios.get(url, axiosConfig);
         return data?.images?.[nodeId];
     }
@@ -67,21 +68,22 @@ async function fetchFigmaImagesUrl({token, figFile, nodeId, imageRef}) {
     return allImagesResponse?.data?.meta?.images?.[imageRef];
 }
 
-async function getFigmaImagePath({token, figFile, srcPath, imageRef, child}) {
+async function getFigmaImagePath({token, figFile, srcPath, imageRef, child, format}) {
     if (!imageRef) {
         return undefined;
     }
     const nodeId = child?.id;
     const folderPath = resolve(join(srcPath, '..', '..', 'public', 'images', 'figma'));
     await ensurePathExist(folderPath);
-    const imageName = `${imageRef}.png`;
+    const imageName = `${imageRef}.${format ?? 'png'}`;
     const imageRelativePath = `/images/figma/${imageName}`;
     try {
         const imagePath = join(folderPath, imageName);
         await stat(imagePath);
         return imageRelativePath;
     } catch (e) {
-        const url = await fetchFigmaImagesUrl({token, figFile, nodeId, imageRef});
+        const url = await fetchFigmaImagesUrl(
+            {token, format, figFile, nodeId, imageRef});
         if (url) {
             await downloadImage(url, imageRef, folderPath);
             return imageRelativePath;
@@ -128,9 +130,10 @@ function getSize(layoutSizing, size) {
 
 async function transformFrameChildren({frame, module, isLoopElement, token, figFile, srcPath}) {
     const children = [];
-    for (let i = 0; i < frame?.children?.length; i++) {
-        const child = frame?.children[i] ?? {};
-        const isLastChild = (frame?.children?.length - 1) === i;
+    const fChildren = frame?.children?.filter(x => x?.visible ?? true) ?? [];
+    for (let i = 0; i < fChildren?.length; i++) {
+        const child = fChildren[i] ?? {};
+        const isLastChild = (fChildren?.length - 1) === i;
         if (child?.type === 'FRAME') {
             const backGroundImage = await getFigmaImagePath({
                 token,
@@ -144,7 +147,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
             if (isLoop && child?.children?.length > 1) {
                 child.children = [child?.children?.[0]];
             }
-            const extendFrame = `i${frame?.children[i - 1]?.id}_${frame?.children[i - 1]?.name}`
+            const extendFrame = `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const name = `i${child?.id}_${child?.name}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
@@ -208,7 +211,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
             });
             children.push(f);
         } else {
-            const extendFrame = `i${frame?.children[i - 1]?.id}_${frame?.children[i - 1]?.name}`
+            const extendFrame = `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const name = `i${child?.id}_${child?.name}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
@@ -254,7 +257,8 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
     const replaceModule = v => justString(v).replaceAll(/(\[.*])/g, '').trim();
     const replaceName = t => justString(t).replaceAll(/(.*\[)|(].*)/g, '').trim();
     const pages = [];
-    for (const page of document?.children ?? []) {
+    const sPages = document?.children?.filter(x => x?.visible ?? true);
+    for (const page of sPages ?? []) {
         const nAry = replaceModule(page?.name)?.split('_')
         const type = nAry.pop();
         const name = nAry.join('');
@@ -284,7 +288,7 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
                     ...getContainerLikeStyles(page, backGroundImage),
                 }
             }
-        })
+        });
     }
     return pages;
 }
@@ -559,25 +563,7 @@ async function createImageComponent({filename, child, token, srcPath, figFile}) 
         imageRef: getImageRef(child?.fills),
         child,
     });
-    const yamlData = yaml.dump({
-        component: {
-            base: 'image',
-            modifier: {
-                props: {
-                    id: sanitizeFullColon(`${child?.name}`),
-                    alt: child?.name,
-                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??'${srcUrl}'` : srcUrl,
-                },
-                extend: child?.extendFrame,
-                styles: {
-                    ...getContainerLikeStyles(child, null),
-                    ...getSizeStyles(child),
-                    objectFit: 'cover'
-                },
-                frame: child?.childFrame,
-            }
-        }
-    }, undefined);
+    const yamlData = dumpImageYaml({srcUrl, child});
     await writeFile(filename, yamlData);
 }
 
@@ -604,6 +590,47 @@ async function handleRectangleComponent({child, filename, srcPath, token, figFil
     }
 }
 
+function dumpImageYaml({child, srcUrl}) {
+    return yaml.dump({
+        component: {
+            base: 'image',
+            modifier: {
+                props: {
+                    id: sanitizeFullColon(`${child?.name}`),
+                    alt: child?.name,
+                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??'${srcUrl}'` : srcUrl,
+                },
+                extend: child?.extendFrame,
+                styles: {
+                    ...getContainerLikeStyles(child, null),
+                    ...getSizeStyles(child),
+                    objectFit: 'cover'
+                },
+                frame: child?.childFrame,
+            }
+        }
+    }, undefined);
+}
+
+async function createVectorComponent({filename, child, srcPath, token, figFile}) {
+    child = structuredClone({
+        ...child,
+        fills: undefined,
+        strokes: undefined,
+        strokeWeight: undefined
+    })
+    const srcUrl = await getFigmaImagePath({
+        token,
+        figFile,
+        format: 'svg',
+        srcPath,
+        imageRef: sanitizeFullColon(`${child?.name}`),
+        child,
+    });
+    const yamlData = dumpImageYaml({srcUrl, child})
+    await writeFile(filename, yamlData);
+}
+
 export async function walkFrameChildren({children, srcPath, token, figFile}) {
     for (const element of children ?? []) {
         const child = structuredClone(element);
@@ -616,6 +643,9 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
         } else if (child?.type === 'RECTANGLE') {
             const data = {child, srcPath, figFile, token, filename};
             await handleRectangleComponent(structuredClone(data));
+        } else if (child?.type === 'VECTOR') {
+            await createVectorComponent(
+                {filename, child, srcPath, token, figFile});
         } else if (child?.type === 'FRAME') {
             const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
             if (baseType === 'loop') {
