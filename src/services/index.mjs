@@ -161,9 +161,11 @@ export function getBase(data) {
     const base = data?.base ?? '';
     if (`${base}` === 'image') {
         return 'img';
-    } else if (`${base}` === 'text') {
-        return 'span';
-    } else if (`${base}` === 'input') {
+    }
+    // else if (`${base}` === 'text') {
+    //     return 'div';
+    // }
+    else if (`${base}` === 'input') {
         return 'input';
     } else {
         return 'div';

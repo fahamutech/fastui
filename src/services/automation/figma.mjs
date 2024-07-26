@@ -362,7 +362,14 @@ async function createTextComponent(filename, child) {
                     ...child?.style ?? {},
                     ...getSizeStyles(child),
                     color: getColor(child?.fills),
-                    fontStyle: child?.style?.italic ? 'italic' : undefined
+                    fontStyle: child?.style?.italic ? 'italic' : undefined,
+                    textAlign: child?.style?.textAlignHorizontal === 'LEFT'
+                        ? 'start'
+                        : child?.style?.textAlignHorizontal === 'CENTER'
+                            ? 'center'
+                            : child?.style?.textAlignHorizontal === 'RIGHT'
+                                ? 'end'
+                                : undefined,
                 },
                 props: {
                     children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??value` : 'states.value',
