@@ -66,7 +66,7 @@ const currentRoute = new BehaviorSubject('');
  * @param pushToState{boolean}
  */
 export function setCurrentRoute(route,pushToState=true) {
-    beforeNavigate({prev:currentRoute.value,next:route?.module??route},(nextRoute)=>{
+    beforeNavigate({prev:currentRoute.value,next:route?.name??route},(nextRoute)=>{
         nextRoute = nextRoute?.trim()?.replace(/^\\//ig,'')??'';
         currentRoute.next(nextRoute);
        if(pushToState){

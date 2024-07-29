@@ -261,7 +261,7 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
     for (const page of sPages ?? []) {
         const nAry = replaceModule(page?.name)?.split('_')
         const type = nAry.pop();
-        const name = nAry.join('');
+        const name = nAry.join('_');
         const module = /*replaceName(page?.name).includes('/') ? */replaceName(page?.name)/* : null;*/
         id2nameMapCache[page?.id] = {name, type, module}
         const a = {token, figFile, srcPath, imageRef: getImageRef(page?.fills)}
