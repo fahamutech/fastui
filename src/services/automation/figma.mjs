@@ -11,6 +11,7 @@ import {join, resolve} from "node:path";
 import {appendFile, readFile, stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
 import {createWriteStream} from "node:fs";
+import {randomUUID} from "node:crypto";
 
 const id2nameMapCache = {};
 
@@ -144,7 +145,8 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
             })
             const baseType = getBaseType(child);
             const isLoop = baseType === 'loop';
-            if (isLoop && child?.children?.length > 1) {
+            if (isLoop /*&& child?.children?.length > 1*/) {
+                child.childrenData = child?.children?.map(x => ({_key: x?.id ?? randomUUID().toString()}));
                 child.children = [child?.children?.[0]];
             }
             const extendFrame = `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`
@@ -447,7 +449,6 @@ async function handleNavigations({srcPath, child}) {
 
     await ensurePathExist(logicPath);
     await ensureFileExist(logicPath);
-    // const logicFileBuffer = await readFile(logicPath);
     const logicImportFile = await import(logicPath);
 
     const importSetRouteRegex = /import\s*\{\s*setCurrentRoute\s*}\s*from\s*.*routing.mjs['"]\s*;*\s*/g;
@@ -527,7 +528,51 @@ function getBaseType(child) {
     return (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
 }
 
-async function createLoopComponent(filename, child) {
+
+async function ensureLoopDataExist({srcPath, child}) {
+    const dummyChildren = child.childrenData ?? [{_key: randomUUID().toString()}]
+
+    const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
+
+    await ensurePathExist(logicPath);
+    await ensureFileExist(logicPath);
+    const logicImportFile = await import(logicPath);
+
+    const setDataRegex1 = /states\s*.\s*setData\s*\(\s*\[\s*(.*\s*)+?]\s*\)/g;
+    const setDataRegex2 = /states\s*.\s*setData\s*\(\s*\w*\s*\)/g;
+    const onStartSignatureRegex = /onStart\s*\(\s*data\s*\)\s*\{/g;
+
+    const onStartFnString = logicImportFile?.onStart?.toString() ?? '';
+    if (onStartFnString && onStartFnString !== '') {
+        const condition1 = setDataRegex1.test(onStartFnString);
+        const condition2 = setDataRegex2.test(onStartFnString);
+        if (condition1) {
+            return
+        }
+        if (condition2) {
+            return
+        }
+        const newOnStartString = onStartFnString
+            .replaceAll(onStartSignatureRegex, `onStart(data) {\n    data.component.states.setData(${JSON.stringify(dummyChildren)});`);
+        const logicFileNwString = (await readFile(logicPath))
+            .toString().replace(onStartFnString, newOnStartString)
+        await writeFile(logicPath, logicFileNwString);
+    } else {
+        await appendFile(logicPath, `
+/**
+* @param data {
+* {component: {states: *,inputs: *}, args: Array<*>}
+* }
+*/
+export function onStart(data) {
+    data.component.states.setData(${JSON.stringify(dummyChildren)});
+}`);
+    }
+}
+
+async function createLoopComponent({filename, child, srcPath}) {
+    child = structuredClone(child);
+    await ensureLoopDataExist({srcPath, child});
     const last = child?.children?.[0];
     const yamlData = yaml.dump({
         loop: {
@@ -656,7 +701,7 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
         } else if (child?.type === 'FRAME') {
             const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
             if (baseType === 'loop') {
-                await createLoopComponent(filename, structuredClone(child));
+                await createLoopComponent({filename, child, srcPath});
                 await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
             } else {
                 await createConditionComponent({filename, child: structuredClone(child), srcPath});
