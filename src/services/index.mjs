@@ -22,6 +22,7 @@ import {
 import {appendFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {absolutePathParse} from "./helper.mjs";
 
 // const getColumnStartFrame = ({column, withStack, onChild}) => {
 //     return `
@@ -383,7 +384,7 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
     await ensurePathExist(logicFolderPath);
     await ensureFileExist(pathJoin(logicFolderPath, logicFileName));
     try {
-        const importedLogic = await import(pathToFileURL(pathJoin(projectPath, logicFolderPath, logicFileName)));
+        const importedLogic = await import(absolutePathParse(pathToFileURL(pathJoin(projectPath, logicFolderPath, logicFileName))));
         for (const e of exports) {
             if (importedLogic[e] === undefined) {
                 await appendFile(pathJoin(logicFolderPath, logicFileName), `

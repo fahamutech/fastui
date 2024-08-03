@@ -12,6 +12,7 @@ import {appendFile, readFile, stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
 import {createWriteStream} from "node:fs";
 import {randomUUID} from "node:crypto";
+import {absolutePathParse} from "../helper.mjs";
 
 const id2nameMapCache = {};
 
@@ -449,7 +450,7 @@ async function handleNavigations({srcPath, child}) {
 
     await ensurePathExist(logicPath);
     await ensureFileExist(logicPath);
-    const logicImportFile = await import(logicPath);
+    const logicImportFile = await import(absolutePathParse(logicPath));
 
     const importSetRouteRegex = /import\s*\{\s*setCurrentRoute\s*}\s*from\s*.*routing.mjs['"]\s*;*\s*/g;
     const importSetRouteMixerRegex = /setCurrentRoute\s*,|,\s*setCurrentRoute/g;
@@ -536,7 +537,7 @@ async function ensureLoopDataExist({srcPath, child}) {
 
     await ensurePathExist(logicPath);
     await ensureFileExist(logicPath);
-    const logicImportFile = await import(logicPath);
+    const logicImportFile = await import(absolutePathParse(logicPath));
 
     const setDataRegex1 = /states\s*.\s*setData\s*\(\s*\[\s*(.*\s*)+?]\s*\)/g;
     const setDataRegex2 = /states\s*.\s*setData\s*\(\s*\w*\s*\)/g;

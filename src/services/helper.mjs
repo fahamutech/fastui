@@ -21,6 +21,15 @@ export async function loadEnvFile() {
     }
 }
 
+
+export function absolutePathParse(path) {
+    const isWin = os.platform() === 'win32';
+    if (isWin) {
+        return `${path}`.replace(/^C:/ig, 'file://');
+    }
+    return path;
+}
+
 /**
  *
  * @param pages {{name: string, module: string}[]}
@@ -39,9 +48,9 @@ export async function ensureAppRouteFileExist({pages, initialId}) {
     await ensureFileExist(stateFilePath);
     await ensureFileExist(guardFilePath);
     const importTrans = page => `import {${getFileName(page.name)}} from './modules/${page.module.replace(/^\/+/g, '')}/${page.name}';`;
-    const guardFileContents = await import(guardFilePath);
+    const guardFileContents = await import(absolutePathParse(guardFilePath));
     const shouldWriteGuardFs = typeof guardFileContents?.beforeNavigate !== "function";
-    if (shouldWriteGuardFs){
+    if (shouldWriteGuardFs) {
         await writeFile(guardFilePath, `
 /**
  * 
@@ -114,10 +123,10 @@ function handlePathToRouteName(pathname){
     pathname = pathname?.startsWith('/')?pathname:\`/\${pathname}\`;
     switch (pathname) {
         ${pages.map(page => {
-    return `
+        return `
         case '/${page?.name?.replaceAll('_page', '')}':
             return '${page?.name?.replaceAll('_page', '')}';`
-}).join('\n')}
+    }).join('\n')}
         default:
             return '${initialPage}';
     }
