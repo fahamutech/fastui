@@ -25,7 +25,7 @@ export async function loadEnvFile() {
 export function absolutePathParse(path) {
     const isWin = os.platform() === 'win32';
     if (isWin) {
-        return `${path}`.replace(/^C:/ig, 'file://');
+        return `file:///${path}`; //.replace(/^C:/ig, 'file://');
     }
     return path;
 }
