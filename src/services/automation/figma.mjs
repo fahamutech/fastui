@@ -496,9 +496,21 @@ export function onClick(data) {
 
 async function createConditionComponent({filename, child, srcPath}) {
     const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
+
     if (baseType === 'button' && id2nameMapCache[child?.transitionNodeID]) {
         await handleNavigations({srcPath, child});
     }
+
+    let isCondition = false;
+    let leftName, rightName;
+    if (baseType === 'condition') {
+        isCondition = true;
+        leftName = child?.children?.[1]?.name;
+        rightName = child?.children?.[0]?.name;
+        // console.log('LEFT: ', leftName);
+        // console.log('RIGHT: ', rightName);
+    }
+
     const last = child?.children?.[child?.children?.length - 1];
     const yamlData = yaml.dump({
         condition: {
@@ -509,7 +521,12 @@ async function createConditionComponent({filename, child, srcPath}) {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
                     onClick: baseType === 'button' ? 'logics.onClick' : undefined
                 },
-                left: last ? `./${last?.name}.yml` : undefined,
+                left: (isCondition && leftName)
+                    ? `./${leftName}.yml`
+                    : (last ? `./${last?.name}.yml` : undefined),
+                right: (isCondition && rightName)
+                    ? `./${rightName}.yml`
+                    : undefined,
                 frame: {
                     base: child?.mainFrame?.base,
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}_frame'` : `${child?.name}_frame`),
