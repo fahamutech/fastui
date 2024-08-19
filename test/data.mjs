@@ -19,7 +19,32 @@ watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename)
 });
 `;
 
-export const specFile = ` import React from 'react'; import {getColor} from '${join('..','test','blueprints','logics','test_comp.mjs').split(sep).join('/')}'; export function TestComp({view,loopElement,loopIndex}){ const component = React.useMemo(()=>({states:{},inputs:{\"view\":view,\"loopElement\":loopElement,\"loopIndex\":loopIndex}}),[view,loopElement,loopIndex]); const style = React.useMemo(()=>({\"height\":54,\"backgroundColor\":\"blue\",\"color\":getColor({component,args: []})}),[view,loopElement,loopIndex]); return( <div style={{\"display\":\"flex\",\"flexDirection\":\"column\"}}> <div style={style} ></div> {view} </div> ); } `;
+export const specFile = `
+import React from 'react';
+import {getColor} from '../../test/blueprints/modules/logics/test_comp.mjs';
+
+export function TestComp({view, loopElement, loopIndex}) {
+    // eslint-disable-next-line no-unused-vars
+    const component = React.useMemo(() => ({
+        states: {},
+        inputs: {"view": view, "loopElement": loopElement, "loopIndex": loopIndex}
+    }), [view, loopElement, loopIndex]);
+    
+    const style = React.useMemo(() => ({
+        "height": 54,
+        "backgroundColor": "blue",
+        "color": getColor({component, args: []})
+    }), [component]);
+    
+    return (
+        <div id={''} style={{"display": "flex", "flexDirection": "column"}}>
+            <div style={style}></div>
+            {view}
+        </div>
+    );
+}
+    
+`;
 export const logicFile = `
 /**
 * @param data {
