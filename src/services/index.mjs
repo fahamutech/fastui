@@ -24,15 +24,6 @@ import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:pat
 import {pathToFileURL} from 'node:url';
 import {absolutePathParse} from "./helper.mjs";
 
-// const getColumnStartFrame = ({column, withStack, onChild}) => {
-//     return `
-//         <div style=${column}>
-//             ${onChild(withStack)}
-//             {view}
-//         </div>
-//     `;
-// }
-
 function defaultOnFrameColumn(styles) {
     return `{${JSON.stringify({
         ...styles,

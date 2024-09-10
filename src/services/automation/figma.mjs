@@ -165,11 +165,11 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     flexDirection: child?.layoutMode === 'VERTICAL' ? 'column' : 'row',
                     flexWrap: transformLayoutWrap(child?.layoutWrap),
                     justifyContent: child?.layoutMode === 'VERTICAL'
+                        ? transformLayoutAxisAlign(child?.primaryAxisAlignItems )
+                        : transformLayoutAxisAlign(child?.counterAxisAlignItems),
+                    alignItems: child?.layoutMode === 'VERTICAL'
                         ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
                         : transformLayoutAxisAlign(child?.primaryAxisAlignItems),
-                    alignItems: child?.layoutMode === 'VERTICAL'
-                        ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
-                        : transformLayoutAxisAlign(child?.counterAxisAlignItems),
                     flex: frame?.layoutMode === 'VERTICAL'
                         ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                         : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
@@ -192,12 +192,12 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         flex: frame?.layoutMode === 'VERTICAL'
                             ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                             : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
-                        justifyContent: frame?.layoutMode === 'VERTICAL'
+                        justifyContent: child?.layoutMode === 'VERTICAL'
+                            ? transformLayoutAxisAlign(child?.primaryAxisAlignItems )
+                            : transformLayoutAxisAlign(child?.counterAxisAlignItems),
+                        alignItems: child?.layoutMode === 'VERTICAL'
                             ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
                             : transformLayoutAxisAlign(child?.primaryAxisAlignItems),
-                        alignItems: frame?.layoutMode === 'VERTICAL'
-                            ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
-                            : transformLayoutAxisAlign(child?.counterAxisAlignItems),
                         width: getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
                         height: getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
                         ...getContainerLikeStyles(child, backGroundImage),
