@@ -8,7 +8,7 @@ import {
     sanitizeFullColon
 } from "../../utils/index.mjs";
 import {join, resolve} from "node:path";
-import {appendFile, readFile, stat, writeFile} from "node:fs/promises";
+import {appendFile, readdir, readFile, stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
 import {createWriteStream} from "node:fs";
 import {randomUUID} from "node:crypto";
@@ -51,11 +51,10 @@ async function downloadImage(imageUrl, imageRef, filePath) {
     response.data.pipe(writer);
 
     return new Promise((then, reject) => {
-        writer.on('finish', () => then(imagePath));
+        writer.on('finish', () => then({imagePath, contentExtension}));
         writer.on('error', reject);
     });
 }
-
 
 async function fetchFigmaImagesUrl({token, figFile, nodeId, format, imageRef}) {
     if (nodeId) {
@@ -77,18 +76,19 @@ async function getFigmaImagePath({token, figFile, srcPath, imageRef, child, form
     const nodeId = child?.id;
     const folderPath = resolve(join(srcPath, '..', '..', 'public', 'images', 'figma'));
     await ensurePathExist(folderPath);
-    const imageName = `${imageRef}.${format ?? 'png'}`;
-    const imageRelativePath = `/images/figma/${imageName}`;
     try {
-        const imagePath = join(folderPath, imageName);
+        const files = await readdir(folderPath);
+        const file = files.filter(x => x.trim().startsWith(imageRef))[0];
+        const imagePath = join(folderPath, file);
         await stat(imagePath);
-        return imageRelativePath;
+        return `/images/figma/${file}`;
     } catch (e) {
         const url = await fetchFigmaImagesUrl(
             {token, format, figFile, nodeId, imageRef});
         if (url) {
-            await downloadImage(url, imageRef, folderPath);
-            return imageRelativePath;
+            const {contentExtension} = await downloadImage(url, imageRef, folderPath);
+            const imageName = `${imageRef}.${contentExtension ?? 'png'}`;
+            return `/images/figma/${imageName}`;
         }
         return undefined;
     }
@@ -162,10 +162,11 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 isLoopElement,
                 styles: isLoop ? {
                     display: 'flex',
+                    color: 'transparent',
                     flexDirection: child?.layoutMode === 'VERTICAL' ? 'column' : 'row',
                     flexWrap: transformLayoutWrap(child?.layoutWrap),
                     justifyContent: child?.layoutMode === 'VERTICAL'
-                        ? transformLayoutAxisAlign(child?.primaryAxisAlignItems )
+                        ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
                         : transformLayoutAxisAlign(child?.counterAxisAlignItems),
                     alignItems: child?.layoutMode === 'VERTICAL'
                         ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
@@ -175,6 +176,9 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
                 } : {
                     ...child.styles ?? {},
+                    boxShadow: getDropShadowEffect(child),
+                    backdropFilter: getBackgroundBlurEffect(child),
+                    filter: getLayerBlurEffect(child),
                     flex: frame?.layoutMode === 'VERTICAL'
                         ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                         : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
@@ -193,7 +197,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                             ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                             : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
                         justifyContent: child?.layoutMode === 'VERTICAL'
-                            ? transformLayoutAxisAlign(child?.primaryAxisAlignItems )
+                            ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
                             : transformLayoutAxisAlign(child?.counterAxisAlignItems),
                         alignItems: child?.layoutMode === 'VERTICAL'
                             ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
@@ -201,6 +205,9 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         width: getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
                         height: getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
                         ...getContainerLikeStyles(child, backGroundImage),
+                        boxShadow: getDropShadowEffect(child),
+                        backdropFilter: getBackgroundBlurEffect(child),
+                        filter: getLayerBlurEffect(child),
                     }
                 }
             };
@@ -285,7 +292,7 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
                     paddingRight: page?.paddingRight,
                     paddingTop: page?.paddingTop,
                     paddingBottom: page?.paddingBottom,
-                    minHeight: '100vh',
+                    height: '100vh',
                     // maxWidth: page?.absoluteRenderBounds?.width,
                     // margin: 'auto',
                     ...getContainerLikeStyles(page, backGroundImage),
@@ -296,10 +303,38 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
     return pages;
 }
 
+function getBackgroundBlurEffect(child) {
+    const effect = itOrEmptyList(child?.effects).find(x => x?.type === 'BACKGROUND_BLUR');
+    return effect?.visible ? `blur(${effect?.radius ?? 0}px)` : undefined;
+}
+
+function getDropShadowEffect(child) {
+    const effect = itOrEmptyList(child?.effects).find(x => x?.type === 'DROP_SHADOW')
+        ?? itOrEmptyList(child?.effects).find(x => x?.type === 'INNER_SHADOW');
+    const inner = effect?.type === 'INNER_SHADOW' ? 'inset' : '';
+    const x = effect?.offset?.x ?? 0;
+    const y = effect?.offset?.y ?? 0;
+    const radius = effect?.radius ?? 0;
+    const spread = effect?.spread ?? 0;
+    const color = getColor([{type: 'SOLID', color: {...child?.color ?? {}}}]);
+    return effect?.visible
+        ? `${inner} ${x}px ${y}px ${radius}px ${spread}px ${color}`.trim()
+        : undefined;
+}
+
+function getLayerBlurEffect(child) {
+    const effect = itOrEmptyList(child?.effects).find(x => x?.type === 'LAYER_BLUR');
+    return effect?.visible ? `blur(${effect?.radius ?? 0}px)` : undefined;
+}
+
 function getColor(source) {
+    const getAlpha = v =>
+        (v?.color?.a > 0 && v?.color?.a < 1)
+            ? (v?.color?.a ?? 1) * 255
+            : v?.opacity ?? 1;
     return itOrEmptyList(source)
         .filter(x => x?.type === 'SOLID')
-        .map(y => `rgba(${y?.color?.r * 255},${y?.color?.g * 255},${y?.color?.b * 255},${y?.color?.a * 255})`)
+        .map(y => `rgba(${y?.color?.r * 255},${y?.color?.g * 255},${y?.color?.b * 255},${getAlpha(y)})`)
         .shift();
 }
 
@@ -545,7 +580,6 @@ async function createConditionComponent({filename, child, srcPath}) {
 function getBaseType(child) {
     return (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
 }
-
 
 async function ensureLoopDataExist({srcPath, child}) {
     const dummyChildren = child.childrenData ?? [{_key: randomUUID().toString()}]

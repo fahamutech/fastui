@@ -23,6 +23,10 @@ import {appendFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {absolutePathParse} from "./helper.mjs";
+import {getTemplateSelected} from "../utils/config.mjs";
+import {TEMPLATE_MAPPING} from "./templates/mapping.mjs";
+
+const template = getTemplateSelected();
 
 function defaultOnFrameColumn(styles) {
     return `{${JSON.stringify({
@@ -154,8 +158,8 @@ export function getBase(data) {
     if (`${base}` === 'image') {
         return 'img';
     }
-    // else if (`${base}` === 'text') {
-    //     return 'div';
+        // else if (`${base}` === 'text') {
+        //     return 'div';
     // }
     else if (`${base}` === 'input') {
         return 'input';
@@ -222,21 +226,6 @@ export function prepareGetContentView({data, viewWithoutExtend}) {
 
 export const getFileName = compose(firstUpperCase, snakeToCamel, getFilenameFromBlueprintPath);
 
-/**
- * @param data{*}
- * @return {string}
- * */
-export function getStatesStatement(data) {
-    const states = getStates(data);
-    const getState = k => `${states[k]}`.trim().toLowerCase().startsWith('inputs.')
-        ? `${states[k]}`.trim().replace(/^(inputs.)/ig, '')
-        : JSON.stringify(states[k])
-    return Object
-        .keys(states ?? {})
-        .map(k => `const [${k},set${firstUpperCase(k)}] = React.useState(${getState(k)});`)
-        .join('\n\t');
-}
-
 function sanitizeEffectDependency(watch) {
     const mapWatch = watchItem => {
         if (`${watchItem}`.trim().toLowerCase().startsWith('states.')) {
@@ -254,18 +243,25 @@ function sanitizeEffectDependency(watch) {
  * @param data{*}
  * @return {string}
  * */
+export function getStatesStatement(data) {
+    const states = getStates(data);
+    const getStateIV = k => /^(inputs\.)/ig.test(`${states[k]}`.trim())
+        ? `${states[k]}`.replace(/^(inputs.)/ig, '')
+        : JSON.stringify(states[k]);
+    return TEMPLATE_MAPPING.statesPresentation[template](states, getStateIV);
+}
+
+/**
+ * @param data{*}
+ * @return {string}
+ * */
 export function getEffectsStatement(data) {
     const effects = getEffects(data);
     const getDependencies = k => sanitizeEffectDependency(effects[k]?.watch);
     const getBody = k => `${effects[k]?.body}`.trim().toLowerCase().startsWith('logics.')
         ? `${effects[k]?.body}`.trim().replace(/^(logics.)|\(\)/ig, '')
         : effects[k]?.body ?? '{}';
-    return Object
-        .keys(effects ?? {})
-        .map(k => `/*${k}*/
-    React.useEffect(()=>${getBody(k)}({component,args:[]}),
-    /* eslint-disable-line react-hooks/exhaustive-deps */[${getDependencies(k) ?? ``}]);`)
-        .join('\n\t');
+    return TEMPLATE_MAPPING.sideEffectsPresentation[template](effects, getBody, getDependencies);
 }
 
 /**
@@ -288,7 +284,7 @@ export function getInputsStatement(data = {}) {
     }, []);
     let inputs = propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view', 'loopElement', 'loopIndex']);
     inputs = inputs.filter(x => !`${x}`.trim().startsWith('loopElement.'));
-    return Array.from(inputs.reduce((a, b) => a.add(b), new Set())).join(',');
+    return TEMPLATE_MAPPING.inputsPresentation[template](inputs);
 }
 
 /**
@@ -440,8 +436,6 @@ function getStyleMap(style) {
 }
 
 export function getStyleStatement(data) {
-    // const useMemoDependencies = getUseMemoDependencies(data);
-
     const style = getStyles(data);
     const stateDep = Object.values(style)
         .filter(x => `${x}`.trim().toLowerCase().startsWith('states.'))
