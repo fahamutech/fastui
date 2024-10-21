@@ -58,6 +58,7 @@ ${componentsImportStatement}
 
 let keyIndex=0;
 
+// eslint-disable-next-line react/prop-types
 export function ${getFileName(path)}({view,loopIndex,loopElement}) {
     ${statesInString}
     

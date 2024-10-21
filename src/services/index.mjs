@@ -325,7 +325,11 @@ export function getComponentMemoStatement(data) {
     const useMemoDependencies = getUseMemoDependencies(data);
     const statesMap = getStateMapForLogicInput(getStates(data));
     const inputsMap = getInputsMapForLogicInput(data);
-    return `// eslint-disable-next-line no-unused-vars\nconst component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}]);`;
+    const effects = getEffects(data);
+    const ignoreComment = Object.keys(effects).length > 0
+        ? ''
+        : '// eslint-disable-next-line no-unused-vars\n';
+    return `${ignoreComment}const component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}]);`;
 }
 
 /**
@@ -388,7 +392,10 @@ export function ${e}(data) {
     } catch (e) {
         console.log(e);
     }
-    return `import {${exports?.join(',')}} from '${logicImportPath?.split(pathSep)?.join('/')}';`
+    if(exports?.length===0){
+        return '';
+    }
+    return `import {${exports?.join(',')}} from '${logicImportPath?.split(pathSep)?.join('/')?.replace('../src/', '')}';`
 }
 
 /**

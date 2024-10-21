@@ -171,6 +171,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     alignItems: child?.layoutMode === 'VERTICAL'
                         ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
                         : transformLayoutAxisAlign(child?.primaryAxisAlignItems),
+                    // flex: 1
                     flex: frame?.layoutMode === 'VERTICAL'
                         ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                         : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
@@ -178,16 +179,19 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     ...child.styles ?? {},
                     boxShadow: getDropShadowEffect(child),
                     backdropFilter: getBackgroundBlurEffect(child),
+                    WebkitBackdropFilter: getBackgroundBlurEffect(child),
                     filter: getLayerBlurEffect(child),
-                    flex: frame?.layoutMode === 'VERTICAL'
-                        ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
-                        : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
+                    flex: 1, // i===fChildren?.length-1?undefined:1,
+                    // flex: frame?.layoutMode === 'VERTICAL'
+                    //     ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
+                    //     : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
                 },
                 mainFrame: {
                     base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                     id: sanitizeFullColon(`${name ?? ''}_frame`),
                     styles: {
-                        spaceValue: (isLastChild && !isLoopElement) ? 0 : frame?.itemSpacing ?? 0,
+                        spaceValue: isLastChild ? 0 : frame?.itemSpacing ?? 0,
+                            // (isLastChild && !isLoopElement) ? 0 : frame?.itemSpacing ?? 0,
                         paddingLeft: child?.paddingLeft,
                         paddingRight: child?.paddingRight,
                         paddingTop: child?.paddingTop,
@@ -207,6 +211,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         ...getContainerLikeStyles(child, backGroundImage),
                         boxShadow: getDropShadowEffect(child),
                         backdropFilter: getBackgroundBlurEffect(child),
+                        WebkitBackdropFilter: getBackgroundBlurEffect(child),
                         filter: getLayerBlurEffect(child),
                     }
                 }
@@ -396,6 +401,11 @@ async function createTextComponent(filename, child) {
             base: 'text',
             modifier: {
                 extend: child?.extendFrame,
+                effects: {
+                    onStart: {
+                        body: 'logics.onStart'
+                    }
+                },
                 styles: {
                     ...child?.style ?? {},
                     ...getSizeStyles(child),
@@ -467,6 +477,11 @@ async function createContainerComponent(filename, child, backgroundImage) {
             modifier: {
                 props: {id: sanitizeFullColon(`${child?.name}`)},
                 extend: child?.extendFrame,
+                effects: {
+                    onStart: {
+                        body: 'logics.onStart'
+                    }
+                },
                 styles: {
                     ...getContainerLikeStyles(child, backgroundImage),
                     ...getSizeStyles(child)
@@ -562,6 +577,11 @@ async function createConditionComponent({filename, child, srcPath}) {
                 right: (isCondition && rightName)
                     ? `./${rightName}.yml`
                     : undefined,
+                effects: {
+                    onStart: {
+                        body: 'logics.onStart'
+                    }
+                },
                 frame: {
                     base: child?.mainFrame?.base,
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}_frame'` : `${child?.name}_frame`),
@@ -634,6 +654,11 @@ async function createLoopComponent({filename, child, srcPath}) {
                     ...child.styles,
                     overflow: 'auto'
                 },
+                effects: {
+                    onStart: {
+                        body: 'logics.onStart'
+                    }
+                },
                 props: {
                     id: sanitizeFullColon(`${child?.name}`)
                 },
@@ -703,6 +728,11 @@ function dumpImageYaml({child, srcUrl}) {
                     id: sanitizeFullColon(`${child?.name}`),
                     alt: child?.name,
                     src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??'${srcUrl}'` : srcUrl,
+                },
+                effects: {
+                    onStart: {
+                        body: 'logics.onStart'
+                    }
                 },
                 extend: child?.extendFrame,
                 styles: {

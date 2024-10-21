@@ -50,6 +50,7 @@ import React from 'react';
 ${logicsStatement}
 ${componentsImportStatement}
 
+// eslint-disable-next-line react/prop-types
 export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}){
     ${statesInString}
     
