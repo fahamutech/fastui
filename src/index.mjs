@@ -40,7 +40,7 @@ function getMergedCondition(condition) {
                 base: `${frameBase}`.replace(/(\.\s*stack)/ig, ''),
                 styles,
             },
-            states: {condition: false},
+            states: {condition: true},
             effects: {onStart: {body: 'logics.onStart', watch: []}},
         }
     } : undefined;
@@ -80,10 +80,13 @@ switch (command1) {
                 const figFile = process.env.FIGMA_FILE;
                 const data = await fetchFigmaFile({token, figFile});
                 const document = getDesignDocument(data);
+                console.log('DOCUMENT DONE');
                 const children = await getPagesAndTraverseChildren({document, srcPath, token, figFile});
+                console.log('START WALKING FRAME');
                 await walkFrameChildren({children, srcPath, token, figFile});
                 const pageMap = x => ({name: x?.name, module: x?.module, id: x?.id});
                 const pages = children.map(pageMap);
+                console.log('DONE WALKING FRAME');
                 const appRouteArgs = {pages, initialId: document?.flowStartingPoints?.[0]?.nodeId};
                 await ensureAppRouteFileExist(appRouteArgs);
                 done('INFO : Done write specs from figma');

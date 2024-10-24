@@ -191,7 +191,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     id: sanitizeFullColon(`${name ?? ''}_frame`),
                     styles: {
                         spaceValue: isLastChild ? 0 : frame?.itemSpacing ?? 0,
-                            // (isLastChild && !isLoopElement) ? 0 : frame?.itemSpacing ?? 0,
+                        // (isLastChild && !isLoopElement) ? 0 : frame?.itemSpacing ?? 0,
                         paddingLeft: child?.paddingLeft,
                         paddingRight: child?.paddingRight,
                         paddingTop: child?.paddingTop,
@@ -380,8 +380,9 @@ function getContainerLikeStyles(child, backGroundImage) {
 }
 
 function getSizeStyles(child) {
+    // console.log(`${child?.name}`.endsWith('_icon')?undefined:getSize(child?.layoutSizingHorizontal, child?.absoluteBoundingBox?.width)??'-',child?.name);
     return {
-        width: getSize(child?.layoutSizingHorizontal, child?.absoluteBoundingBox?.width),
+        width: `${child?.name}`.endsWith('_icon') ? undefined : getSize(child?.layoutSizingHorizontal, child?.absoluteBoundingBox?.width),
         height: getSize(child?.layoutSizingVertical, child?.absoluteBoundingBox?.height),
     }
 }
@@ -391,6 +392,7 @@ function sanitizedNameForLoopElement(child) {
     const name = child?.name;
     return `${name}`.trim()
         .replaceAll('_text', '')
+        .replaceAll('_icon', '')
         .replaceAll('_image', '')
         .replaceAll(`i${id?.replaceAll(':', '_')}_`, '')
 }
@@ -555,10 +557,8 @@ async function createConditionComponent({filename, child, srcPath}) {
     let leftName, rightName;
     if (baseType === 'condition') {
         isCondition = true;
-        leftName = child?.children?.[1]?.name;
-        rightName = child?.children?.[0]?.name;
-        // console.log('LEFT: ', leftName);
-        // console.log('RIGHT: ', rightName);
+        leftName = child?.children?.[0]?.name;
+        rightName = child?.children?.[1]?.name;
     }
 
     const last = child?.children?.[child?.children?.length - 1];
@@ -573,10 +573,10 @@ async function createConditionComponent({filename, child, srcPath}) {
                 },
                 left: (isCondition && leftName)
                     ? `./${leftName}.yml`
-                    : (last ? `./${last?.name}.yml` : undefined),
+                    : undefined,
                 right: (isCondition && rightName)
                     ? `./${rightName}.yml`
-                    : undefined,
+                    :(last ? `./${last?.name}.yml` : undefined) ,
                 effects: {
                     onStart: {
                         body: 'logics.onStart'
@@ -610,7 +610,7 @@ async function ensureLoopDataExist({srcPath, child}) {
     await ensureFileExist(logicPath);
     const logicImportFile = await import(absolutePathParse(logicPath));
 
-    const setDataRegex1 = /states\s*.\s*setData\s*\(\s*\[\s*(.*\s*)+?]\s*\)/g;
+    const setDataRegex1 = /states\s*.\s*setData\s*\(\s*(.*\s*)+?\)/g;
     const setDataRegex2 = /states\s*.\s*setData\s*\(\s*\w*\s*\)/g;
     const onStartSignatureRegex = /onStart\s*\(\s*data\s*\)\s*\{/g;
 
@@ -739,6 +739,7 @@ function dumpImageYaml({child, srcUrl}) {
                     ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child),
                     objectFit: 'cover'
+                    // objectFit: `${child?.name}`.endsWith('_icon')?undefined:'cover'
                 },
                 frame: child?.childFrame,
             }
