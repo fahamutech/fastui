@@ -132,11 +132,13 @@ function getSize(layoutSizing, size) {
 
 async function transformFrameChildren({frame, module, isLoopElement, token, figFile, srcPath}) {
     const children = [];
-    const fChildren = frame?.children?.filter(x => x?.visible ?? true) ?? [];
+    const parentBaseType = `${frame?.name?.split('_')?.pop()}`.trim().toLowerCase();
+    const isCondition = parentBaseType === 'condition';
+    const fChildren = frame?.children?.filter(x => (x?.visible ?? true) || isCondition) ?? [];
     for (let i = 0; i < fChildren?.length; i++) {
         const child = fChildren[i] ?? {};
         const isLastChild = (fChildren?.length - 1) === i;
-        if (child?.type === 'FRAME') {
+        if (child?.type === 'FRAME' || child?.type === 'INSTANCE') {
             const backGroundImage = await getFigmaImagePath({
                 token,
                 figFile,
@@ -150,15 +152,18 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 child.childrenData = child?.children?.map(x => ({_key: x?.id ?? randomUUID().toString()}));
                 child.children = [child?.children?.[0]];
             }
-            const extendFrame = `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`
-                .replaceAll(/[^a-zA-Z0-9]/ig, '_');
+            const extendFrame =
+                isCondition && i === 1
+                    ? undefined
+                    :
+                    `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const name = `i${child?.id}_${child?.name}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const mChild = {
                 ...child,
                 name,
                 module,
-                extendFrame: i > 0 ? `./${extendFrame}.yml` : undefined,
+                extendFrame: i > 0 && extendFrame ? `./${extendFrame}.yml` : undefined,
                 isLoopElement,
                 styles: isLoop ? {
                     display: 'flex',
@@ -226,8 +231,11 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
             });
             children.push(f);
         } else {
-            const extendFrame = `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`
-                .replaceAll(/[^a-zA-Z0-9]/ig, '_');
+            const extendFrame =
+                isCondition && i === 1
+                ? undefined
+                :
+                `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const name = `i${child?.id}_${child?.name}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const sc = {
@@ -242,7 +250,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                         : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
                 },
-                extendFrame: i > 0 ? `./${extendFrame}.yml` : undefined,
+                extendFrame: i > 0 && extendFrame ? `./${extendFrame}.yml` : undefined,
                 childFrame: {
                     base: frame?.layoutMode === 'HORIZONTAL' ? 'row.start' : 'column.start',
                     id: sanitizeFullColon(`${name ?? ''}_frame`),
@@ -272,7 +280,7 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
     const replaceModule = v => justString(v).replaceAll(/(\[.*])/g, '').trim();
     const replaceName = t => justString(t).replaceAll(/(.*\[)|(].*)/g, '').trim();
     const pages = [];
-    const sPages = document?.children?.filter(x => x?.visible ?? true);
+    const sPages = document?.children?.filter(x => (x?.visible ?? true) && x?.type === 'FRAME');
     for (const page of sPages ?? []) {
         const nAry = replaceModule(page?.name)?.split('_')
         const type = nAry.pop();
@@ -557,8 +565,8 @@ async function createConditionComponent({filename, child, srcPath}) {
     let leftName, rightName;
     if (baseType === 'condition') {
         isCondition = true;
-        leftName = child?.children?.[0]?.name;
-        rightName = child?.children?.[1]?.name;
+        rightName = child?.children?.[0]?.name;
+        leftName = child?.children?.[1]?.name;
     }
 
     const last = child?.children?.[child?.children?.length - 1];
@@ -573,10 +581,10 @@ async function createConditionComponent({filename, child, srcPath}) {
                 },
                 left: (isCondition && leftName)
                     ? `./${leftName}.yml`
-                    : undefined,
+                    : (last ? `./${last?.name}.yml` : undefined),
                 right: (isCondition && rightName)
                     ? `./${rightName}.yml`
-                    :(last ? `./${last?.name}.yml` : undefined) ,
+                    : undefined,
                 effects: {
                     onStart: {
                         body: 'logics.onStart'
@@ -781,7 +789,7 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
         } else if (child?.type === 'VECTOR') {
             await createVectorComponent(
                 {filename, child, srcPath, token, figFile});
-        } else if (child?.type === 'FRAME') {
+        } else if (child?.type === 'FRAME' || child?.type === 'INSTANCE') {
             const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
             if (baseType === 'loop') {
                 await createLoopComponent({filename, child, srcPath});

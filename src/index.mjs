@@ -40,7 +40,7 @@ function getMergedCondition(condition) {
                 base: `${frameBase}`.replace(/(\.\s*stack)/ig, ''),
                 styles,
             },
-            states: {condition: true},
+            states: {condition: false},
             effects: {onStart: {body: 'logics.onStart', watch: []}},
         }
     } : undefined;
@@ -84,8 +84,9 @@ switch (command1) {
                 const children = await getPagesAndTraverseChildren({document, srcPath, token, figFile});
                 console.log('START WALKING FRAME');
                 await walkFrameChildren({children, srcPath, token, figFile});
-                const pageMap = x => ({name: x?.name, module: x?.module, id: x?.id});
-                const pages = children.map(pageMap);
+                const pageRouteMap = x => ({name: x?.name, module: x?.module, id: x?.id});
+                const pageRouteFilter = x =>  `${x?.name}`.split(' ')[0]?.trim()?.endsWith('_page');
+                const pages = children.filter(pageRouteFilter).map(pageRouteMap);
                 console.log('DONE WALKING FRAME');
                 const appRouteArgs = {pages, initialId: document?.flowStartingPoints?.[0]?.nodeId};
                 await ensureAppRouteFileExist(appRouteArgs);
