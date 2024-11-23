@@ -613,7 +613,8 @@ function getBaseType(child) {
 }
 
 async function ensureLoopDataExist({srcPath, child}) {
-    const dummyChildren = child.childrenData ?? [{_key: randomUUID().toString()}]
+    const dummyLength = (child.childrenData ?? [{_key: randomUUID().toString()}]).length;
+    const dummyChildren = new Array(dummyLength).fill({}).map(()=>({_key:randomUUID()}))
 
     const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
 
