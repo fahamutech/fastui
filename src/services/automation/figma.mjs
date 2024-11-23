@@ -1,7 +1,7 @@
 import axios from "axios";
 import {
     ensureFileExist,
-    ensurePathExist,
+    ensurePathExist, firstUpperCase, firstUpperCaseRestSmall,
     itOrEmptyList,
     justString,
     maybeRandomName,
@@ -134,11 +134,14 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
     const children = [];
     const parentBaseType = `${frame?.name?.split('_')?.pop()}`.trim().toLowerCase();
     const isCondition = parentBaseType === 'condition';
-    const fChildren = frame?.children?.filter(x => (x?.visible ?? true) || isCondition) ?? [];
+    let fChildren = frame?.children?.filter(x => (x?.visible ?? true) || isCondition) ?? [];
+    if (isCondition) {
+        fChildren = fChildren.map(x => ({...x, visible: true, absoluteRenderBounds: x?.absoluteBoundingBox}));
+    }
     for (let i = 0; i < fChildren?.length; i++) {
         const child = fChildren[i] ?? {};
         const isLastChild = (fChildren?.length - 1) === i;
-        if (child?.type === 'FRAME' || child?.type === 'INSTANCE') {
+        if (child?.type === 'FRAME' || child?.type === 'INSTANCE' || child?.type === 'COMPONENT') {
             const backGroundImage = await getFigmaImagePath({
                 token,
                 figFile,
@@ -157,7 +160,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     ? undefined
                     :
                     `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
-            const name = `i${child?.id}_${child?.name}`
+            const name = `i${child?.id}_${firstUpperCaseRestSmall(child?.name)}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const mChild = {
                 ...child,
@@ -233,10 +236,10 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
         } else {
             const extendFrame =
                 isCondition && i === 1
-                ? undefined
-                :
-                `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
-            const name = `i${child?.id}_${child?.name}`
+                    ? undefined
+                    :
+                    `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
+            const name = `i${child?.id}_${firstUpperCaseRestSmall(child?.name)}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const sc = {
                 ...child,
@@ -471,7 +474,7 @@ async function createTextInputComponent(filename, child, type = 'text') {
                 states: {
                     value: '',
                     inputType: type,
-                    borderColor: getColor(child?.strokes),
+                    borderColor: getColor(child?.strokes)??'transparent',
                 },
                 frame: child?.childFrame,
             }
@@ -789,7 +792,7 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
         } else if (child?.type === 'VECTOR') {
             await createVectorComponent(
                 {filename, child, srcPath, token, figFile});
-        } else if (child?.type === 'FRAME' || child?.type === 'INSTANCE') {
+        } else if (child?.type === 'FRAME' || child?.type === 'INSTANCE' || child?.type === 'COMPONENT') {
             const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
             if (baseType === 'loop') {
                 await createLoopComponent({filename, child, srcPath});
