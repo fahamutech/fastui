@@ -613,8 +613,8 @@ function getBaseType(child) {
 }
 
 async function ensureLoopDataExist({srcPath, child}) {
-    const dummyLength = (child.childrenData ?? [{_key: randomUUID().toString()}]).length;
-    const dummyChildren = new Array(dummyLength).fill({}).map(()=>({_key:randomUUID()}))
+    const dummyLength = (child.childrenData ?? [{_key: Math.random()}]).length;
+    const dummyChildren = `new Array(${dummyLength}).fill({}).map(()=>({_key:Math.random()}))`;
 
     const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
 
@@ -637,7 +637,7 @@ async function ensureLoopDataExist({srcPath, child}) {
             return
         }
         const newOnStartString = onStartFnString
-            .replaceAll(onStartSignatureRegex, `onStart(data) {\n    data.component.states.setData(${JSON.stringify(dummyChildren)});`);
+            .replaceAll(onStartSignatureRegex, `onStart(data) {\n    data.component.states.setData(${dummyChildren.replaceAll('"','')});`);
         const logicFileNwString = (await readFile(logicPath))
             .toString().replace(onStartFnString, newOnStartString)
         await writeFile(logicPath, logicFileNwString);
@@ -649,7 +649,7 @@ async function ensureLoopDataExist({srcPath, child}) {
 * }
 */
 export function onStart(data) {
-    data.component.states.setData(${JSON.stringify(dummyChildren)});
+    data.component.states.setData(${dummyChildren.replaceAll('"','')});
 }`);
     }
 }
