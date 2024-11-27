@@ -1,7 +1,7 @@
 import axios from "axios";
 import {
     ensureFileExist,
-    ensurePathExist, firstUpperCase, firstUpperCaseRestSmall,
+    ensurePathExist, firstUpperCaseRestSmall,
     itOrEmptyList,
     justString,
     maybeRandomName,
@@ -252,6 +252,9 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     flex: frame?.layoutMode === 'VERTICAL'
                         ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                         : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
+                    backdropFilter: getBackgroundBlurEffect(child),
+                    WebkitBackdropFilter: getBackgroundBlurEffect(child),
+                    filter: getLayerBlurEffect(child),
                 },
                 extendFrame: i > 0 && extendFrame ? `./${extendFrame}.yml` : undefined,
                 childFrame: {
@@ -309,6 +312,7 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
                     paddingTop: page?.paddingTop,
                     paddingBottom: page?.paddingBottom,
                     height: '100vh',
+                    width: '100vw',
                     // maxWidth: page?.absoluteRenderBounds?.width,
                     // margin: 'auto',
                     ...getContainerLikeStyles(page, backGroundImage),

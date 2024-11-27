@@ -41,9 +41,17 @@ export function absolutePathParse(path) {
  */
 export async function ensureAppRouteFileExist({pages, initialId}) {
     const rawInitialPage = pages
-        .filter(x => x?.id === initialId)
+        .filter(x => (x?.id === initialId) && `${x?.name}`.trim()?.endsWith('_page'))
         .shift();
-    const initialPage = (rawInitialPage?.name ?? 'home').replace('_page', '').trim();
+    const initialPage = (rawInitialPage?.name ?? 'home')
+        .replace('_page', '')
+        .trim();
+    pages = pages.map(x => {
+        x.route_name = `${x?.name}`
+            .replaceAll('_page', '')
+            .replaceAll('_dialog', '');
+        return x;
+    });
     const componentFilePath = resolve(join('src', 'AppRoute.jsx'));
     const stateFilePath = resolve(join('src', 'routing.mjs'));
     const guardFilePath = resolve(join('src', 'routing_guard.mjs'));
@@ -57,8 +65,8 @@ export async function ensureAppRouteFileExist({pages, initialId}) {
         await writeFile(guardFilePath, `
 /**
  * 
- * @param prev {string}
- * @param next {string}
+ * @param prev {string|object}
+ * @param next {string|object}
  * @param callback {(next:string)=>*}
  */
 export function beforeNavigate({prev,next},callback){
@@ -70,7 +78,7 @@ export function beforeNavigate({prev,next},callback){
 import {BehaviorSubject} from "rxjs";
 import {beforeNavigate} from './routing_guard.mjs';
 
-const currentRoute = new BehaviorSubject('');
+const currentRoute = new BehaviorSubject(undefined);
 
 /**
  *
@@ -78,9 +86,9 @@ const currentRoute = new BehaviorSubject('');
  * @param pushToState{boolean}
  */
 export function setCurrentRoute(route,pushToState=true) {
-    beforeNavigate({prev:currentRoute.value,next:route?.name??route},(nextRoute)=>{
-        nextRoute = nextRoute?.trim()?.replace(/^\\//ig,'')??'';
-        currentRoute.next(nextRoute);
+    beforeNavigate({prev:currentRoute.value,next:route},(nextRoute)=>{
+        nextRoute = \`\${nextRoute?.name??nextRoute}\`.trim()?.replace(/^\\//ig,'')??'';
+        currentRoute.next({name: nextRoute, type: route?.type, module: route?.module});
        if(pushToState){
            window.history.pushState({}, '', \`/\${nextRoute}\`);
        }
@@ -102,7 +110,8 @@ if (typeof window !== 'undefined') {
     window.onpopstate = function (_) {
         const path = window.location.pathname.replace(/^\\//ig,'');
         beforeNavigate({prev:currentRoute.value,next:path},(nextRoute)=>{
-            currentRoute.next(nextRoute);
+            nextRoute = \`\${nextRoute?.name ?? nextRoute}\`.trim()?.replace(/^\\//ig,'')??'';
+            currentRoute.next({name:nextRoute,type:'page'});
         });
     } 
 }`);
@@ -114,7 +123,7 @@ function getRoute(current) {
     switch (current) {
         ${pages.map(page => {
         return `
-        case '${page?.name?.replaceAll('_page', '')}':
+        case '${page?.route_name}':
             return <${getFileName(page.name)}/>`
     }).join('\n')}
         default:
@@ -123,12 +132,12 @@ function getRoute(current) {
 }
 
 function handlePathToRouteName(pathname){
-    pathname = pathname?.startsWith('/')?pathname:\`/\${pathname}\`;
+    pathname = \`\${pathname}\`.startsWith('/')?pathname:\`/\${pathname}\`;
     switch (pathname) {
         ${pages.map(page => {
         return `
-        case '/${page?.name?.replaceAll('_page', '')}':
-            return '${page?.name?.replaceAll('_page', '')}';`
+        case '/${page?.route_name}':
+            return '${page?.route_name}';`
     }).join('\n')}
         default:
             return '${initialPage}';
@@ -140,7 +149,7 @@ export function AppRoute(){
     
     useEffect(() => {
         const subs = listeningForRouteChange(value => {
-            setCurrent(handlePathToRouteName(value));
+            setCurrent(handlePathToRouteName(value?.name??value));
         });
         return () => subs.unsubscribe();
     }, []);

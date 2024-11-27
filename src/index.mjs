@@ -85,8 +85,13 @@ switch (command1) {
                 console.log('START WALKING FRAME');
                 await walkFrameChildren({children, srcPath, token, figFile});
                 const pageRouteMap = x => ({name: x?.name, module: x?.module, id: x?.id});
-                const pageRouteFilter = x =>  `${x?.name}`.split(' ')[0]?.trim()?.endsWith('_page');
-                const pages = children.filter(pageRouteFilter).map(pageRouteMap);
+                const pageRouteFilter = x => `${x?.name}`.split(' ')[0]?.trim()?.endsWith('_page');
+                const dialogRouteFilter = x => `${x?.name}`.split(' ')[0]?.trim()?.endsWith('_dialog');
+                const pages = [
+                    ...children.filter(pageRouteFilter),
+                    ...children.filter(dialogRouteFilter)
+                ].map(pageRouteMap);
+                // const pages = children.filter(pageRouteFilter).map(pageRouteMap);
                 console.log('DONE WALKING FRAME');
                 const appRouteArgs = {pages, initialId: document?.flowStartingPoints?.[0]?.nodeId};
                 await ensureAppRouteFileExist(appRouteArgs);
