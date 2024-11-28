@@ -47,6 +47,7 @@ export async function ensureAppRouteFileExist({pages, initialId}) {
         .replace('_page', '')
         .trim();
     pages = pages.map(x => {
+        x.route_type = `${x?.name}`.split('_').pop();
         x.route_name = `${x?.name}`
             .replaceAll('_page', '')
             .replaceAll('_dialog', '');
@@ -89,7 +90,7 @@ export function setCurrentRoute(route,pushToState=true) {
     beforeNavigate({prev:currentRoute.value,next:route},(nextRoute)=>{
         nextRoute = \`\${nextRoute?.name??nextRoute}\`.trim()?.replace(/^\\//ig,'')??'';
         currentRoute.next({name: nextRoute, type: route?.type, module: route?.module});
-       if(pushToState){
+       if(pushToState && \`\${route?.type}\`.toLowerCase()!=='dialog'){
            window.history.pushState({}, '', \`/\${nextRoute}\`);
        }
     });
@@ -119,13 +120,33 @@ if (typeof window !== 'undefined') {
 import {listeningForRouteChange,setCurrentRoute} from './routing.mjs';
 ${pages.map(importTrans).join('\n')}
 
-function getRoute(current) {
+function getPageRoute(current) {
     switch (current) {
-        ${pages.map(page => {
-        return `
+    ${
+        pages
+            .filter(x => `${x?.route_type}`.toLowerCase() === 'page')
+            .map(page => {
+                return `
         case '${page?.route_name}':
             return <${getFileName(page.name)}/>`
-    }).join('\n')}
+            }).join('\n')
+    }
+        default:
+            return <></>
+    }
+}
+
+function getDialogRoute(current) {
+    switch (current) {
+    ${
+        pages
+            .filter(x => `${x?.route_type}`.toLowerCase() === 'dialog')
+            .map(page => {
+                return `
+        case '${page?.route_name}':
+            return <${getFileName(page.name)}/>`
+            }).join('\n')
+    }
         default:
             return <></>
     }
@@ -145,11 +166,21 @@ function handlePathToRouteName(pathname){
 }
 
 export function AppRoute(){
-    const [current,setCurrent] = useState('');
+    const [currentPage, setCurrentPage] = useState('');
+    const [currentDialog, setCurrentDialog] = useState(undefined);
     
     useEffect(() => {
         const subs = listeningForRouteChange(value => {
-            setCurrent(handlePathToRouteName(value?.name??value));
+            setCurrentDialog(undefined);
+            if(value?.type==='close'){
+                return;
+            }
+            if (value?.type === 'dialog' && value?.name) {
+                setCurrentDialog(handlePathToRouteName(value?.name));
+            } else  {
+                // if (value?.type === 'page' || typeof value === 'string')
+                setCurrentPage(handlePathToRouteName(value?.name ?? value));
+            }
         });
         return () => subs.unsubscribe();
     }, []);
@@ -158,7 +189,14 @@ export function AppRoute(){
         setCurrentRoute(handlePathToRouteName(window.location.pathname),false)
     }, []);
     
-    return getRoute(current);
+    return (
+        <>
+            {getPageRoute(currentPage)}
+            <div style={{display: currentDialog? 'block': 'none', position: 'fixed', top: 0, bottom: 0, left: 0, right: 0}}>
+                {getDialogRoute(currentDialog)}
+            </div>
+        </>
+    )
 }
     `);
 }

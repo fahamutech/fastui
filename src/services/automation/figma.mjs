@@ -478,7 +478,7 @@ async function createTextInputComponent(filename, child, type = 'text') {
                 states: {
                     value: '',
                     inputType: type,
-                    borderColor: getColor(child?.strokes)??'transparent',
+                    borderColor: getColor(child?.strokes) ?? 'transparent',
                 },
                 frame: child?.childFrame,
             }
@@ -511,8 +511,9 @@ async function createContainerComponent(filename, child, backgroundImage) {
 }
 
 async function handleNavigations({srcPath, child}) {
-    const route = id2nameMapCache[child?.transitionNodeID];
-
+    const route = id2nameMapCache[child?.transitionNodeID]??{type:'close'};
+    // const currentRoute = id2nameMapCache[child?.interactions[0]?.actions[0]?.destinationId];
+    // console.log(child.name, JSON.stringify(child.interactions,null,2),currentRoute)
     const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
 
     await ensurePathExist(logicPath);
@@ -564,7 +565,7 @@ export function onClick(data) {
 async function createConditionComponent({filename, child, srcPath}) {
     const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
 
-    if (baseType === 'button' && id2nameMapCache[child?.transitionNodeID]) {
+    if (baseType === 'button' && (id2nameMapCache[child?.transitionNodeID] || (Array.isArray(child?.interactions) && child?.interactions?.length > 0))) {
         await handleNavigations({srcPath, child});
     }
 
@@ -641,7 +642,7 @@ async function ensureLoopDataExist({srcPath, child}) {
             return
         }
         const newOnStartString = onStartFnString
-            .replaceAll(onStartSignatureRegex, `onStart(data) {\n    data.component.states.setData(${dummyChildren.replaceAll('"','')});`);
+            .replaceAll(onStartSignatureRegex, `onStart(data) {\n    data.component.states.setData(${dummyChildren.replaceAll('"', '')});`);
         const logicFileNwString = (await readFile(logicPath))
             .toString().replace(onStartFnString, newOnStartString)
         await writeFile(logicPath, logicFileNwString);
@@ -653,7 +654,7 @@ async function ensureLoopDataExist({srcPath, child}) {
 * }
 */
 export function onStart(data) {
-    data.component.states.setData(${dummyChildren.replaceAll('"','')});
+    data.component.states.setData(${dummyChildren.replaceAll('"', '')});
 }`);
     }
 }
