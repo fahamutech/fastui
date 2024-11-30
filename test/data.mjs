@@ -23,6 +23,7 @@ export const specFile = `
 import React from 'react';
 import {getColor} from '../../test/blueprints/modules/logics/test_comp.mjs';
 
+// eslint-disable-next-line react/prop-types
 export function TestComp({view, loopElement, loopIndex}) {
     // eslint-disable-next-line no-unused-vars
     const component = React.useMemo(() => ({
