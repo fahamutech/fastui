@@ -90,7 +90,7 @@ export function setCurrentRoute(route,pushToState=true) {
     beforeNavigate({prev:currentRoute.value,next:route},(nextRoute)=>{
         nextRoute = \`\${nextRoute?.name??nextRoute}\`.trim()?.replace(/^\\//ig,'')??'';
         currentRoute.next({name: nextRoute, type: route?.type, module: route?.module});
-       if(pushToState && \`\${route?.type}\`.toLowerCase()!=='dialog'){
+       if(pushToState && \`\${route?.type}\`.toLowerCase()!=='dialog' && \`\${route?.type}\`.toLowerCase()!=='close'){
            window.history.pushState({}, '', \`/\${nextRoute}\`);
        }
     });

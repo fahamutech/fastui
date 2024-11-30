@@ -741,10 +741,11 @@ function dumpImageYaml({child, srcUrl}) {
         component: {
             base: 'image',
             modifier: {
+                states: {srcUrl:srcUrl??''},
                 props: {
                     id: sanitizeFullColon(`${child?.name}`),
                     alt: child?.name,
-                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??'${srcUrl}'` : srcUrl,
+                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??srcUrl` : 'states.srcUrl',
                 },
                 effects: {
                     onStart: {
