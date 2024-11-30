@@ -17,7 +17,6 @@ export async function loadEnvFile() {
             }
         });
     } catch (err) {
-        // console.error(`Error loading .env file: ${err.message}`);
     }
 }
 
@@ -66,9 +65,9 @@ export async function ensureAppRouteFileExist({pages, initialId}) {
         await writeFile(guardFilePath, `
 /**
  * 
- * @param prev {string|object}
- * @param next {string|object}
- * @param callback {(next:string)=>*}
+ * @param prev {string|{name:string,type:string}}
+ * @param next {string|{name:string,type:string}}
+ * @param callback {(next:string|object)=>*}
  */
 export function beforeNavigate({prev,next},callback){
     callback(next);
@@ -83,7 +82,7 @@ const currentRoute = new BehaviorSubject(undefined);
 
 /**
  *
- * @param route {string|{name: string, type: string, module: string}}
+ * @param route {string|{name: string, type: string, module: string}|{name: string, type: string}}
  * @param pushToState{boolean}
  */
 export function setCurrentRoute(route,pushToState=true) {
@@ -2158,14 +2157,6 @@ watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename)
 });
 `);
 }
-
-// export async function ensureConfigFileExist() {
-//     const filePath = resolve(join('fastui.rc.mjs'));
-//     await ensureFileExist(filePath);
-//     await writeFile(filePath, `export const FIGMA_TOKEN="";
-// export const FIGMA_FILE="";
-// `);
-// }
 
 export async function ensureBlueprintFolderExist() {
     const filePath = resolve(join('src', 'blueprints'));
