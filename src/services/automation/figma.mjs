@@ -405,11 +405,16 @@ function getSizeStyles(child) {
 function sanitizedNameForLoopElement(child) {
     const id = child?.id ?? '';
     const name = child?.name;
-    return `${name}`.trim()
-        .replaceAll('_text', '')
-        .replaceAll('_icon', '')
-        .replaceAll('_image', '')
-        .replaceAll(`i${id?.replaceAll(':', '_')}_`, '')
+    const b =  `${name}`.trim()
+        // .replaceAll('_text', '')
+        // .replaceAll('_icon', '')
+        // .replaceAll('_image', '')
+        .replaceAll(`i${id?.replaceAll(':', '_')}_`, '');
+    const chunks = b.split('_');
+    if(chunks.length>1){
+        chunks.pop();
+    }
+    return chunks.map(x=>`${x.toLowerCase()}`).join('_');
 }
 
 async function createTextComponent(filename, child) {
