@@ -2144,16 +2144,41 @@ import {exec} from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+let calledTimes = 0;
+const changes = {};
+let timeout;
+
+function getTimeout() {
+    return setTimeout(() => {
+        for (const filename of Object.values(changes)) {
+            if (!\`\${filename}\`.endsWith('.yml') || \`\${filename}\`.endsWith('~')) {
+                return;
+            }
+            const file = \`./src/blueprints/\${filename}\`;
+            delete changes[filename];
+            calledTimes-=1;
+            exec(\`fastui specs build \${file}\`, {
+                cwd: __dirname
+            }, (error, stdout, stderr) => {
+            });
+        }
+    }, calledTimes > 0 ? 2000 : 100);
+}
+
 watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename) => {
     if (!\`\${filename}\`.endsWith('.yml') || \`\${filename}\`.endsWith('~')) {
         return;
     }
-    const file = \`./src/blueprints/\${filename}\`;
-    
-    exec(\`fastui specs build \${file}\`, {
-        cwd: __dirname
-    }, (error, stdout, stderr) => {
-    });
+    if (calledTimes > 0) {
+        clearTimeout(timeout);
+        changes[filename]=filename;
+        timeout = getTimeout();
+        calledTimes += 1;
+        return;
+    }
+    calledTimes = 1;
+    changes[filename]=filename;
+    timeout = getTimeout();
 });
 `);
 }
