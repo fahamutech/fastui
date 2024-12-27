@@ -405,16 +405,16 @@ function getSizeStyles(child) {
 function sanitizedNameForLoopElement(child) {
     const id = child?.id ?? '';
     const name = child?.name;
-    const b =  `${name}`.trim()
+    const b = `${name}`.trim()
         // .replaceAll('_text', '')
         // .replaceAll('_icon', '')
         // .replaceAll('_image', '')
         .replaceAll(`i${id?.replaceAll(':', '_')}_`, '');
     const chunks = b.split('_');
-    if(chunks.length>1){
+    if (chunks.length > 1) {
         chunks.pop();
     }
-    return chunks.map(x=>`${x.toLowerCase()}`).join('_');
+    return chunks.map(x => `${x.toLowerCase()}`).join('_');
 }
 
 async function createTextComponent(filename, child) {
@@ -516,7 +516,7 @@ async function createContainerComponent(filename, child, backgroundImage) {
 }
 
 async function handleNavigations({srcPath, child}) {
-    const route = id2nameMapCache[child?.transitionNodeID]??{type:'close'};
+    const route = id2nameMapCache[child?.transitionNodeID] ?? {type: 'close'};
     // const currentRoute = id2nameMapCache[child?.interactions[0]?.actions[0]?.destinationId];
     // console.log(child.name, JSON.stringify(child.interactions,null,2),currentRoute)
     const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
@@ -741,12 +741,12 @@ async function handleRectangleComponent({child, filename, srcPath, token, figFil
     }
 }
 
-function dumpImageYaml({child, srcUrl}) {
+function dumpImageYaml({child, srcUrl, objectFit = 'cover'}) {
     return yaml.dump({
         component: {
             base: 'image',
             modifier: {
-                states: {srcUrl:srcUrl??''},
+                states: {srcUrl: srcUrl ?? ''},
                 props: {
                     id: sanitizeFullColon(`${child?.name}`),
                     alt: child?.name,
@@ -761,7 +761,7 @@ function dumpImageYaml({child, srcUrl}) {
                 styles: {
                     ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child),
-                    objectFit: 'cover'
+                    objectFit
                     // objectFit: `${child?.name}`.endsWith('_icon')?undefined:'cover'
                 },
                 frame: child?.childFrame,
@@ -785,7 +785,7 @@ async function createVectorComponent({filename, child, srcPath, token, figFile})
         imageRef: sanitizeFullColon(`${child?.name}`),
         child,
     });
-    const yamlData = dumpImageYaml({srcUrl, child})
+    const yamlData = dumpImageYaml({srcUrl, child, objectFit: 'none'})
     await writeFile(filename, yamlData);
 }
 
