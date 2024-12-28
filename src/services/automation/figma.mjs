@@ -159,7 +159,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 isCondition && i === 1
                     ? undefined
                     :
-                    `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
+                    `i${fChildren[i - 1]?.id}_${firstUpperCaseRestSmall(fChildren[i - 1]?.name)}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const name = `i${child?.id}_${firstUpperCaseRestSmall(child?.name)}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const mChild = {
@@ -238,7 +238,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 isCondition && i === 1
                     ? undefined
                     :
-                    `i${fChildren[i - 1]?.id}_${fChildren[i - 1]?.name}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
+                    `i${fChildren[i - 1]?.id}_${firstUpperCaseRestSmall(fChildren[i - 1]?.name)}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const name = `i${child?.id}_${firstUpperCaseRestSmall(child?.name)}`
                 .replaceAll(/[^a-zA-Z0-9]/ig, '_');
             const sc = {

@@ -21,6 +21,10 @@ export function firstUpperCase(str) {
  * @return {string}
  */
 export function firstUpperCaseRestSmall(str) {
+    console.log(str);
+    if (!str){
+        return undefined;
+    }
     return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 }
 
