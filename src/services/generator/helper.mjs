@@ -1,4 +1,4 @@
-import {ensureFileExist, ensurePathExist} from "../utils/index.mjs";
+import {ensureFileExist, ensurePathExist} from "../../helpers/index.mjs";
 import {join, resolve} from "node:path";
 import {readFile, writeFile} from "node:fs/promises";
 import os from "os";

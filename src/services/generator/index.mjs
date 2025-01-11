@@ -7,7 +7,7 @@ import {
     itOrEmptyList,
     justList,
     snakeToCamel
-} from "../utils/index.mjs";
+} from "../../helpers/index.mjs";
 import {
     getEffects,
     getExtend,
@@ -23,8 +23,8 @@ import {appendFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {absolutePathParse} from "./helper.mjs";
-import {getTemplateSelected} from "../utils/config.mjs";
-import {TEMPLATE_MAPPING} from "./templates/mapping.mjs";
+import {getTemplateSelected} from "../../helpers/config.mjs";
+import {TEMPLATE_MAPPING} from "../templates/mapping.mjs";
 
 const template = getTemplateSelected();
 

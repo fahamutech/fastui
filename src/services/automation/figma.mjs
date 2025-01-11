@@ -6,13 +6,13 @@ import {
     justString,
     maybeRandomName,
     sanitizeFullColon
-} from "../../utils/index.mjs";
+} from "../../helpers/index.mjs";
 import {join, resolve} from "node:path";
 import {appendFile, readdir, readFile, stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
 import {createWriteStream} from "node:fs";
 import {randomUUID} from "node:crypto";
-import {absolutePathParse} from "../helper.mjs";
+import {absolutePathParse} from "../generator/helper.mjs";
 
 const id2nameMapCache = {};
 
@@ -32,6 +32,7 @@ export async function fetchFigmaFile({token, figFile}) {
         return data;
     } catch (e) {
         console.log(e?.response?.data ?? e?.data ?? e?.message ?? e?.toString() ?? 'Fail to retrieve figma file');
+        process.exit(1);
     }
 }
 
@@ -395,7 +396,6 @@ function getContainerLikeStyles(child, backGroundImage) {
 }
 
 function getSizeStyles(child) {
-    // console.log(`${child?.name}`.endsWith('_icon')?undefined:getSize(child?.layoutSizingHorizontal, child?.absoluteBoundingBox?.width)??'-',child?.name);
     return {
         width: `${child?.name}`.endsWith('_icon') ? undefined : getSize(child?.layoutSizingHorizontal, child?.absoluteBoundingBox?.width),
         height: getSize(child?.layoutSizingVertical, child?.absoluteBoundingBox?.height),
@@ -517,8 +517,6 @@ async function createContainerComponent(filename, child, backgroundImage) {
 
 async function handleNavigations({srcPath, child}) {
     const route = id2nameMapCache[child?.transitionNodeID] ?? {type: 'close'};
-    // const currentRoute = id2nameMapCache[child?.interactions[0]?.actions[0]?.destinationId];
-    // console.log(child.name, JSON.stringify(child.interactions,null,2),currentRoute)
     const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
 
     await ensurePathExist(logicPath);
@@ -547,9 +545,6 @@ async function handleNavigations({srcPath, child}) {
             newOnClickString = onClickFnString
                 .replaceAll(onClickSignatureRegex, `onClick(data) {\n    setCurrentRoute(${JSON.stringify(route)});`);
         }
-        // const newOnClickString = onClickFnString
-        //     .replaceAll(setRouteRegex, `setCurrentRoute(${JSON.stringify(route)});\n   `);
-        // .replaceAll(onClickSignatureRegex, `onClick(data) {\n    setCurrentRoute(${JSON.stringify(route)});`);
         const logicFileNwString = (await readFile(logicPath)).toString()
             .replace(onClickFnString, newOnClickString)
         await writeFile(logicPath, logicFileNwString);
@@ -724,9 +719,6 @@ async function handleRectangleComponent({child, filename, srcPath, token, figFil
         const inputType = `${child?.name}`.toLowerCase()?.includes('password') ? 'password' : undefined;
         await createTextInputComponent(filename, child, inputType);
     }
-        // else if (baseType === 'password') {
-        //     await createTextInputComponent(filename, child, 'password');
-    // }
     else if (baseType === 'image') {
         await createImageComponent({filename, child, srcPath, token, figFile});
     } else {
@@ -762,7 +754,6 @@ function dumpImageYaml({child, srcUrl, objectFit = 'cover'}) {
                     ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child),
                     objectFit
-                    // objectFit: `${child?.name}`.endsWith('_icon')?undefined:'cover'
                 },
                 frame: child?.childFrame,
             }

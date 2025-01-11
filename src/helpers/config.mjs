@@ -1,4 +1,4 @@
-import {loadEnvFile} from "../services/helper.mjs";
+import {loadEnvFile} from "../services/generator/helper.mjs";
 
 await loadEnvFile();
 

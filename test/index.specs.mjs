@@ -1,9 +1,9 @@
 import {expect} from "chai";
 import {readFile, readdir} from "node:fs/promises";
 import {join, resolve} from "node:path"
-import {readSpecs, specToJSON} from "../src/services/specs.mjs";
-import {composeComponent} from "../src/services/component.mjs";
-import {ensureBlueprintFolderExist, ensureWatchFileExist} from "../src/services/helper.mjs";
+import {readSpecs, specToJSON} from "../src/services/generator/specs.mjs";
+import {composeComponent} from "../src/services/generator/component.mjs";
+import {ensureBlueprintFolderExist, ensureWatchFileExist} from "../src/services/generator/helper.mjs";
 import {specFile, logicFile, watchFileContent} from './data.mjs'
 
 describe('Specs', function () {

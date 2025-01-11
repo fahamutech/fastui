@@ -1,5 +1,5 @@
 import {BaseTemplate} from "../base.mjs";
-import {firstUpperCase} from "../../../utils/index.mjs";
+import {firstUpperCase} from "../../../helpers/index.mjs";
 
 export class ReactNativeTemplate extends BaseTemplate {
 
