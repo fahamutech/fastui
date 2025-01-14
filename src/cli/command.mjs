@@ -1,23 +1,22 @@
-// Constants
 import {join, resolve} from "node:path";
 import {
-    fetchFigmaFile,
     getDesignDocument,
-    getPagesAndTraverseChildren,
-    walkFrameChildren
-} from "../services/automation/figma.mjs";
+    writeModifiedFigmaJson2Specs
+} from "../transformer/figma/index.mjs";
 import {
-    ensureAppRouteFileExist,
     ensureBlueprintFolderExist, ensureSchemaFileExist, ensureStartScript,
     ensureWatchFileExist,
     loadEnvFile
-} from "../services/generator/helper.mjs";
-import {readSpecs, specToJSON} from "../services/generator/specs.mjs";
-import {composeComponent} from "../services/generator/component.mjs";
-import {composeCondition} from "../services/generator/condition.mjs";
-import {composeLoop} from "../services/generator/loop.mjs";
+} from "../helpers/setup.mjs";
+import {readSpecs, specToJSON} from "../generator/specs.mjs";
+import {composeComponent} from "../generator/component.mjs";
+import {composeCondition} from "../generator/condition.mjs";
+import {composeLoop} from "../generator/loop.mjs";
 import {getMergedCondition} from "./merge_condition.mjs";
 import {getMergedLoop} from "./merge_loop.mjs";
+import {fetchFigmaFile} from "../transformer/figma/api.mjs";
+import {ensureAppRouteFileExist} from "../transformer/figma/navigation.mjs";
+import {transformFigmaTopLevelDocFrames} from "../transformer/figma/frame.mjs";
 
 const CONSTANTS = {
     COMMAND_TYPES: {
@@ -92,7 +91,7 @@ const fetchAndProcessDocument = async (config) => {
  * Children processing
  */
 const processChildren = async (config, document) => {
-    const children = await getPagesAndTraverseChildren({
+    const children = await transformFigmaTopLevelDocFrames({
         document,
         srcPath: config.srcPath,
         token: config.token,
@@ -100,7 +99,7 @@ const processChildren = async (config, document) => {
     });
 
     logger.info('Starting frame processing');
-    await walkFrameChildren({
+    await writeModifiedFigmaJson2Specs({
         children,
         srcPath: config.srcPath,
         token: config.token,

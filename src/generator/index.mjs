@@ -7,7 +7,7 @@ import {
     itOrEmptyList,
     justList,
     snakeToCamel
-} from "../../helpers/index.mjs";
+} from "../helpers/general.mjs";
 import {
     getEffects,
     getExtend,
@@ -22,8 +22,7 @@ import {
 import {appendFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {absolutePathParse} from "./helper.mjs";
-import {getTemplateSelected} from "../../helpers/config.mjs";
+import {absolutePathParse,getTemplateSelected} from "../helpers/setup.mjs";
 import {TEMPLATE_MAPPING} from "../templates/mapping.mjs";
 
 const template = getTemplateSelected();
@@ -137,11 +136,11 @@ export function getFilenameFromBlueprintPath(path) {
     return `${pathResolve(path)}`.split(pathSep).pop().replace('.yml', '');
 }
 
-export /**
+/**
  * @param unParsedPath{string}
  * @return {string}
  * */
-function getSrcPathFromBlueprintPath(unParsedPath) {
+export function getSrcPathFromBlueprintPath(unParsedPath) {
     const path = pathResolve(unParsedPath).replace(process.cwd(), '.');
     const pathParts = `${path}`.split(pathSep).filter(x => x !== 'blueprints');
     return `${pathParts.join(pathSep)}`

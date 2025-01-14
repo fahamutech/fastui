@@ -11,7 +11,7 @@ import {
     prepareGetContentView
 } from "./index.mjs";
 import {getExtend, getFrame, getLeft, getRight} from "./modifier.mjs";
-import {ensurePathExist, firstUpperCase, removeWhiteSpaces, snakeToCamel} from "../../helpers/index.mjs";
+import {ensurePathExist, firstUpperCase, removeWhiteSpaces, snakeToCamel} from "../helpers/general.mjs";
 import {writeFile} from "node:fs/promises";
 
 function getContentViewWithoutExtend(data) {

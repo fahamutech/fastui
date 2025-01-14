@@ -1,4 +1,4 @@
-import {ensurePathExist, removeWhiteSpaces} from "../../helpers/index.mjs";
+import {ensurePathExist, removeWhiteSpaces} from "../helpers/general.mjs";
 import {getChildren, getFrame} from "./modifier.mjs";
 import {writeFile} from "node:fs/promises";
 import {
