@@ -17,7 +17,7 @@ export function getDesignDocument(data) {
     return data?.document?.children?.[0];
 }
 
-function getSize(layoutSizing, size) {
+export function getSize(layoutSizing, size) {
     if (layoutSizing === 'FIXED') {
         return size;
     } else {

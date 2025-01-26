@@ -7,8 +7,9 @@ import {
     maybeRandomName,
     sanitizeFullColon
 } from "../../helpers/general.mjs";
-import {getContainerLikeStyles, getImageRef} from "./utils.mjs";
+import {getColor, getContainerLikeStyles, getImageRef} from "./utils.mjs";
 import {id2nameMapCache} from "./cache.mjs";
+import {getSize} from "./index.mjs";
 
 async function transformChildrenByTraverse({frame, module, isLoopElement, token, figFile, srcPath}) {
     const children = [];
@@ -201,6 +202,11 @@ function transformLayoutAxisAlign(counterAxisAlignItems) {
     }
 }
 
+async function frameBackgroundImage({token,figFile,srcPath,frame}){
+    const a = {token, figFile, srcPath, imageRef: getImageRef(frame?.fills)}
+    return  await getFigmaImagePath(a)
+}
+
 /**
  *
  * @param document
@@ -213,36 +219,35 @@ export async function transformFigmaTopLevelDocFrames({document, token, figFile,
     const replaceModule = v => justString(v).replaceAll(/(\[.*])/g, '').trim();
     const replaceName = t => justString(t).replaceAll(/(.*\[)|(].*)/g, '').trim();
     const pages = [];
-    const sPages = document?.children?.filter(x => (x?.visible ?? true) && x?.type === 'FRAME');
-    for (const page of sPages ?? []) {
-        const nAry = replaceModule(page?.name)?.split('_')
-        const type = nAry.pop();
-        const name = nAry.join('_');
-        const module = /*replaceName(page?.name).includes('/') ? */replaceName(page?.name)/* : null;*/
-        id2nameMapCache[page?.id] = {name, type, module}
-        const a = {token, figFile, srcPath, imageRef: getImageRef(page?.fills)}
-        const backGroundImage = await getFigmaImagePath(a)
-        const b = {frame: page, module, isLoopElement: false, token, srcPath, figFile};
+    const frames = document?.children?.filter(x => (x?.visible ?? true) && x?.type === 'FRAME');
+    for (const frame of frames ?? []) {
+        const nameChunks = replaceModule(frame?.name)?.split('_')
+        const type = nameChunks.pop();
+        const name = nameChunks.join('_');
+        const module = replaceName(frame?.name)
+        id2nameMapCache[frame?.id] = {name, type, module}
+        const backGroundImage = await frameBackgroundImage({token, figFile,srcPath,frame});
+        const b = {frame: frame, module, isLoopElement: false, token, srcPath, figFile};
         const pageChildren = await transformChildrenByTraverse(b);
         pages.push({
-            ...page,
-            name: replaceModule(page?.name),
-            type: maybeRandomName(page?.type),
+            ...frame,
+            name: replaceModule(frame?.name),
+            type: maybeRandomName(frame?.type),
             module,
             children: pageChildren?.children ?? [],
             mainFrame: {
-                base: page?.layoutMode === 'VERTICAL' ? 'column.start.stack' : 'row.start.stack',
-                id: sanitizeFullColon(`${replaceModule(page?.name)}_frame`),
+                base: frame?.layoutMode === 'VERTICAL' ? 'column.start.stack' : 'row.start.stack',
+                id: sanitizeFullColon(`${replaceModule(frame?.name)}_frame`),
                 styles: {
-                    paddingLeft: page?.paddingLeft,
-                    paddingRight: page?.paddingRight,
-                    paddingTop: page?.paddingTop,
-                    paddingBottom: page?.paddingBottom,
+                    paddingLeft: frame?.paddingLeft,
+                    paddingRight: frame?.paddingRight,
+                    paddingTop: frame?.paddingTop,
+                    paddingBottom: frame?.paddingBottom,
                     height: '100vh',
                     width: '100vw',
                     // maxWidth: page?.absoluteRenderBounds?.width,
                     // margin: 'auto',
-                    ...getContainerLikeStyles(page, backGroundImage),
+                    ...getContainerLikeStyles(frame, backGroundImage),
                 }
             }
         });
