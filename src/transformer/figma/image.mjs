@@ -50,14 +50,14 @@ export async function getFigmaImagePath({token, figFile, srcPath, imageRef, chil
         const file = files.filter(x => x.trim().startsWith(imageRef))[0];
         const imagePath = join(folderPath, file);
         await stat(imagePath);
-        return `/images/figma/${file}`;
+        return `images/figma/${file}`;
     } catch (e) {
         const url = await fetchFigmaImagesUrl(
             {token, format, figFile, nodeId, imageRef});
         if (url) {
             const {contentExtension} = await downloadImage(url, imageRef, folderPath);
             const imageName = `${imageRef}.${contentExtension ?? 'png'}`;
-            return `/images/figma/${imageName}`;
+            return `images/figma/${imageName}`;
         }
         return undefined;
     }
