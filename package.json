@@ -18,6 +18,7 @@
     "js-yaml": "~4.1.0"
   },
   "devDependencies": {
+    "@figma/rest-api-spec": "^0.41.0",
     "@types/node": "~20.17.0",
     "chai": "~5.1.2",
     "mocha": "~11.0.1"

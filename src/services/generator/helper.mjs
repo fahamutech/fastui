@@ -215,6 +215,18 @@ export async function ensureSchemaFileExist() {
     "components": {
       "$ref": "#/$defs/component"
     },
+    "text": {
+      "$ref": "#/$defs/component"
+    },
+    "image": {
+      "$ref": "#/$defs/component"
+    },
+    "input": {
+      "$ref": "#/$defs/component"
+    },
+    "rectangle": {
+      "$ref": "#/$defs/component"
+    },
     "loop": {
       "type": "object",
       "properties": {

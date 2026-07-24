@@ -1,5 +1,4 @@
-component:
-  base: rectangle
+rectangle:
   modifier:
     styles:
       height: 54

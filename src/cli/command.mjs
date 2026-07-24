@@ -16,8 +16,12 @@ import {readSpecs, specToJSON} from "../services/generator/specs.mjs";
 import {composeComponent} from "../services/generator/component.mjs";
 import {composeCondition} from "../services/generator/condition.mjs";
 import {composeLoop} from "../services/generator/loop.mjs";
+import {composeFlutterComponent} from "../services/generator/flutter/component.mjs";
+import {composeFlutterCondition} from "../services/generator/flutter/condition.mjs";
+import {composeFlutterLoop} from "../services/generator/flutter/loop.mjs";
 import {getMergedCondition} from "./merge_condition.mjs";
 import {getMergedLoop} from "./merge_loop.mjs";
+import {isFlutterTemplate} from "../helpers/config.mjs";
 
 const CONSTANTS = {
     COMMAND_TYPES: {
@@ -132,20 +136,40 @@ const generatePages = (children) => {
 /**
  * Spec processing
  */
+const resolveComponentData = (parsed) => {
+    const {component, components, text, image, input, rectangle} = parsed;
+    if (components ?? component) return components ?? component;
+    if (text) return {...text, base: 'text'};
+    if (image) return {...image, base: 'image'};
+    if (input) return {...input, base: 'input'};
+    if (rectangle) return {...rectangle, base: 'rectangle'};
+    return null;
+};
+
 const processSpec = async (specPath) => {
     try {
         const data = await specToJSON(specPath);
-        const {component, components, condition, loop} = JSON.parse(JSON.stringify(data ?? {}));
+        const parsed = JSON.parse(JSON.stringify(data ?? {}));
+        const {condition, loop} = parsed;
+        const componentData = resolveComponentData(parsed);
         const paths = {
             path: specPath,
             projectPath: process.cwd()
         };
 
-        await Promise.all([
-            composeComponent({data: components ?? component, ...paths}),
-            composeCondition({data: getMergedCondition(condition), ...paths}),
-            composeLoop({data: getMergedLoop(loop), ...paths})
-        ]);
+        if (isFlutterTemplate()) {
+            await Promise.all([
+                composeFlutterComponent({data: componentData, ...paths}),
+                composeFlutterCondition({data: getMergedCondition(condition), ...paths}),
+                composeFlutterLoop({data: getMergedLoop(loop), ...paths})
+            ]);
+        } else {
+            await Promise.all([
+                composeComponent({data: componentData, ...paths}),
+                composeCondition({data: getMergedCondition(condition), ...paths}),
+                composeLoop({data: getMergedLoop(loop), ...paths})
+            ]);
+        }
     } catch (error) {
         logger.error(`Error processing spec ${specPath}: ${error.message}`);
         throw error;

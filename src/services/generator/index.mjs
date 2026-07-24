@@ -19,7 +19,7 @@ import {
     getStates,
     getStyles
 } from "./modifier.mjs";
-import {appendFile} from "node:fs/promises";
+import {appendFile, readFile} from "node:fs/promises";
 import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {absolutePathParse} from "./helper.mjs";
@@ -148,6 +148,71 @@ function getSrcPathFromBlueprintPath(unParsedPath) {
         .replace(/(.yml)/ig, '.jsx');
 }
 
+export /**
+ * @param unParsedPath{string}
+ * @return {string}
+ * */
+function getFlutterSrcPathFromBlueprintPath(unParsedPath) {
+    const path = pathResolve(unParsedPath).replace(process.cwd(), '.');
+    const pathParts = `${path}`.split(pathSep).filter(x => x !== 'blueprints');
+    return `${pathParts.join(pathSep)}`.replace(/(.yml)/ig, '.dart');
+}
+
+/**
+ * @param data {*}
+ * @param unParsedPath {string}
+ * @param projectPath {string}
+ * @return {Promise<string>}
+ */
+export async function getFlutterLogicsImportStatement(data = {}, unParsedPath = '', projectPath = '') {
+    const cwd = process.cwd();
+    const path = pathResolve(unParsedPath).replace(cwd, '.');
+    const pathParts = `${path}`.split(pathSep);
+    pathParts.pop();
+    const pathSteps = pathParts
+        .filter(x => x !== 'blueprints' && x !== '.')
+        .map(_ => '..');
+
+    const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
+    const map = x => `${x}`.trim().replace(/^(logics.)|\(\)/ig, '');
+    const getStyleInputs = ifDoElse(
+        x => `${x}`.trim().toLowerCase().startsWith('logics.'),
+        compose(justList, map),
+        x => Object.values(x).filter(filter).map(map)
+    );
+    const styleInputs = getStyleInputs(getStyles(data));
+    const propsInputs = Object.values(getProps(data)).filter(filter).map(map);
+    const effects = getEffects(data);
+    const effectsInputs = Object.keys(effects).reduce((a, b) => {
+        return [...a, `${effects[b]?.body}`.trim().replace(/^(logics.)|\(\)/ig, '')]
+    }, []);
+    const exports = Array.from([...propsInputs, ...effectsInputs, ...styleInputs].reduce((a, b) => a.add(b), new Set()));
+
+    const logicFileName = getFilenameFromBlueprintPath(path).trim() + '.dart';
+    const logicImportPath = pathJoin(
+        pathSteps.join(pathSep), pathParts.join(pathSep), '.', 'logics', logicFileName
+    );
+    const logicFolderPath = pathJoin(pathParts.join(pathSep), '.', 'logics');
+    await ensurePathExist(logicFolderPath);
+    await ensureFileExist(pathJoin(logicFolderPath, logicFileName));
+    try {
+        const existingContent = await readFile(pathJoin(logicFolderPath, logicFileName), 'utf-8');
+        for (const e of exports) {
+            if (!existingContent.includes(`${e}(`)) {
+                await appendFile(pathJoin(logicFolderPath, logicFileName), `
+void ${e}({required Map<String, dynamic> data}) {
+  // TODO: Implement the logic
+}
+`);
+            }
+        }
+    } catch (e) {
+        console.log(e);
+    }
+    if (exports?.length === 0) return '';
+    return `import '${logicImportPath?.split(pathSep)?.join('/')}';`;
+}
+
 /**
  *
  * @param data {*}
@@ -185,15 +250,23 @@ export function getPropsStatement(data) {
                 v => `${v}`.trim().toLowerCase().startsWith('logics.'),
                 ifDoElse(
                     x => `${x}`.trim().endsWith('()'),
-                    x => `${`${x}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args:[]})`,
-                    x => `(...args)=>${`${x}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args})`
+                    x => `${`${x}`.trim().replace(/^(logics.)|\.\(\)$/ig, '')}({component,args:[]})`,
+                    x => `(...args)=>${`${x}`.trim().replace(/^(logics.)|\.\(\)$/ig, '')}({component,args})`
                 ),
                 ifDoElse(
-                    t => `${t}`.startsWith("'_'+"),
-                    t => `${t}`,
-                    t => `${JSON.stringify(t ?? '')}`
-                        .replaceAll(/^"|"$/ig, "'")
-                ),
+                    v => `${v}`.trim().toLowerCase().startsWith('theme.'),
+                    v => `AppTheme.${`${v}`.trim().replace(/^(theme.)/ig, '')}`,
+                    ifDoElse(
+                        v => `${v}`.trim().toLowerCase().startsWith('i18n.'),
+                        v => `AppStrings.${`${v}`.trim().replace(/^(i18n.)/ig, '')}`,
+                        ifDoElse(
+                            t => `${t}`.startsWith("'_'+"),
+                            t => `${t}`,
+                            t => `${JSON.stringify(t ?? '')}`
+                                .replaceAll(/^"|"$/ig, "'")
+                        )
+                    )
+                )
             )
         )
     );
@@ -428,8 +501,16 @@ function getStyleMap(style) {
             v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
             ifDoElse(
                 v => `${v}`.trim().toLowerCase().startsWith('logics.'),
-                v => `${`${v}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args: []})`,
-                v => `${JSON.stringify(v ?? '')}`.trim()
+                v => `${`${v}`.trim().replace(/^(logics.)|\.\(\)$/ig, '')}({component,args: []})`,
+                ifDoElse(
+                    v => `${v}`.trim().toLowerCase().startsWith('theme.'),
+                    v => `AppTheme.${`${v}`.trim().replace(/^(theme.)/ig, '')}`,
+                    ifDoElse(
+                        v => `${v}`.trim().toLowerCase().startsWith('i18n.'),
+                        v => `AppStrings.${`${v}`.trim().replace(/^(i18n.)/ig, '')}`,
+                        v => `${JSON.stringify(v ?? '')}`.trim()
+                    )
+                )
             )
         )
     );
