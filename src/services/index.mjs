@@ -19,25 +19,40 @@ import {
     getStates,
     getStyles
 } from "./modifier.mjs";
-import {appendFile} from "node:fs/promises";
-import {join as pathJoin, resolve as pathResolve, sep as pathSep} from 'node:path';
-import {pathToFileURL} from 'node:url';
-import {absolutePathParse} from "./helper.mjs";
+import {dirname as pathDirname, relative as pathRelative, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {getTemplateSelected} from "../utils/config.mjs";
 import {TEMPLATE_MAPPING} from "./templates/mapping.mjs";
+import {containsLogicReference, containsNavigationAction} from '../compiler/behavior.mjs';
+import {ensureServiceFile, relativeImport, specStructure} from '../generators/project-structure.mjs';
 
 const template = getTemplateSelected();
 
+const reactAssetPath = value => typeof value === 'string'
+    ? value.replace(/asset:\/\/figma\//g, '/images/figma/')
+    : value;
+
+const reactStyleAssets = styles => {
+    const normalized = Object.fromEntries(
+        Object.entries(styles ?? {})
+            .filter(([key, value]) => value !== undefined && value !== null && !['fallbackWidth', 'fallbackHeight'].includes(key))
+            .map(([key, value]) => [key, reactAssetPath(value)])
+    );
+    normalized.boxSizing = 'border-box';
+    normalized.minWidth ??= 0;
+    if (`${normalized.width ?? ''}`.trim() === '100%') normalized.maxWidth = '100%';
+    return normalized;
+};
+
 function defaultOnFrameColumn(styles) {
     return `{${JSON.stringify({
-        ...styles,
+        ...reactStyleAssets(styles),
         ...{display: 'flex', flexDirection: 'column'}
     })}}`;
 }
 
 function defaultOnFrameRow(styles) {
     return `{${JSON.stringify({
-        ...styles,
+        ...reactStyleAssets(styles),
         ...{display: 'flex', flexDirection: 'row'}
     })}}`;
 }
@@ -105,11 +120,11 @@ export function getConditionFrameStatement(data, onChild) {
     const frame = getFrame(data);
     const styles = getStyles(data);
     const column = `{${JSON.stringify({
-        ...styles,
+        ...reactStyleAssets(styles),
         display: 'flex', flexDirection: 'column',
     })}}`;
     const row = `{${JSON.stringify({
-        ...styles,
+        ...reactStyleAssets(styles),
         display: 'flex', flexDirection: 'row',
     })}}`;
     return getFrameStatement(frame, onChild, () => column, () => row);
@@ -161,7 +176,7 @@ export function getBase(data) {
         // else if (`${base}` === 'text') {
         //     return 'div';
     // }
-    else if (`${base}` === 'input') {
+    else if (`${base}` === 'input' || (`${base}` === 'container' && data?.modifier?.props?.control === 'input')) {
         return 'input';
     } else {
         return 'div';
@@ -175,23 +190,47 @@ export function getBase(data) {
  */
 export function getPropsStatement(data) {
     const props = getProps(data);
+    const targetValue = value => typeof value === 'string'
+        ? value.replace(/^asset:\/\/figma\//, '/images/figma/')
+        : value;
+    const actionStatement = (action, eventName = 'event') => {
+        if (`${action?.action ?? ''}`.startsWith('navigation.')) {
+            const route = {...action};
+            delete route.action;
+            return `setCurrentRoute(${JSON.stringify(route)})`;
+        }
+        if (action?.action === 'state.set' && action.target) {
+            const value = action.value === 'event.value'
+                ? `(${eventName}?.target?.value ?? ${eventName})`
+                : JSON.stringify(action.value);
+            return `set${firstUpperCase(action.target)}(${value})`;
+        }
+        return '';
+    };
+    const eventExpression = action => {
+        const actions = action?.action === 'sequence' ? action.actions ?? [] : [action];
+        const statements = actions.map(action => actionStatement(action, 'event')).filter(Boolean);
+        return `(event)=>{${statements.map(statement => `${statement};`).join('')}}`;
+    };
     const getValue = ifDoElse(
         v => `${v}`.trim().toLowerCase().startsWith('states.'),
-        v => `${v}`.trim().replace(/^(states.)/ig, ''),
+        v => `${v}`.trim().replace(/^(states.)/ig, '')
+            .replace(/asset:\/\/figma\/([a-zA-Z0-9._-]+)/g, "'/images/figma/$1'"),
         ifDoElse(
             v => `${v}`.trim().toLowerCase().startsWith('inputs.'),
-            v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
+            v => `${v}`.trim().replace(/^(inputs.)/ig, '')
+                .replace(/asset:\/\/figma\/([a-zA-Z0-9._-]+)/g, "'/images/figma/$1'"),
             ifDoElse(
-                v => `${v}`.trim().toLowerCase().startsWith('logics.'),
+                v => /^(?:logics|services)\./i.test(`${v}`.trim()),
                 ifDoElse(
                     x => `${x}`.trim().endsWith('()'),
-                    x => `${`${x}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args:[]})`,
-                    x => `(...args)=>${`${x}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args})`
+                    x => `${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args:[]})`,
+                    x => `(...args)=>${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args})`
                 ),
                 ifDoElse(
                     t => `${t}`.startsWith("'_'+"),
                     t => `${t}`,
-                    t => `${JSON.stringify(t ?? '')}`
+                    t => `${JSON.stringify(targetValue(t) ?? '')}`
                         .replaceAll(/^"|"$/ig, "'")
                 ),
             )
@@ -199,9 +238,24 @@ export function getPropsStatement(data) {
     );
     return Object
         .keys(props)
-        .filter(k => props[k] !== undefined && props[k] !== null)
-        .map(k => `${k}={${getValue(props[k])}}`)
+        .filter(k => props[k] !== undefined && props[k] !== null && k !== 'control')
+        .map(k => {
+            const value = props[k];
+            if (/^on[A-Z]/.test(k) && value && typeof value === 'object') {
+                return `${k}={${eventExpression(value)}}`;
+            }
+            return `${k}={${getValue(value)}}`;
+        })
         .join('\n\t\t\t')
+}
+
+export function getActionImportStatement(data, unParsedPath) {
+    if (template !== 'reactjs' || !containsNavigationAction(data)) return '';
+    const outputPath = pathResolve(getSrcPathFromBlueprintPath(unParsedPath));
+    const routingPath = pathResolve(process.cwd(), 'src', 'routing.mjs');
+    let importPath = pathRelative(pathDirname(outputPath), routingPath).split(pathSep).join('/');
+    if (!importPath.startsWith('.')) importPath = `./${importPath}`;
+    return `import {setCurrentRoute} from '${importPath}';`;
 }
 
 /**
@@ -243,12 +297,36 @@ function sanitizeEffectDependency(watch) {
  * @param data{*}
  * @return {string}
  * */
-export function getStatesStatement(data) {
+export function getStatesStatement(data, specPath) {
     const states = getStates(data);
+    if (template === 'reactjs' && specPath && Object.keys(states).length > 0) {
+        const componentName = specStructure(specPath, 'reactjs').componentName;
+        const initialState = Object.fromEntries(Object.entries(states).map(([key, value]) => [
+            key,
+            /^(inputs\.)/i.test(`${value}`.trim())
+                ? {__expression: `${value}`.replace(/^(inputs\.)/i, '')}
+                : value
+        ]));
+        const initialExpression = `{${Object.entries(initialState).map(([key, value]) =>
+            `${JSON.stringify(key)}:${value && typeof value === 'object' && '__expression' in value ? value.__expression : JSON.stringify(value)}`
+        ).join(',')}}`;
+        const declarations = Object.keys(states).flatMap(key => [
+            `const ${key}=componentState.${key};`,
+            `const set${firstUpperCase(key)}=React.useCallback((next)=>setComponentState((current)=>({${key}:typeof next==='function'?next(current.${key}):next})),[setComponentState]);`
+        ]);
+        return `const [componentState,setComponentState]=useModuleState(${JSON.stringify(componentName)},${initialExpression});\n\t${declarations.join('\n\t')}`;
+    }
     const getStateIV = k => /^(inputs\.)/ig.test(`${states[k]}`.trim())
         ? `${states[k]}`.replace(/^(inputs.)/ig, '')
         : JSON.stringify(states[k]);
     return TEMPLATE_MAPPING.statesPresentation[template](states, getStateIV);
+}
+
+export function getModuleStoreImportStatement(data, specPath) {
+    if (template !== 'reactjs' || Object.keys(getStates(data)).length === 0) return '';
+    const outputPath = pathResolve(getSrcPathFromBlueprintPath(specPath));
+    const storePath = specStructure(specPath, 'reactjs').storePath;
+    return `import {useModuleState} from '${relativeImport(outputPath, storePath)}';`;
 }
 
 /**
@@ -258,8 +336,8 @@ export function getStatesStatement(data) {
 export function getEffectsStatement(data) {
     const effects = getEffects(data);
     const getDependencies = k => sanitizeEffectDependency(effects[k]?.watch);
-    const getBody = k => `${effects[k]?.body}`.trim().toLowerCase().startsWith('logics.')
-        ? `${effects[k]?.body}`.trim().replace(/^(logics.)|\(\)/ig, '')
+    const getBody = k => /^(?:logics|services)\./i.test(`${effects[k]?.body}`.trim())
+        ? `${effects[k]?.body}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')
         : effects[k]?.body ?? '{}';
     return TEMPLATE_MAPPING.sideEffectsPresentation[template](effects, getBody, getDependencies);
 }
@@ -322,6 +400,7 @@ function getInputsMapForLogicInput(data) {
  * @return {string}
  */
 export function getComponentMemoStatement(data) {
+    if (!containsLogicReference(data) && Object.keys(getEffects(data)).length === 0) return '';
     const useMemoDependencies = getUseMemoDependencies(data);
     const statesMap = getStateMapForLogicInput(getStates(data));
     const inputsMap = getInputsMapForLogicInput(data);
@@ -340,17 +419,10 @@ export function getComponentMemoStatement(data) {
  * @return {Promise<string>}
  */
 export async function getLogicsImportStatement(data = {}, unParsedPath = '', projectPath = '') {
-    const cwd = process.cwd();
-    const path = pathResolve(unParsedPath).replace(cwd, '.');
-    const pathParts = `${path}`.split(pathSep);
-    pathParts.pop();
-    const pathSteps = pathParts
-        .filter(x => x !== 'blueprints' && x !== '.')
-        .map(_ => '..');
-    const filter = x => `${x}`.trim().toLowerCase().startsWith('logics.');
-    const map = x => `${x}`.trim().replace(/^(logics.)|\(\)/ig, '');
+    const filter = x => /^(?:logics|services)\./i.test(`${x}`.trim());
+    const map = x => `${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '');
     const getStyleInputs = ifDoElse(
-        x => `${x}`.trim().toLowerCase().startsWith('logics.'),
+        x => /^(?:logics|services)\./i.test(`${x}`.trim()),
         compose(justList, map),
         x => Object.values(x).filter(filter).map(map)
     );
@@ -362,40 +434,21 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
             ...a,
             `${effects[b]?.body}`
                 .trim()
-                .replace(/^(logics.)|\(\)/ig, '')
+                .replace(/^(?:logics|services)\.|\(\)/ig, '')
         ]
     }, []);
     const exports = Array.from([...propsInputs, ...effectsInputs, ...styleInputs].reduce((a, b) => a.add(b), new Set()));
+    if (exports.length === 0) return '';
 
-    const logicFileName = getFilenameFromBlueprintPath(path).trim() + '.mjs';
-    const logicImportPath = pathJoin(
-        pathSteps.join(pathSep), pathParts.join(pathSep), '.', 'logics', logicFileName
-    );
-    const logicFolderPath = pathJoin(pathParts.join(pathSep), '.', 'logics');
-    await ensurePathExist(logicFolderPath);
-    await ensureFileExist(pathJoin(logicFolderPath, logicFileName));
-    try {
-        const importedLogic = await import(absolutePathParse(pathToFileURL(pathJoin(projectPath, logicFolderPath, logicFileName))));
-        for (const e of exports) {
-            if (importedLogic[e] === undefined) {
-                await appendFile(pathJoin(logicFolderPath, logicFileName), `
-/**
-* @param data {
-* {component: {states: *,inputs: *}, args: Array<*>}
-* }
-*/
-export function ${e}(data) {
-    // TODO: Implement the logic
-}`)
-            }
-        }
-    } catch (e) {
-        console.log(e);
-    }
-    if(exports?.length===0){
-        return '';
-    }
-    return `import {${exports?.join(',')}} from '${logicImportPath?.split(pathSep)?.join('/')?.replace('../src/', '')}';`
+    const structure = specStructure(unParsedPath, 'reactjs');
+    const servicePath = await ensureServiceFile({
+        servicePath: structure.servicePath,
+        legacyPath: structure.legacyServicePath,
+        functions: exports,
+        template: 'reactjs'
+    });
+    const outputPath = pathResolve(getSrcPathFromBlueprintPath(unParsedPath));
+    return `import {${exports.join(',')}} from '${relativeImport(outputPath, servicePath)}';`;
 }
 
 /**
@@ -427,9 +480,9 @@ function getStyleMap(style) {
             v => `${v}`.trim().toLowerCase().startsWith('inputs.'),
             v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
             ifDoElse(
-                v => `${v}`.trim().toLowerCase().startsWith('logics.'),
-                v => `${`${v}`.trim().replace(/^(logics.)|\(\)/ig, '')}({component,args: []})`,
-                v => `${JSON.stringify(v ?? '')}`.trim()
+                v => /^(?:logics|services)\./i.test(`${v}`.trim()),
+                v => `${`${v}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args: []})`,
+                v => `${JSON.stringify(typeof v === 'string' ? v.replace(/asset:\/\/figma\//g, '/images/figma/') : v ?? '')}`.trim()
             )
         )
     );
@@ -451,7 +504,7 @@ export function getStyleStatement(data) {
         .filter(x => `${x}`.trim().toLowerCase().startsWith('inputs.'))
         .map(y => `${y}`.replaceAll('inputs.', '').trim())
     const hasLogicDep = Object.values(style)
-        .filter(x => `${x}`.trim().toLowerCase().startsWith('logics.'))
+        .filter(x => /^(?:logics|services)\./i.test(`${x}`.trim()))
         .length > 0;
     const dependencies = Array.from([
         ...stateDep,
@@ -459,8 +512,8 @@ export function getStyleStatement(data) {
         ...[hasLogicDep ? 'component' : undefined]
     ].reduce((a, b) => a.add(b), new Set())).join(',');
     const getStyleStatement = ifDoElse(
-        t => `${t}`.trim().toLowerCase().startsWith('logics.'),
-        t => `const style = React.useMemo(()=>${`${t}`.replace(/^(logics.)|\(\)/ig, '')}({component,args:[]}),[component]);`,
+        t => /^(?:logics|services)\./i.test(`${t}`.trim()),
+        t => `const style = React.useMemo(()=>${`${t}`.replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args:[]}),[component]);`,
         t => `const style = React.useMemo(()=>(${getStyleMap(t)}),[${dependencies}]);`
     );
     return getStyleStatement(style);

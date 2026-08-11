@@ -21,7 +21,6 @@ export function firstUpperCase(str) {
  * @return {string}
  */
 export function firstUpperCaseRestSmall(str) {
-    console.log(str);
     if (!str){
         return undefined;
     }

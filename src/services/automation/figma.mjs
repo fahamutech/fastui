@@ -7,14 +7,70 @@ import {
     maybeRandomName,
     sanitizeFullColon
 } from "../../utils/index.mjs";
-import {join, resolve} from "node:path";
-import {appendFile, readdir, readFile, stat, writeFile} from "node:fs/promises";
+import {dirname, join, relative, resolve, sep} from "node:path";
+import {copyFile, readdir, readFile, stat, writeFile} from "node:fs/promises";
 import * as yaml from "js-yaml"
 import {createWriteStream} from "node:fs";
 import {randomUUID} from "node:crypto";
-import {absolutePathParse} from "../helper.mjs";
+import {resolvePrototypeRoute, routeFromSurfaceName} from "../navigation.mjs";
 
 const id2nameMapCache = {};
+const sharedComponentMapCache = {};
+let figmaAssetDownloadsDisabled = false;
+let figmaAssetWarningWritten = false;
+let figmaAssetDownloadsEnabled = false;
+
+const clearObject = value => Object.keys(value).forEach(key => delete value[key]);
+
+function generatedNodeName(node, id = node?.id) {
+    return `i${id}_${firstUpperCaseRestSmall(node?.name)}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
+}
+
+function walkFigmaNodes(node, visit) {
+    if (!node) return;
+    visit(node);
+    for (const child of node?.children ?? []) walkFigmaNodes(child, visit);
+}
+
+function collectSharedComponents(document, components = {}) {
+    const definitions = new Map();
+    const instances = new Map();
+    walkFigmaNodes(document, node => {
+        if (node?.type === 'COMPONENT' && node?.id) definitions.set(node.id, node);
+        if (node?.type === 'INSTANCE' && node?.componentId && !instances.has(node.componentId)) {
+            instances.set(node.componentId, node);
+        }
+    });
+    for (const [componentId, instance] of instances) {
+        if (!definitions.has(componentId)) {
+            definitions.set(componentId, {
+                ...structuredClone(instance),
+                id: componentId,
+                name: components?.[componentId]?.name ?? instance?.name,
+                type: 'COMPONENT'
+            });
+        }
+    }
+    for (const [componentId, node] of definitions) {
+        sharedComponentMapCache[componentId] = {name: generatedNodeName(node, componentId), node};
+    }
+    return [...definitions.entries()];
+}
+
+function sharedComponentRef({filename, child, srcPath}) {
+    if (child?.type !== 'INSTANCE' || !child?.componentId) return undefined;
+    const shared = sharedComponentMapCache[child.componentId];
+    if (!shared) return undefined;
+    let ref = relative(dirname(filename), resolve(join(srcPath, 'modules', 'shared', 'common', `${shared.name}.yml`))).split(sep).join('/');
+    if (!ref.startsWith('.')) ref = `./${ref}`;
+    return ref;
+}
+
+export function getFigmaCachePath(figFile, cachePath) {
+    if (cachePath) return resolve(cachePath);
+    const safeFileKey = `${figFile ?? 'figma-file'}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return resolve(join('.fastui', 'figma', `${safeFileKey}.json`));
+}
 
 /**
  *
@@ -22,17 +78,32 @@ const id2nameMapCache = {};
  * @param figFile
  * @return {Promise<any>}
  */
-export async function fetchFigmaFile({token, figFile}) {
-    try {
-        const {data} = await axios.get(`https://api.figma.com/v1/files/${figFile}`, {
-            headers: {
-                'X-Figma-Token': token
+export async function fetchFigmaFile({token, figFile, fresh = false, cachePath, fetcher = axios.get}) {
+    const localPath = getFigmaCachePath(figFile, cachePath);
+    if (!fresh) {
+        try {
+            return JSON.parse(await readFile(localPath, 'utf8'));
+        } catch (error) {
+            if (error?.code !== 'ENOENT') {
+                throw new Error(`Unable to read cached Figma file at ${localPath}: ${error?.message ?? error}`);
             }
-        });
-        return data;
-    } catch (e) {
-        console.log(e?.response?.data ?? e?.data ?? e?.message ?? e?.toString() ?? 'Fail to retrieve figma file');
+        }
     }
+    if (!figFile || !token) {
+        throw new Error(`No cached Figma file exists at ${localPath}. FIGMA_FILE and FIGMA_TOKEN are required for the first download.`);
+    }
+    let data;
+    try {
+        ({data} = await fetcher(`https://api.figma.com/v1/files/${figFile}`, {
+            headers: {'X-Figma-Token': token}
+        }));
+    } catch (error) {
+        const status = error?.response?.status;
+        throw new Error(`Unable to download Figma file${status ? ` (HTTP ${status})` : ''}: ${error?.response?.data?.message ?? error?.message ?? 'request failed'}`);
+    }
+    await ensurePathExist(dirname(localPath));
+    await writeFile(localPath, JSON.stringify(data, null, 2));
+    return data;
 }
 
 async function downloadImage(imageUrl, imageRef, filePath) {
@@ -74,21 +145,48 @@ async function getFigmaImagePath({token, figFile, srcPath, imageRef, child, form
         return undefined;
     }
     const nodeId = child?.id;
-    const folderPath = resolve(join(srcPath, '..', '..', 'public', 'images', 'figma'));
+    const folderPath = resolve(join(process.cwd(), '.fastui', 'assets', 'figma'));
     await ensurePathExist(folderPath);
     try {
-        const files = await readdir(folderPath);
-        const file = files.filter(x => x.trim().startsWith(imageRef))[0];
-        const imagePath = join(folderPath, file);
+        const candidateFolders = [
+            folderPath,
+            resolve(join(process.cwd(), 'assets', 'images', 'figma')),
+            resolve(join(process.cwd(), 'public', 'images', 'figma')),
+        ];
+        let imagePath;
+        let file;
+        for (const candidate of candidateFolders) {
+            try {
+                const files = await readdir(candidate);
+                file = files.find(value => value.trim().startsWith(imageRef));
+                if (file) {
+                    imagePath = join(candidate, file);
+                    break;
+                }
+            } catch (_) {
+            }
+        }
         await stat(imagePath);
-        return `/images/figma/${file}`;
+        if (dirname(imagePath) !== folderPath) await copyFile(imagePath, join(folderPath, file));
+        return `asset://figma/${file}`;
     } catch (e) {
-        const url = await fetchFigmaImagesUrl(
-            {token, format, figFile, nodeId, imageRef});
-        if (url) {
-            const {contentExtension} = await downloadImage(url, imageRef, folderPath);
-            const imageName = `${imageRef}.${contentExtension ?? 'png'}`;
-            return `/images/figma/${imageName}`;
+        if (!figmaAssetDownloadsEnabled || !token) return undefined;
+        if (figmaAssetDownloadsDisabled) return undefined;
+        try {
+            const url = await fetchFigmaImagesUrl(
+                {token, format, figFile, nodeId, imageRef});
+            if (url) {
+                const {contentExtension} = await downloadImage(url, imageRef, folderPath);
+                const imageName = `${imageRef}.${contentExtension ?? 'png'}`;
+                return `asset://figma/${imageName}`;
+            }
+        } catch (error) {
+            if (error?.response?.status === 429) figmaAssetDownloadsDisabled = true;
+            if (!figmaAssetWarningWritten) {
+                const status = error?.response?.status;
+                console.warn(`WARN : Figma asset download unavailable${status ? ` (HTTP ${status})` : ''}; continuing with cached assets and specs.`);
+                figmaAssetWarningWritten = true;
+            }
         }
         return undefined;
     }
@@ -100,7 +198,15 @@ async function getFigmaImagePath({token, figFile, srcPath, imageRef, child, form
  * @return {*}
  */
 export function getDesignDocument(data) {
-    return data?.document?.children?.[0];
+    const document = data?.document;
+    if (!document) return undefined;
+    const canvases = (document?.children ?? []).filter(child => child?.type === 'CANVAS');
+    if (!canvases.length) return document?.children?.[0] ?? document;
+    return {
+        ...document,
+        children: canvases.flatMap(canvas => canvas?.children ?? []),
+        flowStartingPoints: canvases.flatMap(canvas => canvas?.flowStartingPoints ?? [])
+    };
 }
 
 function transformLayoutAxisAlign(counterAxisAlignItems) {
@@ -111,6 +217,8 @@ function transformLayoutAxisAlign(counterAxisAlignItems) {
             return 'flex-end';
         case  'CENTER':
             return 'center';
+        case 'STRETCH':
+            return 'stretch';
         case 'SPACE_BETWEEN':
             return 'space-between';
         default:
@@ -140,7 +248,6 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
     }
     for (let i = 0; i < fChildren?.length; i++) {
         const child = fChildren[i] ?? {};
-        const isLastChild = (fChildren?.length - 1) === i;
         if (child?.type === 'FRAME' || child?.type === 'INSTANCE' || child?.type === 'COMPONENT') {
             const backGroundImage = await getFigmaImagePath({
                 token,
@@ -173,12 +280,8 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     color: 'transparent',
                     flexDirection: child?.layoutMode === 'VERTICAL' ? 'column' : 'row',
                     flexWrap: transformLayoutWrap(child?.layoutWrap),
-                    justifyContent: child?.layoutMode === 'VERTICAL'
-                        ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
-                        : transformLayoutAxisAlign(child?.counterAxisAlignItems),
-                    alignItems: child?.layoutMode === 'VERTICAL'
-                        ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
-                        : transformLayoutAxisAlign(child?.primaryAxisAlignItems),
+                    justifyContent: transformLayoutAxisAlign(frame?.primaryAxisAlignItems),
+                    alignItems: transformLayoutAxisAlign(frame?.counterAxisAlignItems),
                     // flex: 1
                     flex: frame?.layoutMode === 'VERTICAL'
                         ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
@@ -198,8 +301,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     base: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                     id: sanitizeFullColon(`${name ?? ''}_frame`),
                     styles: {
-                        spaceValue: isLastChild ? 0 : frame?.itemSpacing ?? 0,
-                        // (isLastChild && !isLoopElement) ? 0 : frame?.itemSpacing ?? 0,
+                        spaceValue: i > 0 ? frame?.itemSpacing ?? 0 : 0,
                         paddingLeft: child?.paddingLeft,
                         paddingRight: child?.paddingRight,
                         paddingTop: child?.paddingTop,
@@ -208,14 +310,18 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         flex: frame?.layoutMode === 'VERTICAL'
                             ? child?.layoutSizingVertical === 'FILL' ? 1 : undefined
                             : child?.layoutSizingHorizontal === 'FILL' ? 1 : undefined,
-                        justifyContent: child?.layoutMode === 'VERTICAL'
-                            ? transformLayoutAxisAlign(child?.primaryAxisAlignItems)
-                            : transformLayoutAxisAlign(child?.counterAxisAlignItems),
-                        alignItems: child?.layoutMode === 'VERTICAL'
-                            ? transformLayoutAxisAlign(child?.counterAxisAlignItems)
-                            : transformLayoutAxisAlign(child?.primaryAxisAlignItems),
-                        width: getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width),
-                        height: getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height),
+                        justifyContent: transformLayoutAxisAlign(frame?.primaryAxisAlignItems),
+                        alignItems: transformLayoutAxisAlign(frame?.counterAxisAlignItems),
+                        width: getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width)
+                            ?? (frame?.layoutMode === 'VERTICAL' && child?.layoutAlign === 'STRETCH' ? '100%' : undefined),
+                        height: getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height)
+                            ?? (frame?.layoutMode !== 'VERTICAL' && child?.layoutAlign === 'STRETCH' ? '100%' : undefined),
+                        fallbackWidth: child?.layoutSizingHorizontal === 'FILL' || child?.layoutAlign === 'STRETCH'
+                            ? child?.absoluteRenderBounds?.width
+                            : undefined,
+                        fallbackHeight: child?.layoutSizingVertical === 'FILL' || child?.layoutAlign === 'STRETCH'
+                            ? child?.absoluteRenderBounds?.height
+                            : undefined,
                         ...getContainerLikeStyles(child, backGroundImage),
                         boxShadow: getDropShadowEffect(child),
                         backdropFilter: getBackgroundBlurEffect(child),
@@ -282,17 +388,29 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
  * @param srcPath
  * @return  {Promise<*[]>}
  */
-export async function getPagesAndTraverseChildren({document, token, figFile, srcPath}) {
+export async function getPagesAndTraverseChildren({document, components, token, figFile, srcPath, downloadAssets = false}) {
     const replaceModule = v => justString(v).replaceAll(/(\[.*])/g, '').trim();
     const replaceName = t => justString(t).replaceAll(/(.*\[)|(].*)/g, '').trim();
     const pages = [];
+    clearObject(id2nameMapCache);
+    clearObject(sharedComponentMapCache);
+    figmaAssetDownloadsDisabled = false;
+    figmaAssetWarningWritten = false;
+    figmaAssetDownloadsEnabled = downloadAssets;
+    const sharedDefinitions = collectSharedComponents(document, components);
     const sPages = document?.children?.filter(x => (x?.visible ?? true) && x?.type === 'FRAME');
     for (const page of sPages ?? []) {
-        const nAry = replaceModule(page?.name)?.split('_')
-        const type = nAry.pop();
-        const name = nAry.join('_');
+        const surface = routeFromSurfaceName(replaceModule(page?.name));
+        id2nameMapCache[page?.id] = {
+            ...surface,
+            module: replaceName(page?.name),
+            barrierDismissible: page?.overlayBackgroundInteraction === 'CLOSE_ON_CLICK_OUTSIDE',
+            overlayPositionType: page?.overlayPositionType
+        };
+    }
+    for (const page of sPages ?? []) {
+        const surface = id2nameMapCache[page?.id];
         const module = /*replaceName(page?.name).includes('/') ? */replaceName(page?.name)/* : null;*/
-        id2nameMapCache[page?.id] = {name, type, module}
         const a = {token, figFile, srcPath, imageRef: getImageRef(page?.fills)}
         const backGroundImage = await getFigmaImagePath(a)
         const b = {frame: page, module, isLoopElement: false, token, srcPath, figFile};
@@ -313,12 +431,38 @@ export async function getPagesAndTraverseChildren({document, token, figFile, src
                     paddingBottom: page?.paddingBottom,
                     height: '100vh',
                     width: '100vw',
+                    fallbackWidth: page?.absoluteBoundingBox?.width,
+                    fallbackHeight: page?.absoluteBoundingBox?.height,
                     // maxWidth: page?.absoluteRenderBounds?.width,
                     // margin: 'auto',
                     ...getContainerLikeStyles(page, backGroundImage),
                 }
             }
         });
+    }
+    for (const [componentId, component] of sharedDefinitions) {
+        const shared = sharedComponentMapCache[componentId];
+        const module = 'shared/common';
+        const root = {
+            ...structuredClone(component),
+            type: 'COMPONENT',
+            name: shared.name,
+            module,
+            extendFrame: undefined,
+            mainFrame: {
+                base: component?.layoutMode === 'HORIZONTAL' ? 'row.start' : 'column.start',
+                id: sanitizeFullColon(`${shared.name}_frame`),
+                styles: {
+                    paddingLeft: component?.paddingLeft,
+                    paddingRight: component?.paddingRight,
+                    paddingTop: component?.paddingTop,
+                    paddingBottom: component?.paddingBottom,
+                    ...getContainerLikeStyles(component)
+                }
+            }
+        };
+        const transformed = await transformFrameChildren({frame: root, module, isLoopElement: false, token, figFile, srcPath});
+        pages.push({...root, children: transformed?.children ?? []});
     }
     return pages;
 }
@@ -348,10 +492,9 @@ function getLayerBlurEffect(child) {
 }
 
 function getColor(source) {
-    const getAlpha = v =>
-        (v?.color?.a > 0 && v?.color?.a < 1)
-            ? (v?.color?.a ?? 1) * 255
-            : v?.opacity ?? 1;
+    const getAlpha = value => Math.max(0, Math.min(1,
+        Number(value?.color?.a ?? 1) * Number(value?.opacity ?? 1)
+    ));
     return itOrEmptyList(source)
         .filter(x => x?.type === 'SOLID')
         .map(y => `rgba(${y?.color?.r * 255},${y?.color?.g * 255},${y?.color?.b * 255},${getAlpha(y)})`)
@@ -422,12 +565,7 @@ async function createTextComponent(filename, child) {
         component: {
             base: 'text',
             modifier: {
-                extend: child?.extendFrame,
-                effects: {
-                    onStart: {
-                        body: 'logics.onStart'
-                    }
-                },
+                compose: child?.extendFrame,
                 styles: {
                     ...child?.style ?? {},
                     ...getSizeStyles(child),
@@ -442,11 +580,10 @@ async function createTextComponent(filename, child) {
                                 : undefined,
                 },
                 props: {
-                    children: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??value` : 'states.value',
+                    children: child?.isLoopElement
+                        ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??${JSON.stringify(child?.characters ?? '')}`
+                        : child?.characters,
                     id: sanitizeFullColon(`${child?.name}`)
-                },
-                states: {
-                    value: child?.characters,
                 },
                 frame: child?.childFrame,
             }
@@ -458,9 +595,9 @@ async function createTextComponent(filename, child) {
 async function createTextInputComponent(filename, child, type = 'text') {
     const yamlData = yaml.dump({
         component: {
-            base: 'input',
+            base: 'container',
             modifier: {
-                extend: child?.extendFrame,
+                compose: child?.extendFrame,
                 styles: {
                     ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child),
@@ -469,16 +606,12 @@ async function createTextInputComponent(filename, child, type = 'text') {
                     padding: '0 8px'
                 },
                 props: {
+                    control: 'input',
                     type: 'states.inputType',
                     value: 'states.value',
-                    onChange: 'logics.onTextChange',
+                    onChange: {action: 'state.set', target: 'value', value: 'event.value'},
                     placeholder: 'Type here',
                     id: sanitizeFullColon(`${child?.name}`)
-                },
-                effects: {
-                    onStart: {
-                        body: 'logics.onStart'
-                    }
                 },
                 states: {
                     value: '',
@@ -495,15 +628,10 @@ async function createTextInputComponent(filename, child, type = 'text') {
 async function createContainerComponent(filename, child, backgroundImage) {
     const yamlData = yaml.dump({
         component: {
-            base: 'rectangle',
+            base: 'container',
             modifier: {
                 props: {id: sanitizeFullColon(`${child?.name}`)},
-                extend: child?.extendFrame,
-                effects: {
-                    onStart: {
-                        body: 'logics.onStart'
-                    }
-                },
+                compose: child?.extendFrame,
                 styles: {
                     ...getContainerLikeStyles(child, backgroundImage),
                     ...getSizeStyles(child)
@@ -515,64 +643,42 @@ async function createContainerComponent(filename, child, backgroundImage) {
     await writeFile(filename, yamlData);
 }
 
-async function handleNavigations({srcPath, child}) {
-    const route = id2nameMapCache[child?.transitionNodeID] ?? {type: 'close'};
-    // const currentRoute = id2nameMapCache[child?.interactions[0]?.actions[0]?.destinationId];
-    // console.log(child.name, JSON.stringify(child.interactions,null,2),currentRoute)
-    const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
-
-    await ensurePathExist(logicPath);
-    await ensureFileExist(logicPath);
-    const logicImportFile = await import(absolutePathParse(logicPath));
-
-    const importSetRouteRegex = /import\s*\{\s*setCurrentRoute\s*}\s*from\s*.*routing.mjs['"]\s*;*\s*/g;
-    const importSetRouteMixerRegex = /setCurrentRoute\s*,|,\s*setCurrentRoute/g;
-    const lNwS = (await readFile(logicPath)).toString()
-        .replace(importSetRouteMixerRegex, '')
-        .replace(importSetRouteRegex, '')
-    const modulePaths = child?.module?.split('/')?.filter(x => x !== '')?.map(() => '../')?.join('') ?? '';
-
-    await writeFile(logicPath, `import {setCurrentRoute} from '../${modulePaths}../../routing.mjs';\n${lNwS}`);
-
-    const setRouteRegex = /setCurrentRoute\s*\(\s*.*\s*\)\s*;*\s*/g;
-    const onClickSignatureRegex = /onClick\s*\(\s*data\s*\)\s*\{/g;
-
-    const onClickFnString = logicImportFile?.onClick?.toString() ?? '';
-    if (onClickFnString && onClickFnString !== '') {
-        let newOnClickString;
-        if (setRouteRegex.test(onClickFnString)) {
-            newOnClickString = onClickFnString
-                .replaceAll(setRouteRegex, `setCurrentRoute(${JSON.stringify(route)});\n   `);
-        } else {
-            newOnClickString = onClickFnString
-                .replaceAll(onClickSignatureRegex, `onClick(data) {\n    setCurrentRoute(${JSON.stringify(route)});`);
-        }
-        // const newOnClickString = onClickFnString
-        //     .replaceAll(setRouteRegex, `setCurrentRoute(${JSON.stringify(route)});\n   `);
-        // .replaceAll(onClickSignatureRegex, `onClick(data) {\n    setCurrentRoute(${JSON.stringify(route)});`);
-        const logicFileNwString = (await readFile(logicPath)).toString()
-            .replace(onClickFnString, newOnClickString)
-        await writeFile(logicPath, logicFileNwString);
-    } else {
-        await appendFile(logicPath, `
-/**
-* @param data {
-* {component: {states: *,inputs: *}, args: Array<*>}
-* }
-*/
-export function onClick(data) {
-    setCurrentRoute(${JSON.stringify(route)});
-    // TODO: Implement the logic
-}`);
+function interactionBehavior(child) {
+    const actions = (child?.interactions ?? []).flatMap(interaction => interaction?.actions ?? []).filter(Boolean);
+    const eventActions = [];
+    const states = {};
+    const navigationKinds = new Set(['NAVIGATE', 'OVERLAY', 'SWAP', 'SWAP_OVERLAY', 'BACK', 'CLOSE', 'CLOSE_OVERLAY']);
+    const hasNavigation = actions.some(action => navigationKinds.has(`${action?.navigation ?? action?.type ?? ''}`.toUpperCase())
+        || (`${action?.type ?? ''}`.toUpperCase() === 'NODE' && action?.destinationId));
+    if (hasNavigation) {
+        eventActions.push({action: 'navigation.open', ...resolvePrototypeRoute(child, id2nameMapCache)});
     }
+    for (const action of actions) {
+        const kind = `${action?.type ?? action?.action ?? ''}`.toUpperCase();
+        if (kind === 'CHANGE_TO') {
+            states.variant = child?.id ?? null;
+            eventActions.push({action: 'state.set', target: 'variant', value: action?.destinationId ?? action?.value});
+        }
+        if (kind === 'SET_VARIABLE') {
+            const target = `variable_${`${action?.variableId ?? action?.variableName ?? 'value'}`.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+            const value = action?.variableValue?.value ?? action?.variableValue ?? action?.value ?? null;
+            states[target] = action?.initialValue ?? null;
+            eventActions.push({action: 'state.set', target, value});
+        }
+    }
+    return {
+        states,
+        onClick: eventActions.length === 0
+            ? undefined
+            : eventActions.length === 1
+                ? eventActions[0]
+                : {action: 'sequence', actions: eventActions}
+    };
 }
 
 async function createConditionComponent({filename, child, srcPath}) {
     const baseType = (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
-
-    if (baseType === 'button' && (id2nameMapCache[child?.transitionNodeID] || (Array.isArray(child?.interactions) && child?.interactions?.length > 0))) {
-        await handleNavigations({srcPath, child});
-    }
+    const behavior = interactionBehavior(child);
 
     let isCondition = false;
     let leftName, rightName;
@@ -586,11 +692,12 @@ async function createConditionComponent({filename, child, srcPath}) {
     const yamlData = yaml.dump({
         condition: {
             modifier: {
-                extend: child?.extendFrame,
+                ref: sharedComponentRef({filename, child, srcPath}),
+                compose: child?.extendFrame,
                 styles: child.styles,
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
-                    onClick: baseType === 'button' ? 'logics.onClick' : undefined
+                    onClick: behavior.onClick
                 },
                 left: (isCondition && leftName)
                     ? `./${leftName}.yml`
@@ -598,18 +705,17 @@ async function createConditionComponent({filename, child, srcPath}) {
                 right: (isCondition && rightName)
                     ? `./${rightName}.yml`
                     : undefined,
-                effects: {
-                    onStart: {
-                        body: 'logics.onStart'
-                    }
-                },
+                states: isCondition || Object.keys(behavior.states).length > 0 ? {
+                    ...(isCondition ? {condition: false} : {}),
+                    ...behavior.states,
+                } : undefined,
                 frame: {
                     base: child?.mainFrame?.base,
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}_frame'` : `${child?.name}_frame`),
                     styles: {
                         ...child?.mainFrame?.styles,
                         cursor: baseType === 'button' ? 'pointer' : undefined,
-                        overflow: 'auto',
+                        overflow: child?.clipsContent ? 'hidden' : undefined,
                     }
                 },
             }
@@ -622,65 +728,19 @@ function getBaseType(child) {
     return (`${child?.name}`.split('_').pop() ?? '').toLowerCase();
 }
 
-async function ensureLoopDataExist({srcPath, child}) {
-    const dummyLength = (child.childrenData ?? [{_key: Math.random()}]).length;
-    const dummyChildren = `new Array(${dummyLength}).fill({}).map(()=>({_key:Math.random()}))`;
-
-    const logicPath = resolve(join(srcPath, 'modules', child?.module ?? '', 'logics', `${child?.name}.mjs`));
-
-    await ensurePathExist(logicPath);
-    await ensureFileExist(logicPath);
-    const logicImportFile = await import(absolutePathParse(logicPath));
-
-    const setDataRegex1 = /states\s*.\s*setData\s*\(\s*(.*\s*)+?\)/g;
-    const setDataRegex2 = /states\s*.\s*setData\s*\(\s*\w*\s*\)/g;
-    const onStartSignatureRegex = /onStart\s*\(\s*data\s*\)\s*\{/g;
-
-    const onStartFnString = logicImportFile?.onStart?.toString() ?? '';
-    if (onStartFnString && onStartFnString !== '') {
-        const condition1 = setDataRegex1.test(onStartFnString);
-        const condition2 = setDataRegex2.test(onStartFnString);
-        if (condition1) {
-            return
-        }
-        if (condition2) {
-            return
-        }
-        const newOnStartString = onStartFnString
-            .replaceAll(onStartSignatureRegex, `onStart(data) {\n    data.component.states.setData(${dummyChildren.replaceAll('"', '')});`);
-        const logicFileNwString = (await readFile(logicPath))
-            .toString().replace(onStartFnString, newOnStartString)
-        await writeFile(logicPath, logicFileNwString);
-    } else {
-        await appendFile(logicPath, `
-/**
-* @param data {
-* {component: {states: *,inputs: *}, args: Array<*>}
-* }
-*/
-export function onStart(data) {
-    data.component.states.setData(${dummyChildren.replaceAll('"', '')});
-}`);
-    }
-}
-
 async function createLoopComponent({filename, child, srcPath}) {
     child = structuredClone(child);
-    await ensureLoopDataExist({srcPath, child});
     const last = child?.children?.[0];
     const yamlData = yaml.dump({
         loop: {
             modifier: {
-                extend: child?.extendFrame,
+                ref: sharedComponentRef({filename, child, srcPath}),
+                compose: child?.extendFrame,
                 styles: {
                     ...child.styles,
-                    overflow: 'auto'
+                    overflow: child?.clipsContent ? 'hidden' : undefined
                 },
-                effects: {
-                    onStart: {
-                        body: 'logics.onStart'
-                    }
-                },
+                states: {data: child.childrenData ?? []},
                 props: {
                     id: sanitizeFullColon(`${child?.name}`)
                 },
@@ -690,7 +750,7 @@ async function createLoopComponent({filename, child, srcPath}) {
                     id: child?.mainFrame?.id,
                     styles: {
                         ...child?.mainFrame?.styles,
-                        overflow: 'auto',
+                        overflow: child?.clipsContent ? 'hidden' : undefined,
                     }
                 },
             }
@@ -746,18 +806,12 @@ function dumpImageYaml({child, srcUrl, objectFit = 'cover'}) {
         component: {
             base: 'image',
             modifier: {
-                states: {srcUrl: srcUrl ?? ''},
                 props: {
                     id: sanitizeFullColon(`${child?.name}`),
                     alt: child?.name,
-                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??srcUrl` : 'states.srcUrl',
+                    src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??${srcUrl ?? ''}` : srcUrl ?? '',
                 },
-                effects: {
-                    onStart: {
-                        body: 'logics.onStart'
-                    }
-                },
-                extend: child?.extendFrame,
+                compose: child?.extendFrame,
                 styles: {
                     ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child),
@@ -825,4 +879,3 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
         }
     }
 }
-

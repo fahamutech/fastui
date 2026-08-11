@@ -21,7 +21,7 @@ watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename)
 
 export const specFile = `
 import React from 'react';
-import {getColor} from '../../test/blueprints/modules/logics/test_comp.mjs';
+import {getColor} from '../services/test_comp.mjs';
 
 // eslint-disable-next-line react/prop-types
 export function TestComp({view, loopElement, loopIndex}) {
@@ -38,7 +38,7 @@ export function TestComp({view, loopElement, loopIndex}) {
     }), [component]);
     
     return (
-        <div id={''} style={{"display": "flex", "flexDirection": "column"}}>
+        <div id={''} style={{"boxSizing": "border-box", "minWidth": 0, "display": "flex", "flexDirection": "column"}}>
             <div style={style}></div>
             {view}
         </div>

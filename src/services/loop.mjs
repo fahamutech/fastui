@@ -1,11 +1,13 @@
 import {
     getComponentMemoStatement,
+    getActionImportStatement,
     getComponentsImportStatement,
     getEffectsStatement,
     getFileName,
     getFilenameFromBlueprintPath,
     getFrameStatement,
     getLogicsImportStatement,
+    getModuleStoreImportStatement,
     getPropsStatement,
     getSrcPathFromBlueprintPath,
     getStatesStatement,
@@ -15,6 +17,8 @@ import {
 import {getFeed, getFrame} from "./modifier.mjs";
 import {ensurePathExist, firstUpperCase, removeWhiteSpaces, snakeToCamel} from "../utils/index.mjs";
 import {writeFile} from "node:fs/promises";
+import {getTemplateSelected} from "../utils/config.mjs";
+import {composeFlutterLoop} from "./templates/flutter/generator.mjs";
 
 function getContentViewWithoutExtend(data) {
     const feed = getFeed(data);
@@ -42,11 +46,16 @@ export async function composeLoop({data, path, projectPath}) {
     if (!data) {
         return;
     }
-    const statesInString = getStatesStatement(data);
+    if (getTemplateSelected() === 'flutter') {
+        return composeFlutterLoop({data, path, projectPath});
+    }
+    const statesInString = getStatesStatement(data, path);
     const effectsString = getEffectsStatement(data);
     const componentMemoStatement = getComponentMemoStatement(data);
     const logicsImportStatement = await getLogicsImportStatement(data, path, projectPath);
+    const storeStatement = getModuleStoreImportStatement(data, path);
     const componentsImportStatement = getComponentsImportStatement(data);
+    const actionImportStatement = getActionImportStatement(data, path);
     const styleStatement = getStyleStatement(data);
 
     const viewWithoutExtend = getContentViewWithoutExtend(data);
@@ -54,7 +63,9 @@ export async function composeLoop({data, path, projectPath}) {
     const content = `
 import React from 'react';
 ${logicsImportStatement}
+${storeStatement}
 ${componentsImportStatement}
+${actionImportStatement}
 
 let keyIndex=0;
 

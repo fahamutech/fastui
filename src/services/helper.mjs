@@ -3,11 +3,14 @@ import {join, resolve} from "node:path";
 import {readFile, writeFile} from "node:fs/promises";
 import os from "os";
 import {getFileName} from "./index.mjs";
+import {routeFromSurfaceName} from "./navigation.mjs";
+import {flutterRuntimeSource} from "./templates/flutter/generator.mjs";
+import {reactAppRouteSource, reactGuardSource, reactRoutingSource} from './routing-source.mjs';
+import {flutterRoutingGuardSource} from './templates/flutter/runtime.mjs';
 
 export async function loadEnvFile() {
     try {
         const filePath = resolve(join('./.env'));
-        await ensureFileExist(filePath)
         const data = await readFile(filePath, 'utf-8');
         const lines = data.split('\n');
         lines.forEach(line => {
@@ -38,7 +41,25 @@ export function absolutePathParse(path) {
  * @param initialId {string}
  * @return {Promise<*>}
  */
-export async function ensureAppRouteFileExist({pages, initialId}) {
+export async function ensureAppRouteFileExist({pages, initialId, template = 'reactjs'}) {
+    if (template === 'flutter') {
+        return ensureFlutterAppRouteFileExist({pages, initialId});
+    }
+    const nextComponentFilePath = resolve(join('src', 'AppRoute.jsx'));
+    const nextStateFilePath = resolve(join('src', 'routing.mjs'));
+    const nextGuardFilePath = resolve(join('src', 'routing_guard.mjs'));
+    await ensureFileExist(nextGuardFilePath);
+    let currentGuard = '';
+    try { currentGuard = await readFile(nextGuardFilePath, 'utf8'); } catch (_) {}
+    const legacyDefaultGuard = currentGuard.includes('callback(next);') && !currentGuard.includes("decision: 'allow'");
+    if (!currentGuard.includes('beforeNavigate') || legacyDefaultGuard) {
+        await writeFile(nextGuardFilePath, reactGuardSource);
+    }
+    await writeFile(nextStateFilePath, reactRoutingSource());
+    await writeFile(nextComponentFilePath, reactAppRouteSource({pages, initialId}));
+    return;
+
+    /* c8 ignore start -- retained temporarily for old generated-project compatibility */
     const rawInitialPage = pages
         .filter(x => (x?.id === initialId) && `${x?.name}`.trim()?.endsWith('_page'))
         .shift();
@@ -198,6 +219,58 @@ export function AppRoute(){
     )
 }
     `);
+    /* c8 ignore stop */
+}
+
+async function ensureFlutterAppRouteFileExist({pages, initialId}) {
+    const rawInitialPage = pages.find(page => page?.id === initialId && routeFromSurfaceName(page?.name).type === 'page');
+    const initialPage = routeFromSurfaceName(
+        rawInitialPage?.name ?? pages.find(page => routeFromSurfaceName(page?.name).type === 'page')?.name ?? 'home_page'
+    ).name;
+    const routes = pages.map(page => ({
+        ...page,
+        ...routeFromSurfaceName(page?.name)
+    }));
+    const imports = routes.map(page => {
+        const module = `${page?.module ?? ''}`.replace(/^\/+|\/+$/g, '');
+        return `import './modules/${module ? `${module}/` : ''}${page.surfaceName}.dart';`;
+    }).join('\n');
+    const routeEntries = routes.map(page =>
+        `  '${page.name}': FastUISurfaceDefinition(type: '${page.type}', builder: () => FastUI${getFileName(page.surfaceName)}()),`
+    ).join('\n');
+    const outputPath = resolve(join('lib', 'app_route.dart'));
+    const guardPath = resolve(join('lib', 'routing_guard.dart'));
+    await ensureFileExist(outputPath);
+    await ensureFileExist(guardPath);
+    let guardSource = '';
+    try { guardSource = await readFile(guardPath, 'utf8'); } catch (_) {}
+    if (!guardSource.includes('beforeNavigate')) await writeFile(guardPath, flutterRoutingGuardSource);
+    await writeFile(resolve(join('lib', 'fastui_runtime.dart')), flutterRuntimeSource());
+    await writeFile(outputPath, `import 'package:flutter/material.dart';
+import 'fastui_runtime.dart';
+import 'routing_guard.dart';
+${imports}
+
+final fastUIRouter = FastUINavigation.createRouter(
+  routes: <String, FastUISurfaceDefinition>{
+${routeEntries}
+  },
+  initialRoute: '${initialPage}',
+  guard: beforeNavigate,
+);
+
+class FastUIAppRoute extends StatelessWidget {
+  const FastUIAppRoute({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp.router(
+      routerDelegate: fastUIRouter,
+      routeInformationParser: const FastUIRouteInformationParser(),
+    );
+  }
+}
+`);
 }
 
 export async function ensureSchemaFileExist() {
@@ -224,6 +297,9 @@ export async function ensureSchemaFileExist() {
             "extend": {
               "$ref": "#/$defs/local_path"
             },
+            "ref": {
+              "$ref": "#/$defs/local_path"
+            },
             "feed": {
               "$ref": "#/$defs/local_path"
             },
@@ -239,7 +315,7 @@ export async function ensureSchemaFileExist() {
               "oneOf": [
                 {
                   "type": "string",
-                  "pattern": "^(logics\\\\.)[a-zA-Z0-9]+"
+                  "pattern": "^((services|logics)\\\\.)[a-zA-Z0-9]+"
                 },
                 {
                   "$ref": "#/$defs/css"
@@ -261,6 +337,9 @@ export async function ensureSchemaFileExist() {
           "type": "object",
           "properties": {
             "extend": {
+              "$ref": "#/$defs/local_path"
+            },
+            "ref": {
               "$ref": "#/$defs/local_path"
             },
             "left": {
@@ -316,7 +395,7 @@ export async function ensureSchemaFileExist() {
               "oneOf": [
                 {
                   "type": "string",
-                  "pattern": "^(logics\\\\.)[a-zA-Z0-9]+"
+                  "pattern": "^((services|logics)\\\\.)[a-zA-Z0-9]+"
                 },
                 {
                   "$ref": "#/$defs/css"
@@ -340,9 +419,8 @@ export async function ensureSchemaFileExist() {
         "base": {
           "type": "string",
           "enum": [
-            "rectangle",
+            "container",
             "image",
-            "input",
             "text"
           ]
         },
@@ -350,6 +428,9 @@ export async function ensureSchemaFileExist() {
           "type": "object",
           "properties": {
             "extend": {
+              "$ref": "#/$defs/local_path"
+            },
+            "ref": {
               "$ref": "#/$defs/local_path"
             },
             "props": {
@@ -372,7 +453,7 @@ export async function ensureSchemaFileExist() {
               "oneOf": [
                 {
                   "type": "string",
-                  "pattern": "^(logics\\\\.)[a-zA-Z0-9]+"
+                  "pattern": "^((services|logics)\\\\.)[a-zA-Z0-9]+"
                 },
                 {
                   "$ref": "#/$defs/css"
@@ -2134,7 +2215,7 @@ export async function ensureSchemaFileExist() {
 }`);
 }
 
-export async function ensureWatchFileExist() {
+export async function ensureWatchFileExist(blueprintRoot = join('src', 'blueprints')) {
     const filePath = resolve(join('watch.mjs'));
     await ensureFileExist(filePath);
     await writeFile(filePath, `import {watch} from 'node:fs'
@@ -2143,6 +2224,7 @@ import {fileURLToPath} from 'node:url';
 import {exec} from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const blueprintRoot = ${JSON.stringify(blueprintRoot.split('\\').join('/'))};
 
 let calledTimes = 0;
 const changes = {};
@@ -2154,7 +2236,7 @@ function getTimeout() {
             if (!\`\${filename}\`.endsWith('.yml') || \`\${filename}\`.endsWith('~')) {
                 return;
             }
-            const file = \`./src/blueprints/\${filename}\`;
+            const file = \`./\${blueprintRoot}/\${filename}\`;
             delete changes[filename];
             calledTimes-=1;
             exec(\`fastui specs build \${file}\`, {
@@ -2165,7 +2247,7 @@ function getTimeout() {
     }, calledTimes > 0 ? 2000 : 100);
 }
 
-watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename) => {
+watch(join(__dirname, ...blueprintRoot.split('/')), {recursive: true}, (event, filename) => {
     if (!\`\${filename}\`.endsWith('.yml') || \`\${filename}\`.endsWith('~')) {
         return;
     }
@@ -2183,12 +2265,13 @@ watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename)
 `);
 }
 
-export async function ensureBlueprintFolderExist() {
-    const filePath = resolve(join('src', 'blueprints'));
+export async function ensureBlueprintFolderExist(blueprintRoot = join('src', 'blueprints')) {
+    const filePath = resolve(blueprintRoot);
     await ensurePathExist(filePath);
 }
 
-export async function ensureStartScript() {
+export async function ensureStartScript(template = 'reactjs', blueprintRoot = join('src', 'blueprints')) {
+    if (template !== 'reactjs') return;
     const isWin = os.platform() === 'win32';
     const joiner = isWin ? '|' : '&';
     const filePath = resolve(join('package.json'));
@@ -2196,14 +2279,15 @@ export async function ensureStartScript() {
     const file = await readFile(filePath, {encoding: 'utf-8'});
     const fileMap = JSON.parse(`${file}`.trim().startsWith('{') ? file : '"{}"');
     const {scripts = {}} = fileMap;
-    const {start = 'echo "no command"'} = scripts;
-    const startParts = `${start}`.split(joiner);
-    const lastScript = startParts.pop().trim();
+    const {start, dev = 'vite'} = scripts;
+    const current = start || dev;
+    const startParts = `${current}`.split(joiner).map(value => value.trim());
+    const lastScript = startParts.find(value => !value.includes('watch.mjs') && !value.includes('fastui specs build')) || dev;
     await writeFile(filePath, JSON.stringify({
         ...fileMap,
         scripts: {
             ...scripts,
-            start: `node ./watch.mjs ${joiner} fastui specs build ./src/blueprints ${joiner} ${lastScript}`
+            start: `node ./watch.mjs ${joiner} fastui specs build ./${blueprintRoot.split('\\').join('/')} ${joiner} ${lastScript}`
         }
     }, null, 2));
 }

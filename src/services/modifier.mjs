@@ -42,7 +42,15 @@ export function getFrame(data) {
 }
 
 export function getExtend(data){
-    return data?.modifier?.extend;
+    return data?.modifier?.compose ?? data?.modifier?.extend;
+}
+
+export function getCompose(data){
+    return data?.modifier?.compose ?? data?.modifier?.extend;
+}
+
+export function getRef(data){
+    return data?.modifier?.ref ?? data?.ref;
 }
 
 export function getLeft(data){

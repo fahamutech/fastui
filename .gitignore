@@ -4,5 +4,7 @@ node_modules
 /src/blueprints/
 /src/modules
 test/modules/
+test/services/
 test/blueprints/modules/logics
 watch.mjs
+.fastui/

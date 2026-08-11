@@ -22,6 +22,9 @@
             "extend": {
               "$ref": "#/$defs/local_path"
             },
+            "ref": {
+              "$ref": "#/$defs/local_path"
+            },
             "feed": {
               "$ref": "#/$defs/local_path"
             },
@@ -37,7 +40,7 @@
               "oneOf": [
                 {
                   "type": "string",
-                  "pattern": "^(logics\\.)[a-zA-Z0-9]+"
+                  "pattern": "^((services|logics)\\.)[a-zA-Z0-9]+"
                 },
                 {
                   "$ref": "#/$defs/css"
@@ -59,6 +62,9 @@
           "type": "object",
           "properties": {
             "extend": {
+              "$ref": "#/$defs/local_path"
+            },
+            "ref": {
               "$ref": "#/$defs/local_path"
             },
             "left": {
@@ -114,7 +120,7 @@
               "oneOf": [
                 {
                   "type": "string",
-                  "pattern": "^(logics\\.)[a-zA-Z0-9]+"
+                  "pattern": "^((services|logics)\\.)[a-zA-Z0-9]+"
                 },
                 {
                   "$ref": "#/$defs/css"
@@ -138,9 +144,8 @@
         "base": {
           "type": "string",
           "enum": [
-            "rectangle",
+            "container",
             "image",
-            "input",
             "text"
           ]
         },
@@ -148,6 +153,9 @@
           "type": "object",
           "properties": {
             "extend": {
+              "$ref": "#/$defs/local_path"
+            },
+            "ref": {
               "$ref": "#/$defs/local_path"
             },
             "props": {
@@ -170,7 +178,7 @@
               "oneOf": [
                 {
                   "type": "string",
-                  "pattern": "^(logics\\.)[a-zA-Z0-9]+"
+                  "pattern": "^((services|logics)\\.)[a-zA-Z0-9]+"
                 },
                 {
                   "$ref": "#/$defs/css"
