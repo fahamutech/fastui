@@ -1,14 +1,14 @@
-import {composeComponent} from '../services/component.mjs';
-import {composeCondition} from '../services/condition.mjs';
-import {composeLoop} from '../services/loop.mjs';
-import {readSpecs, specToJSON} from '../services/specs.mjs';
-import {normalizeSpecDocument, prepareBehavior} from '../compiler/normalize.mjs';
+import {composeComponent} from './component.mjs';
+import {composeCondition} from './condition.mjs';
+import {composeLoop} from './loop.mjs';
+import {readSpecs, specToJSON} from '../specs/reader.mjs';
+import {normalizeSpecDocument, prepareBehavior} from './legacy-spec.mjs';
 import {copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {basename, dirname, resolve, sep} from 'node:path';
-import {getTemplateSelected} from '../utils/config.mjs';
-import {getStates} from '../services/modifier.mjs';
+import {getTemplateSelected} from '../tooling/config.mjs';
+import {getStates} from './modifier.mjs';
 import {identifier, pascalIdentifier, relativeImport, specStructure} from './project-structure.mjs';
-import {flutterRuntimeSource} from '../services/templates/flutter/generator.mjs';
+import {flutterRuntimeSource} from './templates/flutter/generator.mjs';
 
 async function syncTranslatedAssets(projectPath) {
     const source = resolve(projectPath, '.fastui', 'assets', 'figma');
@@ -267,7 +267,7 @@ async function writeModuleStores(results, template) {
 export async function generateSpecFile({specPath, projectPath = process.cwd()}) {
     const document = await specToJSON(specPath);
     const normalized = normalizeSpecDocument(document);
-    if (!normalized.data || normalized.kind === 'primitive' || normalized.kind === 'unknown') {
+    if (!normalized.data || normalized.kind === 'unknown') {
         return {specPath, kind: normalized.kind, generated: false};
     }
     const data = prepareBehavior(normalized.kind, normalized.data);

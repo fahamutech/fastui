@@ -39,7 +39,9 @@ export function TestComp({view, loopElement, loopIndex}) {
     
     return (
         <div id={''} style={{"boxSizing": "border-box", "minWidth": 0, "display": "flex", "flexDirection": "column"}}>
-            <div style={style}></div>
+            <div id={''} style={{"boxSizing": "border-box", "minWidth": 0, "display": "flex", "flexDirection": "column"}}>
+                <div style={style}></div>
+            </div>
             {view}
         </div>
     );

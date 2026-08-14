@@ -33,6 +33,10 @@
               "properties": {
                 "children": {
                   "type": "string"
+                },
+                "scroll": {
+                  "type": "string",
+                  "enum": ["vertical", "horizontal", "both"]
                 }
               }
             },
@@ -49,6 +53,9 @@
             },
             "frame": {
               "$ref": "#/$defs/frame"
+            },
+            "wrapper": {
+              "$ref": "#/$defs/wrapper"
             }
           },
           "required": ["feed"]
@@ -75,6 +82,9 @@
             },
             "frame": {
               "$ref": "#/$defs/frame"
+            },
+            "wrapper": {
+              "$ref": "#/$defs/wrapper"
             }
           }
         }
@@ -85,6 +95,48 @@
     }
   },
   "$defs": {
+    "wrapper": {
+      "description": "Positions this node relative to the next composed sibling ({view}). Driven by the PARENT axis. Carries only base + optional id; real visual styling belongs on frame.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "column.start",
+            "column.end",
+            "row.start",
+            "row.end",
+            "column.start.stack",
+            "column.end.stack",
+            "row.start.stack",
+            "row.end.stack"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "base": {
+              "type": "string",
+              "enum": [
+                "column.start",
+                "column.end",
+                "row.start",
+                "row.end",
+                "column.start.stack",
+                "column.end.stack",
+                "row.start.stack",
+                "row.end.stack"
+              ]
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "base"
+          ]
+        }
+      ]
+    },
     "frame": {
       "oneOf": [
         {
@@ -187,6 +239,9 @@
             },
             "frame": {
               "$ref": "#/$defs/frame"
+            },
+            "wrapper": {
+              "$ref": "#/$defs/wrapper"
             }
           }
         }

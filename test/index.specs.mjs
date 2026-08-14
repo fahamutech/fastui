@@ -2,14 +2,15 @@ import {expect} from "chai";
 import {mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from "node:fs/promises";
 import {join, resolve} from "node:path"
 import {tmpdir} from "node:os";
-import {readSpecs, specToJSON} from "../src/services/specs.mjs";
-import {composeComponent} from "../src/services/component.mjs";
-import {composeCondition} from "../src/services/condition.mjs";
-import {composeLoop} from "../src/services/loop.mjs";
-import {ensureAppRouteFileExist, ensureBlueprintFolderExist, ensureWatchFileExist} from "../src/services/helper.mjs";
-import {initializeProject} from "../src/services/project.mjs";
-import {resolvePrototypeRoute, routeFromSurfaceName} from "../src/services/navigation.mjs";
-import {fetchFigmaFile, getDesignDocument, getPagesAndTraverseChildren, walkFrameChildren} from "../src/services/automation/figma.mjs";
+import {readSpecs, specToJSON} from "../src/specs/reader.mjs";
+import {composeComponent} from "../src/generators/component.mjs";
+import {composeCondition} from "../src/generators/condition.mjs";
+import {composeLoop} from "../src/generators/loop.mjs";
+import {ensureAppRouteFileExist} from "../src/generators/routing.mjs";
+import {ensureBlueprintFolderExist, ensureWatchFileExist} from "../src/tooling/scaffold.mjs";
+import {initializeProject} from "../src/tooling/project.mjs";
+import {routeFromSurfaceName} from "../src/shared/routing.mjs";
+import {fetchFigmaFile, getDesignDocument, getPagesAndTraverseChildren, resolvePrototypeRoute, walkFrameChildren} from "../src/translators/figma/index.mjs";
 import {generateCodeFromSpecs} from '../src/generators/spec-to-code.mjs';
 import {specFile, logicFile} from './data.mjs'
 
@@ -118,7 +119,7 @@ describe('Specs', function () {
                 modifier: {left: './label.yml', props: {onClick: 'logics.onClick'}, frame: {base: 'row.start'}}
             }});
             await composeLoop({path: listPath, projectPath: root, data: {
-                modifier: {feed: './label.yml', frame: {base: 'column.start'}}
+                modifier: {feed: './label.yml', props: {scroll: 'vertical'}, frame: {base: 'column.start'}}
             }});
             await composeComponent({path: staticPath, projectPath: root, data: {
                 base: 'container', modifier: {frame: {base: 'column.start'}}
@@ -137,40 +138,53 @@ describe('Specs', function () {
             expect(button).to.include('GestureDetector(onTap:');
             expect(button).to.include('FastUILabel(');
             expect(list).to.include('List<dynamic>.from(stateData');
+            expect(list).to.include('ListView.builder(scrollDirection: Axis.vertical');
             expect(staticWidget).to.include('extends StatelessWidget');
             expect(staticWidget).not.to.include('void initState()');
             expect(await readFile(join(root, 'lib', 'services', 'button.dart'), 'utf8')).to.include('dynamic onClick');
         });
 
-        it('resolves a v2 primitive ref and generates a stateless component', async function () {
-            const primitiveRoot = join(root, 'lib', 'blueprints', 'primitives');
-            const moduleRoot = join(root, 'lib', 'blueprints', 'modules');
-            await mkdir(primitiveRoot, {recursive: true});
-            await mkdir(moduleRoot, {recursive: true});
-            await writeFile(join(primitiveRoot, 'text.spec.yml'), `version: fastui/v2
-kind: primitive
-id: primitive.text
-node:
-  type: text
-props:
-  value: ''
-`);
-            const titlePath = join(moduleRoot, 'title.spec.yml');
-            await writeFile(titlePath, `version: fastui/v2
-kind: component
-id: example.title
-ref: ../primitives/text.spec.yml
-props:
-  value: Hello from v2
-style:
-  typography:
-    fontSize: 18
-`);
-            await generateCodeFromSpecs({root: titlePath, projectPath: root});
-            const generated = await readFile(join(root, 'lib', 'modules', 'title_spec.dart'), 'utf8');
-            expect(generated).to.include('extends StatelessWidget');
-            expect(generated).to.include("'Hello from v2'");
-            expect(generated).to.include('fontSize: 18');
+        it('generates scrolling only when a loop spec explicitly requests it', async function () {
+            const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
+            const feedPath = join(flutterRoot, 'feed.yml');
+            const scrollingPath = join(flutterRoot, 'scrolling.yml');
+            const staticPath = join(flutterRoot, 'static_loop.yml');
+            await writeFile(feedPath, 'component: {}');
+            await writeFile(scrollingPath, 'loop: {}');
+            await writeFile(staticPath, 'loop: {}');
+            await composeLoop({path: scrollingPath, projectPath: root, data: {
+                modifier: {feed: './feed.yml', props: {scroll: 'vertical'}, states: {data: []}, frame: {base: 'column.start'}}
+            }});
+            await composeLoop({path: staticPath, projectPath: root, data: {
+                modifier: {feed: './feed.yml', states: {data: []}, frame: {base: 'column.start'}}
+            }});
+            const scrollingFlutter = await readFile(join(root, 'lib', 'modules', 'scrolling.dart'), 'utf8');
+            const staticFlutter = await readFile(join(root, 'lib', 'modules', 'static_loop.dart'), 'utf8');
+            expect(scrollingFlutter).to.include('ListView.builder(scrollDirection: Axis.vertical');
+            expect(staticFlutter).not.to.include('ListView.builder');
+            expect(staticFlutter).not.to.include('SingleChildScrollView');
+
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const reactRoot = join(root, 'src', 'blueprints', 'modules');
+            await mkdir(reactRoot, {recursive: true});
+            const reactFeed = join(reactRoot, 'feed.yml');
+            const reactScrolling = join(reactRoot, 'scrolling.yml');
+            const reactStatic = join(reactRoot, 'static_loop.yml');
+            await writeFile(reactFeed, 'component: {}');
+            await writeFile(reactScrolling, 'loop: {}');
+            await writeFile(reactStatic, 'loop: {}');
+            await composeLoop({path: reactScrolling, projectPath: root, data: {
+                modifier: {feed: './feed.yml', props: {scroll: 'horizontal'}, states: {data: []}, frame: {base: 'row.start'}}
+            }});
+            await composeLoop({path: reactStatic, projectPath: root, data: {
+                modifier: {feed: './feed.yml', states: {data: []}, frame: {base: 'row.start'}}
+            }});
+            const scrollingReact = await readFile(join(root, 'src', 'modules', 'scrolling.jsx'), 'utf8');
+            const staticReact = await readFile(join(root, 'src', 'modules', 'static_loop.jsx'), 'utf8');
+            expect(scrollingReact).to.include("overflowX: 'auto'");
+            expect(scrollingReact).not.to.include('scroll=');
+            expect(staticReact).not.to.include('overflowX');
+            expect(staticReact).not.to.include('overflowY');
         });
 
         it('initializes a Flutter project and selects lib/blueprints', async function () {
@@ -185,8 +199,6 @@ style:
             expect(await readFile(join(root, 'lib', 'main.dart'), 'utf8')).to.include('FastUIAppRoute');
             expect(await readFile(join(root, 'lib', 'main.dart'), 'utf8')).to.include('FastUIStateScope');
             expect(await readFile(join(root, 'lib', 'stores', 'observable_store.dart'), 'utf8')).to.include('extends ChangeNotifier');
-            expect(await readFile(join(root, 'lib', 'blueprints', 'primitives', 'container.spec.yml'), 'utf8')).to.include('type: container');
-            expect(JSON.parse(await readFile(join(root, 'fastui.v2.schema.json'), 'utf8')).properties.node.properties.type.enum).to.deep.equal(['text', 'image', 'container']);
         });
 
         it('initializes a ReactJS project and selects src/blueprints', async function () {
@@ -200,7 +212,6 @@ style:
             expect(await readFile(join(root, 'src', 'main.jsx'), 'utf8')).to.include('ReactDOM.createRoot');
             expect(await readFile(join(root, 'src', 'stores', 'observable_store.mjs'), 'utf8')).to.include('BehaviorSubject');
             expect(await readFile(join(root, 'src', 'stores', 'use_observable.mjs'), 'utf8')).to.include('useSyncExternalStore');
-            expect(await readFile(join(root, 'src', 'blueprints', 'primitives', 'text.spec.yml'), 'utf8')).to.include('type: text');
         });
 
         it('keeps static React components free of state and lifecycle effects', async function () {
@@ -291,7 +302,10 @@ style:
             expect(routing).to.include("source = 'action'");
             expect(appRoute).to.include('lazy(() => import(');
             expect(appRoute).to.include('getSheetRoute');
-            expect(appRoute).to.include('data-fastui-sheet');
+            expect(appRoute).to.include('surfacePresentations');
+            expect(appRoute).to.include('data-fastui-surface');
+            expect(appRoute).not.to.include("overflow: 'auto'");
+            expect(appRoute).not.to.include("overflowY: 'auto'");
 
             await writeFile(join(root, 'src', 'routing_guard.mjs'), 'export async function beforeNavigate() { return {decision: "cancel"}; }\n');
             await ensureAppRouteFileExist({template: 'reactjs', initialId: 'home', pages});
@@ -564,7 +578,12 @@ style:
             await ensureAppRouteFileExist({
                 template: 'flutter',
                 initialId: 'home',
-                pages: children.map(page => ({name: page.name, module: page.module, id: page.id}))
+                pages: children.map(page => ({
+                    name: page.name,
+                    module: page.module,
+                    id: page.id,
+                    presentation: page.surfacePresentation,
+                }))
             });
             await generateCodeFromSpecs({root: srcPath, projectPath: root});
 
@@ -575,6 +594,7 @@ style:
             const guard = await readFile(join(root, 'lib', 'routing_guard.dart'), 'utf8');
             const instanceSpec = await readFile(join(srcPath, 'modules', 'home_page', 'ilabel_Primary_label.yml'), 'utf8');
             const sharedSpec = await readFile(join(srcPath, 'modules', 'shared', 'common', 'ishared_text_Label.yml'), 'utf8');
+            const sheetSpec = await readFile(join(srcPath, 'modules', 'choices_sheet', 'choices_sheet.yml'), 'utf8');
             expect(openSpec).to.include('action: navigation.open');
             expect(openSpec).to.include('type: sheet');
             expect(openSpec).not.to.include('onStart');
@@ -585,7 +605,9 @@ style:
             expect(openWidget).to.include('barrierDismissible: true');
             expect(openWidget).to.include('extends StatelessWidget');
             expect(openSpec).to.match(/width:\s+100%/);
-            expect(appRoute).to.include("'choices': FastUISurfaceDefinition(type: 'sheet', builder: () => FastUIChoicesSheet())");
+            expect(appRoute).to.include("'choices': FastUISurfaceDefinition(");
+            expect(appRoute).to.include("type: 'sheet'");
+            expect(appRoute).to.include('presentation: FastUISurfacePresentation(');
             expect(appRoute).to.include('MaterialApp.router');
             expect(appRoute).to.include('guard: beforeNavigate');
             expect(runtime).to.include('showModalBottomSheet<T>');
@@ -594,13 +616,19 @@ style:
             expect(runtime).to.include('Future<bool> popRoute()');
             expect(runtime).to.include('ValueNotifier<FastUIRouteRef?> currentRoute');
             expect(runtime).to.include('Material(type: MaterialType.transparency');
-            expect(runtime).to.include('FastUIScrollableSurface(child: FastUINavigation.surface(name))');
+            expect(runtime).to.include('child: FastUINavigation.surface(name)');
+            expect(runtime).not.to.include('FastUIScrollableSurface');
+            expect(runtime).to.include('presentation.safeArea');
+            expect(runtime).to.include('presentation.barrierColor');
             expect(runtime).to.include('SvgPicture.asset');
             expect(guard).to.include('Future<FastUINavigationDecision> beforeNavigate');
             expect(instanceSpec).to.include('ref: ../shared/common/ishared_text_Label.yml');
             expect(instanceSpec).to.include('compose: ./iopen_Open_button.yml');
             expect(sharedSpec).to.include('condition:');
             expect(sharedSpec).not.to.include('onStart');
+            expect(sheetSpec).to.include('surface:');
+            expect(sheetSpec).to.include('mode: overlay');
+            expect(sheetSpec).to.include('scroll: none');
             const resolvedInstance = await specToJSON(join(srcPath, 'modules', 'home_page', 'ilabel_Primary_label.yml'));
             expect(resolvedInstance.condition.modifier).not.to.have.property('ref');
             expect(resolvedInstance.condition.modifier.left).to.equal('./ilabel_copy_Copy_text.yml');
