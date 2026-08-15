@@ -351,6 +351,253 @@ class FastUINavigation {
   }
 }
 
+/// Shared style utilities used by every generated widget that needs to apply
+/// CSS-flavoured style maps (background, width/height with px suffix, named
+/// colours, etc.) at runtime — e.g. when a parent spec passes overrideStyles.
+///
+/// Keeping the parsing logic here means the generated widget files stay clean:
+/// they call FastUIStyleHelper.buildBox(baseStyles, overrideStyles, child: ...)
+/// and nothing else.
+class FastUIStyleHelper {
+  FastUIStyleHelper._();
+
+  static ThemeData lightTheme() => ThemeData(
+    colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+    useMaterial3: true,
+  );
+
+  static ThemeData darkTheme() => ThemeData(
+    colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue, brightness: Brightness.dark),
+    useMaterial3: true,
+  );
+
+  /// Parses a CSS length value that may carry a 'px' suffix.
+  static double? parseLen(dynamic v) {
+    if (v is num) return v.toDouble();
+    if (v is String) {
+      return double.tryParse(v.replaceAll(RegExp(r'[a-zA-Z%]+\$'), ''));
+    }
+    return null;
+  }
+
+  /// Parses a CSS color string: hex #RRGGBB / #RRGGBBAA, rgba(), or a named
+  /// CSS color keyword.
+  static Color? parseColor(dynamic raw) {
+    if (raw is! String) return null;
+    final v = raw.trim();
+    if (v.startsWith('#') && v.length >= 7) {
+      final hex = v.length == 7 ? 'FF\${v.substring(1)}' : v.substring(1);
+      try { return Color(int.parse(hex, radix: 16)); } catch (_) { return null; }
+    }
+    final m = RegExp(
+      r'^rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?\\)\$',
+      caseSensitive: false,
+    ).firstMatch(v);
+    if (m != null) {
+      final a = m[4] != null ? (double.tryParse(m[4]!) ?? 1.0).clamp(0.0, 1.0) : 1.0;
+      return Color.fromRGBO(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!), a);
+    }
+    const named = <String, int>{
+      'red': 0xFFFF0000, 'blue': 0xFF0000FF, 'green': 0xFF008000, 'lime': 0xFF00FF00,
+      'yellow': 0xFFFFFF00, 'orange': 0xFFFFA500, 'purple': 0xFF800080, 'pink': 0xFFFFC0CB,
+      'white': 0xFFFFFFFF, 'black': 0xFF000000, 'grey': 0xFF808080, 'gray': 0xFF808080,
+      'cyan': 0xFF00FFFF, 'magenta': 0xFFFF00FF, 'brown': 0xFFA52A2A, 'teal': 0xFF008080,
+      'navy': 0xFF000080, 'maroon': 0xFF800000, 'olive': 0xFF808000, 'silver': 0xFFC0C0C0,
+      'coral': 0xFFFF7F50, 'salmon': 0xFFFA8072, 'indigo': 0xFF4B0082, 'violet': 0xFFEE82EE,
+      'transparent': 0x00000000,
+    };
+    final code = named[v.toLowerCase()];
+    return code != null ? Color(code) : null;
+  }
+
+  /// Builds a widget from a merged CSS-style map, covering the full CSS
+  /// box model: background, dimensions, padding, margin, border, border-radius,
+  /// box-shadow, opacity, overflow-clipping, and min/max constraints.
+  static Widget buildBox(
+    Map<String, dynamic> base,
+    Map<String, dynamic> overrides, {
+    Widget? child,
+  }) {
+    final s = Map<String, dynamic>.from(base)..addAll(overrides);
+
+    // Color
+    final color = parseColor(s['backgroundColor'] ?? s['background']);
+
+    // Dimensions
+    final w = parseLen(s['width']);
+    final h = parseLen(s['height']);
+
+    // Border radius
+    final rVal = parseLen(s['borderRadius']);
+    final radius = rVal != null ? BorderRadius.circular(rVal) : _parseCornerRadius(s);
+
+    // Border
+    final borderClr = parseColor(s['borderColor']);
+    final borderW = parseLen(s['borderWidth'] ?? s['borderTopWidth']) ?? 0.0;
+    final border = (borderClr != null && borderW > 0)
+        ? Border.all(color: borderClr, width: borderW)
+        : null;
+
+    // Padding / Margin
+    final pad = _parseEdgeInsets(s, 'padding');
+    final mar = _parseEdgeInsets(s, 'margin');
+
+    // Box shadow
+    final shadows = _parseBoxShadow(s['boxShadow']);
+
+    // Background image
+    final bgImg = _parseDecorationImage(s['backgroundImage'], s['backgroundSize']);
+
+    final hasDecoration = color != null || radius != null || border != null ||
+        (shadows?.isNotEmpty ?? false) || bgImg != null;
+
+    Widget result = Container(
+      width: w,
+      height: h,
+      padding: pad,
+      margin: mar,
+      decoration: hasDecoration
+          ? BoxDecoration(
+              color: color,
+              borderRadius: radius,
+              border: border,
+              boxShadow: shadows,
+              image: bgImg,
+            )
+          : null,
+      child: child,
+    );
+
+    // Min/Max constraints
+    final minW = parseLen(s['minWidth']);
+    final maxW = parseLen(s['maxWidth']);
+    final minH = parseLen(s['minHeight']);
+    final maxH = parseLen(s['maxHeight']);
+    if (minW != null || maxW != null || minH != null || maxH != null) {
+      result = ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: minW ?? 0.0,
+          maxWidth: maxW ?? double.infinity,
+          minHeight: minH ?? 0.0,
+          maxHeight: maxH ?? double.infinity,
+        ),
+        child: result,
+      );
+    }
+
+    // Overflow clipping
+    final overflow = (s['overflow'] ?? s['overflowX'] ?? '').toString().toLowerCase();
+    if (overflow == 'hidden' || overflow == 'clip') {
+      result = radius != null
+          ? ClipRRect(borderRadius: radius, child: result)
+          : ClipRect(child: result);
+    }
+
+    // Opacity
+    final opacityVal = parseLen(s['opacity']);
+    if (opacityVal != null && opacityVal < 1.0) {
+      result = Opacity(opacity: opacityVal.clamp(0.0, 1.0), child: result);
+    }
+
+    return result;
+  }
+
+  /// Parses per-corner border-radius when no uniform shorthand is set.
+  static BorderRadius? _parseCornerRadius(Map<String, dynamic> s) {
+    final tl = parseLen(s['borderTopLeftRadius']);
+    final tr = parseLen(s['borderTopRightRadius']);
+    final br = parseLen(s['borderBottomRightRadius']);
+    final bl = parseLen(s['borderBottomLeftRadius']);
+    if (tl == null && tr == null && br == null && bl == null) return null;
+    return BorderRadius.only(
+      topLeft: Radius.circular(tl ?? 0),
+      topRight: Radius.circular(tr ?? 0),
+      bottomRight: Radius.circular(br ?? 0),
+      bottomLeft: Radius.circular(bl ?? 0),
+    );
+  }
+
+  /// Parses CSS padding/margin shorthand + individual side overrides into
+  /// [EdgeInsets]. Shorthand "8", "8 16", "8 16 8", or "8 16 8 16" (T R B L).
+  static EdgeInsets? _parseEdgeInsets(Map<String, dynamic> s, String prefix) {
+    final raw = (s[prefix]?.toString() ?? '').trim();
+    final parts = raw.isEmpty
+        ? <double>[]
+        : raw.split(RegExp(r'\\s+')).map((v) => parseLen(v) ?? 0.0).toList();
+    double shT = 0, shR = 0, shB = 0, shL = 0;
+    if (parts.length == 1) {
+      shT = shR = shB = shL = parts[0];
+    } else if (parts.length == 2) {
+      shT = shB = parts[0]; shL = shR = parts[1];
+    } else if (parts.length == 3) {
+      shT = parts[0]; shL = shR = parts[1]; shB = parts[2];
+    } else if (parts.length >= 4) {
+      shT = parts[0]; shR = parts[1]; shB = parts[2]; shL = parts[3];
+    }
+    final t = parseLen(s['\${prefix}Top']) ?? shT;
+    final r = parseLen(s['\${prefix}Right']) ?? shR;
+    final b = parseLen(s['\${prefix}Bottom']) ?? shB;
+    final l = parseLen(s['\${prefix}Left']) ?? shL;
+    if (t == 0 && r == 0 && b == 0 && l == 0) return null;
+    return EdgeInsets.fromLTRB(l, t, r, b);
+  }
+
+  /// Parses a CSS box-shadow string "x y blur? spread? color?".
+  static List<BoxShadow>? _parseBoxShadow(dynamic raw) {
+    if (raw == null) return null;
+    final v = raw.toString().trim();
+    if (v.isEmpty || v == 'none') return null;
+    final colorPat = RegExp(r'rgba?\\([^)]+\\)|#[0-9a-f]{3,8}', caseSensitive: false);
+    final colorMatch = colorPat.firstMatch(v);
+    final shadowColor = colorMatch != null ? parseColor(colorMatch.group(0)) : null;
+    final cleaned = v
+        .replaceAll(RegExp(r'rgba?\\([^)]+\\)', caseSensitive: false), '')
+        .replaceAll(RegExp(r'#[0-9a-f]{3,8}', caseSensitive: false), '');
+    final nums = cleaned
+        .split(RegExp(r'[\\s,]+'))
+        .map((e) => parseLen(e.trim()))
+        .whereType<double>()
+        .toList();
+    if (nums.length < 2) return null;
+    return [
+      BoxShadow(
+        offset: Offset(nums[0], nums[1]),
+        blurRadius: nums.length > 2 ? nums[2] : 0,
+        spreadRadius: nums.length > 3 ? nums[3] : 0,
+        color: shadowColor ?? Colors.black26,
+      ),
+    ];
+  }
+
+  /// Parses a CSS background-image URL into a [DecorationImage].
+  static DecorationImage? _parseDecorationImage(dynamic bgImage, dynamic bgSize) {
+    if (bgImage == null) return null;
+    final m = RegExp(r'url\\(([^)]*)\\)', caseSensitive: false)
+        .firstMatch(bgImage.toString());
+    if (m == null) return null;
+    final src = m.group(1)!
+        .replaceAll(RegExp(r'''^['"]|['"]$'''), '')
+        .replaceFirst(RegExp(r'^asset://figma/'), 'assets/images/figma/');
+    final fit = bgSize?.toString().toLowerCase() == 'contain'
+        ? BoxFit.contain
+        : BoxFit.cover;
+    final ImageProvider provider =
+        RegExp(r'^https?://', caseSensitive: false).hasMatch(src)
+            ? NetworkImage(src)
+            : AssetImage(src.replaceFirst(RegExp(r'^/'), ''));
+    return DecorationImage(image: provider, fit: fit);
+  }
+
+  static Widget applyMeta(Widget child, {dynamic id}) {
+    final raw = id?.toString().trim();
+    if (raw == null || raw.isEmpty) return child;
+    return KeyedSubtree(
+      key: ValueKey<String>(raw),
+      child: Semantics(identifier: raw, child: child),
+    );
+  }
+}
+
 class FastUIImage extends StatelessWidget {
   const FastUIImage({super.key, required this.source, this.width, this.height, this.fit});
   final String source;

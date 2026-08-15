@@ -74,6 +74,100 @@ watch(join(__dirname, ...blueprintRoot.split('/')), {recursive: true}, (event, f
 `);
 }
 
+export async function ensureFlutterWatchFileExist(blueprintRoot = join('lib', 'blueprints')) {
+    const filePath = resolve(join('watch.dart'));
+    await ensureFileExist(filePath);
+    await writeFile(filePath, `import 'dart:async';
+import 'dart:io';
+
+void main() async {
+  final blueprintRoot = '${blueprintRoot.split('\\').join('/')}';
+  final dir = Directory(blueprintRoot);
+  print('[fastui] Watching \$blueprintRoot for changes...');
+  Timer? debounce;
+  final watcher = dir.watch(recursive: true);
+  await for (final event in watcher) {
+    if (!event.path.endsWith('.yml') || event.path.endsWith('~')) continue;
+    debounce?.cancel();
+    debounce = Timer(const Duration(milliseconds: 300), () async {
+      print('[fastui] Detected change: \${event.path}');
+      final result = await Process.run(
+        'fastui',
+        ['specs', 'build', event.path],
+        runInShell: true,
+      );
+      if (result.stdout.toString().isNotEmpty) print(result.stdout);
+      if (result.stderr.toString().isNotEmpty) stderr.write(result.stderr);
+      final flutterPid = int.tryParse(Platform.environment['FASTUI_FLUTTER_PID'] ?? '');
+      if (result.exitCode == 0 && flutterPid != null) {
+        final sent = Process.killPid(flutterPid, ProcessSignal.sigusr1);
+        print(sent
+            ? '[fastui] Hot reload requested.'
+            : '[fastui] Unable to request hot reload; restart fastui_dev.sh.');
+      }
+    });
+  }
+}
+`);
+}
+
+export async function ensureFlutterStartScript(blueprintRoot = join('lib', 'blueprints')) {
+    const filePath = resolve(join('fastui_dev.sh'));
+    await ensureFileExist(filePath);
+    await writeFile(filePath, `#!/usr/bin/env bash
+# FastUI dev script — starts the Flutter app and the blueprint watcher in parallel.
+# Usage: bash fastui_dev.sh [flutter run args...]
+set -e
+
+echo "[fastui] Building specs..."
+fastui specs build ./${blueprintRoot.split('\\').join('/')}
+
+echo "[fastui] Starting watcher..."
+mkdir -p .fastui
+WATCHER_PID_FILE=".fastui/watch.pid"
+if [ -f "$WATCHER_PID_FILE" ]; then
+  PREVIOUS_WATCHER_PID="$(cat "$WATCHER_PID_FILE")"
+  if [ -n "$PREVIOUS_WATCHER_PID" ] && kill -0 "$PREVIOUS_WATCHER_PID" 2>/dev/null; then
+    echo "[fastui] Stopping previous watcher ($PREVIOUS_WATCHER_PID)..."
+    kill "$PREVIOUS_WATCHER_PID" 2>/dev/null || true
+  fi
+fi
+
+cleanup() {
+  if [ -n "$WATCHER_PID" ]; then
+    kill "$WATCHER_PID" 2>/dev/null || true
+    wait "$WATCHER_PID" 2>/dev/null || true
+  fi
+  if [ -f "$WATCHER_PID_FILE" ] && [ "$(cat "$WATCHER_PID_FILE")" = "$WATCHER_PID" ]; then
+    rm -f "$WATCHER_PID_FILE"
+  fi
+  if [ -n "$FLUTTER_PID" ]; then
+    kill "$FLUTTER_PID" 2>/dev/null || true
+    wait "$FLUTTER_PID" 2>/dev/null || true
+  fi
+  WATCHER_PID=""
+  FLUTTER_PID=""
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
+
+echo "[fastui] Starting Flutter local dev server..."
+flutter run -d web-server --web-hostname localhost "$@" &
+FLUTTER_PID=$!
+export FASTUI_FLUTTER_PID="$FLUTTER_PID"
+
+dart watch.dart &
+WATCHER_PID=$!
+echo "$WATCHER_PID" > "$WATCHER_PID_FILE"
+
+wait "$FLUTTER_PID"
+`);
+    try {
+        const {chmod} = await import('node:fs/promises');
+        await chmod(filePath, 0o755);
+    } catch { /* non-fatal — user can chmod manually */ }
+}
+
 export async function ensureBlueprintFolderExist(blueprintRoot = join('src', 'blueprints')) {
     const filePath = resolve(blueprintRoot);
     await ensurePathExist(filePath);

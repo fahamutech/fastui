@@ -56,9 +56,8 @@ ${c.bold('USAGE')}
   fastui <command> [subcommand] [options]
 
 ${c.bold('COMMANDS')}
-  ${c.cyan('init')} ${c.dim('[reactjs|flutter]')}
-    Initialise a new FastUI project. Defaults to reactjs when no template flag
-    is supplied and no project config is present.
+  ${c.cyan('init')} ${c.yellow('<reactjs|flutter>')}
+    Initialise a new FastUI project. The framework argument is required.
 
   ${c.cyan('specs list')} ${c.dim('[path]')}
     List all YAML blueprint specs under [path]. Falls back to the project
@@ -86,7 +85,8 @@ ${c.bold('ENVIRONMENT')}
   FIGMA_FILE    Figma file key (from the URL: figma.com/design/<key>/…)
 
 ${c.bold('EXAMPLES')}
-  fastui init reactjs
+  fastui init reactjs          # initialise a React project
+  fastui init flutter           # initialise a Flutter project
   fastui specs build src/blueprints
   fastui specs automate reactjs --fresh
   fastui watch flutter
@@ -112,10 +112,13 @@ try {
         // ── init ──────────────────────────────────────────────────────────────
         case 'init': {
             const requested = `${explicitTemplate ?? ''}`.trim().toLowerCase();
-            if (requested && !TEMPLATES.includes(requested)) {
-                fatal(`'${requested}' is not a valid template. Choose reactjs or flutter.`);
+            if (!requested) {
+                fatal(`Framework is required for init. Run: fastui init reactjs  or  fastui init flutter`);
             }
-            const template = normalizeTemplate(explicitTemplate ?? getTemplateSelected());
+            if (!TEMPLATES.includes(requested)) {
+                fatal(`'${requested}' is not a valid framework. Choose ${c.yellow('reactjs')} or ${c.yellow('flutter')}.`);
+            }
+            const template = normalizeTemplate(requested);
             info(`Initialising ${c.cyan(template)} project…`);
             const result = await initializeProject({template});
             ok(`Project initialised  (${c.cyan(result.template)})`);
@@ -131,7 +134,7 @@ try {
             switch (subcommand) {
 
                 case 'list': {
-                    const target = positional[2];
+                    const target = positional[2] ?? getBlueprintRoot(getTemplateSelected(explicitTemplate));
                     info(`Listing specs${target ? ` in ${c.dim(target)}` : ''}…`);
                     const list = await readSpecs(target);
                     log(list);
@@ -140,7 +143,7 @@ try {
                 }
 
                 case 'build': {
-                    const root = positional[2];
+                    const root = positional[2] ?? getBlueprintRoot(getTemplateSelected(explicitTemplate));
                     info(`Building code from specs${root ? ` in ${c.dim(root)}` : ''}…`);
                     await generateCodeFromSpecs({root, projectPath: process.cwd()});
                     ok('Build complete');

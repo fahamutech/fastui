@@ -44,22 +44,41 @@ export function getEffects(data) {
 }
 
 /**
- * The composer's own frame contract: `{base, id, current, next}`.
- * - `base` is the outer layout token (row.start/row.end/column.start/
- *   column.end/*.stack) governing how the current view and every extended
- *   child wrapper are ordered.
- * - `current` are styles applied only to this node's own rendered view.
- * - `next` are styles applied uniformly to each extended child's wrapper.
+ * Resolves `frame.base` to `{token, baseStyles}`.
+ * Accepts two forms:
+ *   - string: "row.start"  → {token: "row.start", baseStyles: {}}
+ *   - object: {type: "row.start", styles: {...}}  → {token: "row.start", baseStyles: {...}}
+ */
+function resolveFrameBase(base) {
+    if (!base) return {token: undefined, baseStyles: {}};
+    if (typeof base === 'string') return {token: base, baseStyles: {}};
+    return {
+        token: base?.type,
+        baseStyles: {...(base?.styles ?? {})},
+    };
+}
+
+/**
+ * The composer's own frame contract: `{base, id, current, next, baseStyles}`.
+ * - `base`       : the outer layout token (row.start/row.end/column.start/
+ *                  column.end/*.stack) governing how the current view and
+ *                  every extended child wrapper are ordered.
+ * - `baseStyles` : optional CSS applied to the `_base` outer container div.
+ *                  Set when `frame.base` is authored as `{type, styles}`.
+ * - `current`    : styles applied only to this node's own rendered view.
+ * - `next`       : styles applied uniformly to each extended child's wrapper.
  * Normalizes on read (accepting the legacy `frame.styles` field as
  * `current`) so this accessor is correct whether or not legacy-spec.mjs's
  * normalization already ran on `data`.
  */
 export function getFrame(data) {
     const frame = data?.modifier?.frame;
-    if (typeof frame === 'string') return {base: frame, id: undefined, current: {}, next: {}};
+    if (typeof frame === 'string') return {base: frame, id: undefined, baseStyles: {}, current: {}, next: {}};
+    const {token, baseStyles} = resolveFrameBase(frame?.base);
     return {
-        base: frame?.base,
+        base: token,
         id: frame?.id,
+        baseStyles,
         current: {...(frame?.current ?? frame?.styles ?? {})},
         next: {...(frame?.next ?? {})},
     };

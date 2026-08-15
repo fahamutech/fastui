@@ -5,7 +5,7 @@ import {readSpecs, specToJSON} from '../specs/reader.mjs';
 import {normalizeSpecDocument, prepareBehavior} from './legacy-spec.mjs';
 import {copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {basename, dirname, resolve, sep} from 'node:path';
-import {getTemplateSelected} from '../tooling/config.mjs';
+import {getBlueprintRoot, getTemplateSelected} from '../tooling/config.mjs';
 import {getStates} from './modifier.mjs';
 import {identifier, pascalIdentifier, relativeImport, specStructure} from './project-structure.mjs';
 import {flutterRuntimeSource} from './templates/flutter/generator.mjs';
@@ -281,16 +281,17 @@ export async function generateSpecFile({specPath, projectPath = process.cwd()}) 
 export async function generateCodeFromSpecs({root, projectPath = process.cwd()} = {}) {
     await syncTranslatedAssets(projectPath);
     const template = getTemplateSelected();
+    const specRoot = root ?? resolve(projectPath, getBlueprintRoot(template));
     await removeDuplicateLegacyState(projectPath, template);
     if (template === 'flutter') {
         await writeFile(resolve(projectPath, 'lib', 'fastui_runtime.dart'), flutterRuntimeSource());
     }
-    await migrateLegacyServices(root, template);
+    await migrateLegacyServices(specRoot, template);
     const results = [];
-    for (const specPath of await readSpecs(root)) {
+    for (const specPath of await readSpecs(specRoot)) {
         results.push(await generateSpecFile({specPath, projectPath}));
     }
     const storeFiles = await writeModuleStores(results, template);
-    await updateGeneratedManifest({projectPath, specRoot: root, results, template, additionalFiles: storeFiles});
+    await updateGeneratedManifest({projectPath, specRoot, results, template, additionalFiles: storeFiles});
     return results;
 }

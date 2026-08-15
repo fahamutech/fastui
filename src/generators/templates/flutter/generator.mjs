@@ -3,6 +3,7 @@ import {dirname, relative, resolve, sep} from 'node:path';
 import {ensureFileExist, ensurePathExist} from '../../../shared/fs.mjs';
 import {firstUpperCase} from '../../../shared/fn.mjs';
 import {
+    getChildren,
     getEffects,
     getExtendList,
     getFeed,
@@ -37,7 +38,7 @@ const dartClassStem = value => `${value}`.split(sep).pop().replace(/\.ya?ml$/i, 
     .map(part => `${part[0]}`.toUpperCase() + part.slice(1))
     .join('');
 
-const classNameFromPath = value => `FastUI${dartClassStem(value)}`;
+const classNameFromPath = value => dartClassStem(value);
 
 function generatedPath(specPath) {
     const parts = resolve(specPath).split(sep).filter(part => part !== 'blueprints');
@@ -116,6 +117,17 @@ function referenceImport(specPath, reference) {
     return {className: classNameFromPath(reference), importPath, targetSpec};
 }
 
+// Named CSS colors mapped to hex equivalents for Flutter Color conversion
+const CSS_NAMED_COLORS = {
+    red: '#FF0000', blue: '#0000FF', green: '#008000', lime: '#00FF00',
+    yellow: '#FFFF00', orange: '#FFA500', purple: '#800080', pink: '#FFC0CB',
+    white: '#FFFFFF', black: '#000000', grey: '#808080', gray: '#808080',
+    cyan: '#00FFFF', magenta: '#FF00FF', brown: '#A52A2A', teal: '#008080',
+    navy: '#000080', maroon: '#800000', olive: '#808000', silver: '#C0C0C0',
+    coral: '#FF7F50', salmon: '#FA8072', khaki: '#F0E68C', indigo: '#4B0082',
+    violet: '#EE82EE', turquoise: '#40E0D0', beige: '#F5F5DC', gold: '#FFD700',
+};
+
 function colorExpression(value) {
     if (typeof value !== 'string') return null;
     const rgba = value.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i);
@@ -131,6 +143,10 @@ function colorExpression(value) {
         const raw = hex[1].length === 6 ? `FF${hex[1]}` : hex[1];
         return `Color(0x${raw.toUpperCase()})`;
     }
+    if (value.trim().toLowerCase() === 'transparent') return 'const Color(0x00000000)';
+    // Resolve named CSS colors to their hex equivalents
+    const namedHex = CSS_NAMED_COLORS[value.trim().toLowerCase()];
+    if (namedHex) return colorExpression(namedHex);
     return null;
 }
 
@@ -145,12 +161,12 @@ function edgeInsets(styles, prefix = 'padding') {
             : valid.length === 3
                 ? [valid[0], valid[1], valid[2], valid[1]]
                 : valid.length >= 4 ? valid : [0, 0, 0, 0];
-    const left = Number(styles[`${prefix}Left`] ?? shorthandLeft ?? 0);
-    const top = Number(styles[`${prefix}Top`] ?? shorthandTop ?? 0);
-    const right = Number(styles[`${prefix}Right`] ?? shorthandRight ?? 0);
-    const bottom = Number(styles[`${prefix}Bottom`] ?? shorthandBottom ?? 0);
-    if (![left, top, right, bottom].some(Boolean)) return null;
-    return `EdgeInsets.fromLTRB(${left}, ${top}, ${right}, ${bottom})`;
+    const left = parsePxValue(styles[`${prefix}Left`] ?? shorthandLeft ?? 0);
+    const top = parsePxValue(styles[`${prefix}Top`] ?? shorthandTop ?? 0);
+    const right = parsePxValue(styles[`${prefix}Right`] ?? shorthandRight ?? 0);
+    const bottom = parsePxValue(styles[`${prefix}Bottom`] ?? shorthandBottom ?? 0);
+    if (![left, top, right, bottom].some(v => Number.isFinite(v) && v !== 0)) return null;
+    return `EdgeInsets.fromLTRB(${left || 0}, ${top || 0}, ${right || 0}, ${bottom || 0})`;
 }
 
 function borderRadius(styles) {
@@ -174,8 +190,22 @@ function backgroundImage(styles) {
     return `DecorationImage(image: ${provider}, fit: BoxFit.${fit})`;
 }
 
+/** Parses a CSS length value, stripping optional 'px' suffix, to a finite number or NaN. */
+function parsePxValue(value) {
+    if (Number.isFinite(Number(value))) return Number(value);
+    if (typeof value === 'string') {
+        const n = Number(value.replace(/px$/i, ''));
+        return Number.isFinite(n) ? n : NaN;
+    }
+    return NaN;
+}
+
 function dimensionExpression(value, axis) {
     if (Number.isFinite(Number(value))) return `${Number(value)}`;
+    if (typeof value === 'string') {
+        const num = Number(value.replace(/px$/i, ''));
+        if (Number.isFinite(num)) return `${num}`;
+    }
     return null;
 }
 
@@ -198,7 +228,57 @@ function fillsAxis(value, axis) {
         || (axis === 'height' && normalized === '100vh');
 }
 
-function containerExpression(styles = {}, child = 'null') {
+/** Parses a CSS box-shadow string "x y blur? spread? color?" into a BoxShadow expression. */
+function boxShadowExpression(styles) {
+    const raw = `${styles.boxShadow ?? ''}`.trim();
+    if (!raw || raw === 'none') return null;
+    const colorMatch = raw.match(/rgba?\([^)]+\)|#[0-9a-f]{3,8}/i);
+    const color = colorMatch ? colorExpression(colorMatch[0]) : null;
+    const cleaned = raw
+        .replace(/rgba?\([^)]+\)/i, '')
+        .replace(/#[0-9a-f]{3,8}/i, '')
+        .trim();
+    const nums = cleaned.split(/\s+/).map(v => parsePxValue(v)).filter(Number.isFinite);
+    if (nums.length < 2) return null;
+    const [dx, dy, blur = 0, spread = 0] = nums;
+    const colorArg = color ? `, color: ${color}` : '';
+    return `BoxShadow(offset: Offset(${dx}, ${dy}), blurRadius: ${blur}, spreadRadius: ${spread}${colorArg})`;
+}
+
+/** Wraps a widget expression in Opacity when opacity < 1. */
+function applyOpacityWrap(styles, child) {
+    const opacity = parsePxValue(styles.opacity);
+    if (!Number.isFinite(opacity) || opacity >= 1) return child;
+    return `Opacity(opacity: ${Math.max(0, Math.min(1, opacity)).toFixed(4)}, child: ${child})`;
+}
+
+/** Wraps a widget expression in ClipRRect/ClipRect when overflow is hidden/clip. */
+function applyOverflowClip(styles, child) {
+    const overflow = `${styles.overflow ?? styles.overflowX ?? ''}`.toLowerCase();
+    if (overflow !== 'hidden' && overflow !== 'clip') return child;
+    const radius = borderRadius(styles);
+    return radius
+        ? `ClipRRect(borderRadius: ${radius}, child: ${child})`
+        : `ClipRect(child: ${child})`;
+}
+
+/** Wraps a widget expression in ConstrainedBox when min/max dimensions are set. */
+function applyConstraintBox(styles, child) {
+    const minW = parsePxValue(styles.minWidth);
+    const maxW = parsePxValue(styles.maxWidth);
+    const minH = parsePxValue(styles.minHeight);
+    const maxH = parsePxValue(styles.maxHeight);
+    if (!Number.isFinite(minW) && !Number.isFinite(maxW) && !Number.isFinite(minH) && !Number.isFinite(maxH)) return child;
+    const parts = [
+        Number.isFinite(minW) ? `minWidth: ${minW}` : '',
+        Number.isFinite(maxW) ? `maxWidth: ${maxW}` : '',
+        Number.isFinite(minH) ? `minHeight: ${minH}` : '',
+        Number.isFinite(maxH) ? `maxHeight: ${maxH}` : '',
+    ].filter(Boolean).join(', ');
+    return `ConstrainedBox(constraints: BoxConstraints(${parts}), child: ${child})`;
+}
+
+function containerExpression(styles = {}, child = 'null', {loosenChildAxis = null} = {}) {
     const args = [];
     const width = dimensionExpression(styles.width, 'width');
     const height = dimensionExpression(styles.height, 'height');
@@ -209,7 +289,8 @@ function containerExpression(styles = {}, child = 'null') {
     if (padding) args.push(`padding: ${padding}`);
     if (margin) args.push(`margin: ${margin}`);
     const decoration = [];
-    const color = colorExpression(styles.backgroundColor);
+    // Accept 'background' as a CSS shorthand alias for 'backgroundColor'
+    const color = colorExpression(styles.backgroundColor ?? styles.background);
     if (color) decoration.push(`color: ${color}`);
     const image = backgroundImage(styles);
     if (image) decoration.push(`image: ${image}`);
@@ -219,7 +300,15 @@ function containerExpression(styles = {}, child = 'null') {
     const borderWidth = Number(styles.borderTopWidth ?? styles.borderWidth ?? 0);
     if (borderColor && borderWidth > 0) decoration.push(`border: Border.all(color: ${borderColor}, width: ${borderWidth})`);
     if (decoration.length) args.push(`decoration: BoxDecoration(${decoration.join(', ')})`);
-    if (child !== 'null') args.push(`child: ${child}`);
+    // Expanded supplies a tight constraint on its main axis. Align loosens that
+    // constraint for a fixed-size child, while the cross-axis factor keeps the
+    // wrapper at the child's height (Row) or width (Column), matching CSS flex.
+    const resolvedChild = loosenChildAxis === 'horizontal'
+        ? `Align(alignment: Alignment.topLeft, heightFactor: 1, child: ${child})`
+        : loosenChildAxis === 'vertical'
+            ? `Align(alignment: Alignment.topLeft, widthFactor: 1, child: ${child})`
+            : child;
+    if (child !== 'null') args.push(`child: ${resolvedChild}`);
     const fillWidth = fillsAxis(styles.width, 'width');
     const fillHeight = fillsAxis(styles.height, 'height');
     if (args.length === 0) return 'const SizedBox.shrink()';
@@ -353,12 +442,47 @@ function inputExpression(data) {
     return width || height ? `SizedBox(${width ? `width: ${width}, ` : ''}${height ? `height: ${height}, ` : ''}child: ${field})` : field;
 }
 
+function widgetIdExpression(data, isStateClass = false) {
+    const props = getProps(data);
+    const overridePropsRef = isStateClass ? 'widget.overrideProps' : 'overrideProps';
+    if (props.id === undefined || props.id === null || props.id === '') {
+        return `${overridePropsRef}['id']`;
+    }
+    return `${overridePropsRef}['id'] ?? ${valueExpression(props.id)}`;
+}
+
 function componentBody(data) {
     const base = `${data?.base ?? 'container'}`.toLowerCase();
-    if (base === 'text') return textExpression(data);
+    if (base === 'text') {
+        // Use _buildWithOverride so that box-level view styles (background, width, height)
+        // are applied AND runtime overrideStyles from a parent spec are merged — mirroring
+        // the React pattern where text is rendered inside a styled <div> wrapper that also
+        // accepts override props.
+        const styles = getStyles(data);
+        const baseStyleLiteral = dartLiteral(styles);
+        return `_buildWithOverride(${baseStyleLiteral}, child: ${textExpression(data)})`;
+    }
     if (base === 'image') return imageExpression(data);
     if (base === 'input' || (base === 'container' && data?.modifier?.props?.control === 'input')) return inputExpression(data);
-    const body = containerExpression(getStyles(data), 'null');
+
+    // Container base — build _buildWithOverride call, optionally passing a child widget
+    // when the spec's `props.children` holds a static text value.
+    const styles = getStyles(data);
+    const baseStyleLiteral = dartLiteral(styles);
+    const children = getChildren(data);
+    let childArg = '';
+    if (children?.value !== undefined && children.value !== '' && children.value !== null) {
+        let childExpr;
+        if (children.type === 'state') {
+            childExpr = `Text((${stateIdentifier(children.value)} ?? '').toString())`;
+        } else if (children.type === 'input') {
+            childExpr = `Text((widget.${dartIdentifier(children.value)} ?? '').toString())`;
+        } else {
+            childExpr = `Text(${dartString(children.value)})`;
+        }
+        childArg = `, child: ${childExpr}`;
+    }
+    const body = `_buildWithOverride(${baseStyleLiteral}${childArg})`;
     return applyInteractions(data, body);
 }
 
@@ -399,21 +523,24 @@ function isFlexibleFrame(styles = {}, isRow) {
 function composeFrame(frame, ownContentExpr, extendRefs = []) {
     const current = frame?.current ?? {};
     const base = frame?.base;
+    const baseStyles = frame?.baseStyles ?? {};
     const isRow = `${base ?? ''}`.toLowerCase().startsWith('row');
-    const currentWidget = containerExpression(current, alignedContent(current, isRow, ownContentExpr));
+    const next = frame?.next ?? {};
+    const currentFlexible = isFlexibleFrame(current, isRow);
+    const nextFlexible = isFlexibleFrame(next, isRow);
+    const loosenChildAxis = isRow ? 'horizontal' : 'vertical';
+    const currentWidget = containerExpression(current, alignedContent(current, isRow, ownContentExpr), {loosenChildAxis: currentFlexible ? loosenChildAxis : null});
     if (extendRefs.length === 0) return currentWidget;
 
-    const next = frame?.next ?? {};
-    const nextWidgets = extendRefs.map(ref => containerExpression(next, widgetInvocation(ref)));
+    const nextWidgets = extendRefs.map(ref => containerExpression(next, widgetInvocation(ref), {loosenChildAxis: nextFlexible ? loosenChildAxis : null}));
 
     if (`${base ?? ''}`.toLowerCase().includes('.stack')) {
-        return `Stack(children: [${[currentWidget, ...nextWidgets].join(', ')}])`;
+        const stack = `Stack(children: [${[currentWidget, ...nextWidgets].join(', ')}])`;
+        return Object.keys(baseStyles).length > 0 ? containerExpression(baseStyles, stack) : stack;
     }
 
     const isEnd = `${base ?? ''}`.toLowerCase().includes('.end');
     const bounded = isRow ? 'constraints.hasBoundedWidth' : 'constraints.hasBoundedHeight';
-    const currentFlexible = isFlexibleFrame(current, isRow);
-    const nextFlexible = isFlexibleFrame(next, isRow);
     const currentItem = currentFlexible ? `if (${bounded}) Expanded(child: ${currentWidget}) else ${currentWidget}` : currentWidget;
     const nextItems = nextWidgets.map(widget => nextFlexible ? `if (${bounded}) Expanded(child: ${widget}) else ${widget}` : widget);
     const orderedBase = isEnd ? [...nextItems, currentItem] : [currentItem, ...nextItems];
@@ -422,7 +549,8 @@ function composeFrame(frame, ownContentExpr, extendRefs = []) {
     const ordered = spacer
         ? orderedBase.flatMap((item, index) => index === 0 ? [item] : [spacer, item])
         : orderedBase;
-    return `LayoutBuilder(builder: (context, constraints) => ${isRow ? 'Row' : 'Column'}(mainAxisSize: ${bounded} ? MainAxisSize.max : MainAxisSize.min, mainAxisAlignment: ${mainAxis(current.justifyContent)}, crossAxisAlignment: ${crossAxis(current.alignItems)}, children: [${ordered.join(', ')}]))`;
+    const rowCol = `LayoutBuilder(builder: (context, constraints) => ${isRow ? 'Row' : 'Column'}(mainAxisSize: ${bounded} ? MainAxisSize.max : MainAxisSize.min, mainAxisAlignment: ${mainAxis(current.justifyContent)}, crossAxisAlignment: ${crossAxis(current.alignItems)}, children: [${ordered.join(', ')}]))`;
+    return Object.keys(baseStyles).length > 0 ? containerExpression(baseStyles, rowCol) : rowCol;
 }
 
 async function serviceImportAndStubs(data, specPath) {
@@ -508,6 +636,19 @@ function effectsInit(data) {
     }).filter(Boolean).join('\n    ');
 }
 
+function buildWithOverrideMethod(isStateClass = false) {
+    const overrideRef = isStateClass ? 'widget.overrideStyles' : 'overrideStyles';
+    // Delegate all CSS parsing to the shared FastUIStyleHelper in fastui_runtime.dart
+    // so the generated widget stays clean and free of inline parser logic.
+    return `Widget _buildWithOverride(Map<String, dynamic> baseStyles, {Widget? child}) =>
+      FastUIStyleHelper.buildBox(baseStyles, ${overrideRef}, child: child);`;
+}
+
+function buildMetaMethod(data, isStateClass = false) {
+    return `Widget _applyMeta(Widget child) =>
+      FastUIStyleHelper.applyMeta(child, id: ${widgetIdExpression(data, isStateClass)});`;
+}
+
 async function writeWidget({data, specPath, buildExpression}) {
     const outputPath = generatedPath(specPath);
     const name = classNameFromPath(specPath);
@@ -521,31 +662,78 @@ async function writeWidget({data, specPath, buildExpression}) {
     if ((await readFile(runtimePath)).toString().trim() === '') await writeFile(runtimePath, flutterRuntimeSource());
     let runtimeImportPath = relative(dirname(outputPath), runtimePath).split(sep).join('/');
     if (!runtimeImportPath.startsWith('.')) runtimeImportPath = `./${runtimeImportPath}`;
-    const constructorFields = inputs.map(input => `this.${input}`).join(', ');
-    const fieldDeclarations = inputs.map(input => `final dynamic ${input};`).join('\n  ');
+    const overrideParams = `this.overrideStyles = const {}, this.overrideProps = const {}, this.overrideStates = const {}`;
+    const constructorFields = [...inputs.map(input => `this.${input}`), overrideParams].join(', ');
+    const fieldDeclarations = [
+        ...inputs.map(input => `final dynamic ${input};`),
+        `final Map<String, dynamic> overrideStyles;`,
+        `final Map<String, dynamic> overrideProps;`,
+        `final Map<String, dynamic> overrideStates;`,
+    ].join('\n  ');
     const stateFields = stateMembers(data);
     const hasState = Object.keys(getStates(data)).length > 0;
     const structure = specStructure(specPath, 'flutter');
     const storeImport = hasState
-        ? `import '${relativeImport(outputPath, structure.storePath)}';\nimport '${relativeImport(outputPath, structure.storeModelsPath)}';`
+        ? `import '${relativeImport(outputPath, structure.storePath)}';
+import '${relativeImport(outputPath, structure.storeModelsPath)}';`
         : '';
     const storeMembers = stateStoreMembers(data, specPath);
-    const init = stateInitializers(data);
+    const stateInit = hasState
+        ? Object.entries(getStates(data)).map(([key, value]) =>
+            // Must use widget.overrideStates inside a StatefulWidget's State class.
+            `${stateIdentifier(key)} = (widget.overrideStates[${dartString(key)}] ?? ${valueExpression(value)}) as dynamic;`
+          ).join('\n    ')
+        : stateInitializers(data);
     const effects = effectsInit(data);
     const composedContent = composeFrame(getFrame(data), buildExpression(refs), refs.extendList);
-    const runtimeImport = (`${data?.base}`.toLowerCase() === 'image' || behavior.hasNavigation) ? `import '${runtimeImportPath}';` : '';
+    const usesOverrideContainer = composedContent.includes('_buildWithOverride(');
+    const usesMeta = getProps(data).id !== undefined && getProps(data).id !== null && getProps(data).id !== '';
+    // Import the runtime for style helpers, identity/meta helpers, images, or navigation.
+    const runtimeImport = (usesOverrideContainer || usesMeta || `${data?.base}`.toLowerCase() === 'image' || behavior.hasNavigation) ? `import '${runtimeImportPath}';` : '';
     const contextSource = hasLogic ? contextMembers(data, inputs) : '';
     const storeComponentName = structure.componentName;
-    const stateful = `class ${name} extends StatefulWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n\n  @override\n  State<${name}> createState() => _${name}State();\n}\n\nclass _${name}State extends State<${name}> {\n  ${stateFields}\n  ${storeMembers}\n\n  @override\n  void initState() {\n    super.initState();\n    ${hasState ? `_storeId = '${storeComponentName}:\${identityHashCode(this)}';` : ''}\n    ${init}\n    ${hasState ? '_publishState();' : ''}\n    ${effects}\n  }\n\n  ${hasState ? `@override\n  void dispose() {\n    moduleStore.remove<${stateModelName(specPath)}>(_storeId);\n    super.dispose();\n  }` : ''}\n\n  ${contextSource}\n\n  @override\n  Widget build(BuildContext context) {\n    return ${composedContent};\n  }\n}`;
-    const stateless = `class ${name} extends StatelessWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n  ${name} get widget => this;\n\n  ${contextSource}\n\n  @override\n  Widget build(BuildContext context) {\n    return ${composedContent};\n  }\n}`;
+    const overrideHelperStateful = usesOverrideContainer ? `\n\n  ${buildWithOverrideMethod(true)}` : '';
+    const overrideHelperStateless = usesOverrideContainer ? `\n\n  ${buildWithOverrideMethod(false)}` : '';
+    const metaHelperStateful = `\n\n  ${buildMetaMethod(data, true)}`;
+    const metaHelperStateless = `\n\n  ${buildMetaMethod(data, false)}`;
+    const stateful = `class ${name} extends StatefulWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n\n  @override\n  State<${name}> createState() => _${name}State();\n}\n\nclass _${name}State extends State<${name}> {\n  ${stateFields}\n  ${storeMembers}\n\n  @override\n  void initState() {\n    super.initState();\n    ${hasState ? `_storeId = '${storeComponentName}:\${identityHashCode(this)}';` : ''}\n    ${stateInit}\n    ${hasState ? '_publishState();' : ''}\n    ${effects}\n  }\n\n  ${hasState ? `@override\n  void dispose() {\n    moduleStore.remove<${stateModelName(specPath)}>(_storeId);\n    super.dispose();\n  }` : ''}\n\n  ${contextSource}${overrideHelperStateful}${metaHelperStateful}\n\n  @override\n  Widget build(BuildContext context) {\n    return _applyMeta(${composedContent});\n  }\n}`;
+    const stateless = `class ${name} extends StatelessWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n  ${name} get widget => this;\n\n  ${contextSource}${overrideHelperStateless}${metaHelperStateless}\n\n  @override\n  Widget build(BuildContext context) {\n    return _applyMeta(${composedContent});\n  }\n}`;
     const blurImport = JSON.stringify(data).includes('backdropFilter') ? "import 'dart:ui' as ui;" : '';
     const content = `import 'package:flutter/material.dart';\n${blurImport}\n${runtimeImport}\n${imports}\n${storeImport}\n${serviceImport}\n\n${behavior.requiresFlutterStatefulWidget ? stateful : stateless}\n`;
     await ensurePathExist(dirname(outputPath));
     await writeFile(outputPath, content.replace(/^\s+$/gm, ''));
 }
 
+/**
+ * Generates a thin Dart widget that wraps the base component referenced by
+ * `data.__specBase`, forwarding local modifier overrides as named parameters
+ * `overrideStyles`, `overrideProps`, and `overrideStates`. The base widget
+ * is responsible for accepting and merging those overrides.
+ */
+async function composeFlutterSpecBaseWrapper({data, specPath}) {
+    const outputPath = generatedPath(specPath);
+    const name = classNameFromPath(specPath);
+    const baseClass = classNameFromPath(data.__specBase);
+    let baseImportPath = relative(dirname(outputPath), generatedPath(data.__specBase)).split(sep).join('/');
+    if (!baseImportPath.startsWith('.')) baseImportPath = `./${baseImportPath}`;
+    const overrideStyles = dartLiteral(getStyles(data));
+    const overrideProps = dartLiteral(
+        Object.fromEntries(Object.entries(getProps(data)).filter(([, v]) => v !== undefined && v !== null))
+    );
+    const overrideStates = dartLiteral(getStates(data));
+    const inputs = collectInputs(data);
+    const constructorFields = inputs.map(input => `this.${input}`).join(', ');
+    const fieldDeclarations = inputs.map(input => `final dynamic ${input};`).join('\n  ');
+    const content = `import 'package:flutter/material.dart';\nimport '${baseImportPath}';\n\nclass ${name} extends StatelessWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n\n  @override\n  Widget build(BuildContext context) {\n    return ${baseClass}(\n      loopIndex: loopIndex,\n      loopElement: loopElement,\n      overrideStyles: ${overrideStyles},\n      overrideProps: ${overrideProps},\n      overrideStates: ${overrideStates},\n    );\n  }\n}\n`;
+    await ensurePathExist(dirname(outputPath));
+    await writeFile(outputPath, content);
+}
+
 export async function composeFlutterComponent({data, path: specPath}) {
     if (!data) return;
+    if (data.__specBase) {
+        return composeFlutterSpecBaseWrapper({data, specPath});
+    }
     await writeWidget({
         data,
         specPath,
@@ -579,9 +767,12 @@ export async function composeFlutterLoop({data, path: specPath}) {
                 : 'const SizedBox.shrink()';
             const items = `List<dynamic>.from(${stateIdentifier('data')} ?? const [])`;
             const column = `Column(mainAxisSize: MainAxisSize.min, children: ${items}.asMap().entries.map((entry) { final index = entry.key; final item = entry.value; return ${feed}; }).toList())`;
+            const row = `Row(mainAxisSize: MainAxisSize.min, children: ${items}.asMap().entries.map((entry) { final index = entry.key; final item = entry.value; return ${feed}; }).toList())`;
             const direction = data?.modifier?.props?.scroll;
-            const list = direction === 'vertical' || direction === 'horizontal'
-                ? `ListView.builder(scrollDirection: Axis.${direction}, shrinkWrap: true, primary: false, itemCount: ${items}.length, itemBuilder: (context, index) { final item = ${items}[index]; return ${feed}; })`
+            const list = direction === 'vertical'
+                ? `ListView.builder(scrollDirection: Axis.vertical, shrinkWrap: true, primary: false, itemCount: ${items}.length, itemBuilder: (context, index) { final item = ${items}[index]; return ${feed}; })`
+                : direction === 'horizontal'
+                    ? `SingleChildScrollView(scrollDirection: Axis.horizontal, child: ${row})`
                 : direction === 'both'
                     ? `SingleChildScrollView(scrollDirection: Axis.horizontal, child: SingleChildScrollView(scrollDirection: Axis.vertical, child: ${column}))`
                     : column;

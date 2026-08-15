@@ -1,254 +1,535 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Component",
-  "description": "FastUI component details",
+  "$comment": "FastUI Spec Schema — v2 (top-down composition model).\n\n## PRIMITIVES\nEvery spec file has exactly one root key that selects its primitive:\n\n  component   A renderable UI node (container, text, image, …).\n              This is the most common primitive.\n\n  condition   A two-branch conditional node. Renders `modifier.left`\n              (true branch) or `modifier.right` (false branch) based\n              on `modifier.states.condition`. Both branches are paths\n              to sibling specs.\n\n  loop        A repeating list node. Driven by `modifier.states.data`\n              (an array). Each iteration renders the template spec\n              referenced by `modifier.feed`. The template receives\n              `inputs.loopElement` and `inputs.loopIndex`.\n\n  surface     A full-screen surface (page or overlay). Describes\n              navigation metadata — route name, presentation mode, etc.\n\n## COMPOSITION MODEL (top-down)\nComposition flows **downward** from parent to children.\n\n  1. A composer spec sets `modifier.extend` to an ordered array of\n     relative paths to its child specs. The generator renders each\n     child inside the composer's layout according to `modifier.frame`.\n\n  2. `modifier.frame` controls how the composer positions its own\n     content alongside each extended child:\n       base    — layout axis + direction + overlay mode.\n                 Format: '<axis>.<direction>[.stack]'\n                 axis      : row | column\n                 direction : start | end\n                 .stack    : optional — children overlap (z-stack)\n       id      — optional identifier used when there are multiple\n                 composers at the same level referencing each other.\n       current — CSS styles applied to this node's own rendered view.\n       next    — CSS styles applied uniformly to every extended child\n                 wrapper.\n\n  3. A spec can inherit another spec by setting `base` to a relative\n     path ending in `.yml`. The resolved spec's `base` (primitive) and\n     `modifier.styles` are inherited; the local `modifier` overrides\n     and merges on top. INSTANCE specs always point `base` at their\n     shared MAIN COMPONENT spec path.\n\n## BASE TYPES\nWhen `base` is a string primitive (not a path), it selects the\nrenderer:\n\n  container   A generic box. Default for frames, groups, sections.\n              Supports all CSS layout styles.\n\n  text        A text node. Requires `modifier.props.children`.\n              Supports typography CSS styles.\n\n  image       An image node. Requires `modifier.props.src`.\n              Supports size + objectFit styles.\n\n## STYLES\n`modifier.styles` (and `frame.current` / `frame.next`) accept either:\n  - A CSS object (all standard CSS properties are valid — see $defs.css).\n  - A logic reference string:  'logics.<functionName>'  resolved at\n    runtime by the generated service file.\n\n## ACTIONS\n`modifier.props.onClick` (and other event props) accept an action\nobject:\n  { action: 'state.set', target: '<stateName>', value: <any> }\n  { action: 'navigation.open', name: '<routeName>', type: 'push'|'replace'|'sheet'|'dialog' }\n  { action: 'navigation.back' }\n  { action: 'navigation.close' }\n\n## SURFACE\nUsed by the surface root to describe a page or overlay navigation\nsurface. Not rendered directly.\n\n## EXAMPLE — multi-child column composer\n```yaml\ncomponent:\n  base: container\n  modifier:\n    extend:\n      - ./header.yml\n      - ./body.yml\n      - ./footer.yml\n    frame:\n      base: column.start\n      current:\n        width: 100%\n        height: 100%\n        backgroundColor: '#ffffff'\n      next:\n        width: 100%\n```\n\n## EXAMPLE — instance reusing shared spec\n```yaml\ncomponent:\n  base: ../../shared/common/iprimary_button.yml\n  modifier:\n    styles:\n      backgroundColor: '#0066ff'\n    props:\n      id: my-button\n```\n\n## EXAMPLE — condition\n```yaml\ncondition:\n  modifier:\n    states:\n      condition: false\n    left: ./logged_in_view.yml\n    right: ./logged_out_view.yml\n```\n\n## EXAMPLE — loop\n```yaml\nloop:\n  modifier:\n    states:\n      data: []\n    feed: ./list_item.yml\n    props:\n      scroll: vertical\n```",
+  "title": "FastUI Spec",
+  "description": "FastUI component/condition/loop/surface spec file",
   "type": "object",
   "properties": {
-    "app": {
-      "$ref": "#/$defs/component"
-    },
     "component": {
-      "$ref": "#/$defs/component"
+      "$ref": "#/$defs/component_root"
+    },
+    "app": {
+      "$comment": "Alias for component. Used for the root application shell spec.",
+      "$ref": "#/$defs/component_root"
     },
     "components": {
-      "$ref": "#/$defs/component"
+      "$comment": "Alias for component. Used when a spec exports multiple variants (legacy).",
+      "$ref": "#/$defs/component_root"
     },
     "loop": {
-      "type": "object",
-      "properties": {
-        "modifier": {
-          "type": "object",
-          "properties": {
-            "extend": {
-              "$ref": "#/$defs/local_path"
-            },
-            "ref": {
-              "$ref": "#/$defs/local_path"
-            },
-            "feed": {
-              "$ref": "#/$defs/local_path"
-            },
-            "props": {
-              "type": "object",
-              "properties": {
-                "children": {
-                  "type": "string"
-                },
-                "scroll": {
-                  "type": "string",
-                  "enum": ["vertical", "horizontal", "both"]
-                }
-              }
-            },
-            "styles": {
-              "oneOf": [
-                {
-                  "type": "string",
-                  "pattern": "^((services|logics)\\.)[a-zA-Z0-9]+"
-                },
-                {
-                  "$ref": "#/$defs/css"
-                }
-              ]
-            },
-            "frame": {
-              "$ref": "#/$defs/frame"
-            },
-            "wrapper": {
-              "$ref": "#/$defs/wrapper"
-            }
-          },
-          "required": ["feed"]
-        }
-      }
+      "$ref": "#/$defs/loop_root"
     },
     "condition": {
-      "type": "object",
-      "properties": {
-        "modifier": {
-          "type": "object",
-          "properties": {
-            "extend": {
-              "$ref": "#/$defs/local_path"
-            },
-            "ref": {
-              "$ref": "#/$defs/local_path"
-            },
-            "left": {
-              "$ref": "#/$defs/local_path"
-            },
-            "right": {
-              "$ref": "#/$defs/local_path"
-            },
-            "frame": {
-              "$ref": "#/$defs/frame"
-            },
-            "wrapper": {
-              "$ref": "#/$defs/wrapper"
-            }
-          }
-        }
-      },
-      "required": [
-        "modifier"
-      ]
+      "$ref": "#/$defs/condition_root"
+    },
+    "surface": {
+      "$ref": "#/$defs/surface_root"
     }
   },
+  "additionalProperties": false,
   "$defs": {
-    "wrapper": {
-      "description": "Positions this node relative to the next composed sibling ({view}). Driven by the PARENT axis. Carries only base + optional id; real visual styling belongs on frame.",
+    "frame_base_enum": {
+      "$comment": "The eight valid frame.base tokens.\n  row.start        — children placed left-to-right; current before extend children.\n  row.end          — children placed left-to-right; extend children before current.\n  column.start     — children placed top-to-bottom; current before extend children.\n  column.end       — children placed top-to-bottom; extend children before current.\n  *.stack variants — children overlap (z-stack / Stack widget); order is back-to-front.",
+      "type": "string",
+      "enum": [
+        "row.start",
+        "row.end",
+        "column.start",
+        "column.end",
+        "row.start.stack",
+        "row.end.stack",
+        "column.start.stack",
+        "column.end.stack"
+      ]
+    },
+    "frame_base_value": {
+      "$comment": "The value of frame.base. Two forms:\n1. String shorthand: one of the eight layout tokens (same as frame_base_enum).\n2. Object form: { type: <token>, styles: <CSS object> } — `styles` are merged\n   onto the outer `_base` container div/widget so you can size or decorate\n   the outer composition shell directly without touching current or next.",
       "oneOf": [
         {
-          "type": "string",
-          "enum": [
-            "column.start",
-            "column.end",
-            "row.start",
-            "row.end",
-            "column.start.stack",
-            "column.end.stack",
-            "row.start.stack",
-            "row.end.stack"
-          ]
+          "$ref": "#/$defs/frame_base_enum"
         },
         {
           "type": "object",
           "properties": {
-            "base": {
-              "type": "string",
-              "enum": [
-                "column.start",
-                "column.end",
-                "row.start",
-                "row.end",
-                "column.start.stack",
-                "column.end.stack",
-                "row.start.stack",
-                "row.end.stack"
-              ]
+            "type": {
+              "$comment": "The layout token. Same values as frame_base_enum.",
+              "$ref": "#/$defs/frame_base_enum"
             },
-            "id": {
-              "type": "string"
+            "styles": {
+              "$comment": "CSS styles applied to the outer `_base` container (the flex/grid shell that wraps all slots). Use for sizing (width, height, flex) or decorating the composition shell itself.",
+              "$ref": "#/$defs/styles_value"
             }
           },
-          "required": [
-            "base"
-          ]
+          "required": ["type"],
+          "additionalProperties": false
         }
       ]
     },
     "frame": {
+      "$comment": "Layout contract for a composer node.\n- base    : required — axis, direction, and optional stack overlay mode.\n            String form: 'row.start' etc.\n            Object form: { type: 'row.start', styles: {} } — styles go on the _base outer container.\n- id      : optional — identifies this frame node for cross-composer referencing.\n- current : CSS styles applied to this node's own rendered view/container.\n- next    : CSS styles applied uniformly to every `extend` child's wrapper.\n\nShorthand: a plain string (one of the frame_base_enum values) is\nequivalent to { base: <value>, current: {}, next: {} }.",
       "oneOf": [
         {
-          "type": "string",
-          "enum": [
-            "column.start",
-            "column.end",
-            "row.start",
-            "row.end",
-            "column.start.stack",
-            "column.end.stack",
-            "row.start.stack",
-            "row.end.stack"
-          ]
+          "$ref": "#/$defs/frame_base_enum"
         },
         {
           "type": "object",
           "properties": {
             "base": {
-              "type": "string",
-              "enum": [
-                "column.start",
-                "column.end",
-                "row.start",
-                "row.end",
-                "column.start.stack",
-                "column.end.stack",
-                "row.start.stack",
-                "row.end.stack"
-              ]
+              "$ref": "#/$defs/frame_base_value"
             },
-            "styles": {
-              "oneOf": [
-                {
-                  "type": "string",
-                  "pattern": "^((services|logics)\\.)[a-zA-Z0-9]+"
-                },
-                {
-                  "$ref": "#/$defs/css"
-                }
-              ]
+            "id": {
+              "$comment": "Optional identifier. Must be unique among sibling composers if used.",
+              "type": "string"
+            },
+            "current": {
+              "$comment": "CSS styles for THIS node's own rendered view (not children).",
+              "$ref": "#/$defs/styles_value"
+            },
+            "next": {
+              "$comment": "CSS styles applied to the wrapper of EVERY extended child.",
+              "$ref": "#/$defs/styles_value"
             }
           },
-          "required": [
-            "base"
-          ]
+          "required": ["base"],
+          "additionalProperties": false
         }
       ]
     },
     "local_path": {
+      "$comment": "A relative path to a sibling or ancestor spec file. Must end in .yml or .yaml.",
       "type": "string",
       "pattern": "((\\.yml)|(\\.yaml))$"
     },
-    "component": {
+    "local_path_or_array": {
+      "$comment": "extend accepts a single path OR an ordered array of paths.\nSingle path: the composer has exactly one extended child.\nArray: the composer has multiple children rendered in listed order\n       according to frame.base direction. The generator respects this\n       order — do not re-order unless you want the layout to change.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/local_path"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/local_path"
+          },
+          "minItems": 1
+        }
+      ]
+    },
+    "styles_value": {
+      "$comment": "Either a plain CSS object or a logic-reference string.\n  CSS object     — standard CSS property names in camelCase.\n  Logic ref      — 'logics.<name>' resolved by the generated service.\n                   The generator calls the service function with the\n                   component context and inlines the return value.",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^(logics|services)\\.[a-zA-Z0-9_]+$",
+          "description": "Logic or service function reference. Format: 'logics.<functionName>'."
+        },
+        {
+          "$ref": "#/$defs/css"
+        }
+      ]
+    },
+    "action": {
+      "$comment": "An action object assigned to an event prop (e.g. onClick, onChange).\n\nSupported actions:\n  state.set        — sets a local state key.\n    { action: 'state.set', target: '<stateName>', value: <any> }\n\n  navigation.open  — navigates to a named route.\n    { action: 'navigation.open', name: '<routeName>',\n      type: 'push'|'replace'|'sheet'|'dialog' }\n\n  navigation.back  — goes back to previous route.\n    { action: 'navigation.back' }\n\n  navigation.close — closes the current overlay/sheet/dialog.\n    { action: 'navigation.close' }",
       "type": "object",
+      "required": ["action"],
       "properties": {
-        "base": {
+        "action": {
           "type": "string",
           "enum": [
-            "container",
-            "image",
-            "text"
+            "state.set",
+            "navigation.open",
+            "navigation.back",
+            "navigation.close"
+          ]
+        },
+        "target": {
+          "$comment": "For state.set: name of the state key to update.",
+          "type": "string"
+        },
+        "value": {
+          "$comment": "For state.set: the value to assign. Can be a literal or 'event.value'."
+        },
+        "name": {
+          "$comment": "For navigation.open: the route name to navigate to.",
+          "type": "string"
+        },
+        "type": {
+          "$comment": "For navigation.open: how the route is presented.",
+          "type": "string",
+          "enum": ["push", "replace", "sheet", "dialog"]
+        }
+      }
+    },
+    "props": {
+      "$comment": "Props are platform-neutral attributes passed to the rendered primitive.\nCommon props shared across all component types:",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$comment": "DOM/widget identifier. Can reference state: 'states.<name>' or inputs.",
+          "type": "string"
+        },
+        "children": {
+          "$comment": "Inline text content. Can reference state ('states.<name>'), input\n('inputs.<name>'), or component ('components.<name>'). Only meaningful\non base: text or base: container.",
+          "type": "string"
+        },
+        "onClick": {
+          "$comment": "Action triggered when the user taps/clicks this node.",
+          "$ref": "#/$defs/action"
+        },
+        "onChange": {
+          "$comment": "Action triggered when an input value changes.",
+          "$ref": "#/$defs/action"
+        },
+        "src": {
+          "$comment": "Image source URL. Required for base: image. Can be a static path,\na loop element reference ('inputs.loopElement.<field>'), or a state.",
+          "type": "string"
+        },
+        "alt": {
+          "$comment": "Accessible alt text for images.",
+          "type": "string"
+        },
+        "control": {
+          "$comment": "Set to 'input' to render as a native input control inside a container.",
+          "type": "string",
+          "enum": ["input"]
+        },
+        "type": {
+          "$comment": "Input type when control: input is set.",
+          "type": "string",
+          "enum": ["text", "password", "email", "number", "tel", "url", "search"]
+        },
+        "value": {
+          "$comment": "Controlled value for an input. Typically 'states.value'.",
+          "type": "string"
+        },
+        "placeholder": {
+          "$comment": "Placeholder text for an input control.",
+          "type": "string"
+        },
+        "scroll": {
+          "$comment": "Scroll direction for loop containers.",
+          "type": "string",
+          "enum": ["vertical", "horizontal", "both", "none"]
+        },
+        "href": {
+          "$comment": "URL to navigate to when the element is tapped/clicked. React: renders as <a href>. Flutter: GestureDetector + url_launcher. Mutually exclusive with onClick navigation actions.",
+          "type": "string"
+        },
+        "target": {
+          "$comment": "Link target. React: HTML target attribute on <a>. Flutter: ignored (all links open externally).",
+          "type": "string",
+          "enum": ["_blank", "_self", "_parent", "_top"]
+        },
+        "disabled": {
+          "$comment": "Disables interaction with the element. React: HTML disabled attribute. Flutter: wraps in IgnorePointer.",
+          "type": "boolean"
+        },
+        "checked": {
+          "$comment": "Controlled checked state for checkbox/radio inputs. React: HTML checked attribute. Flutter: passed as initial value.",
+          "type": "boolean"
+        },
+        "label": {
+          "$comment": "Accessible label for the element. React: maps to aria-label. Flutter: Semantics.label.",
+          "type": "string"
+        },
+        "role": {
+          "$comment": "ARIA role. React: HTML role attribute. Flutter: mapped to Semantics properties (button, link, image, header).",
+          "type": "string",
+          "enum": ["button", "link", "image", "heading", "list", "listitem", "dialog", "alert", "navigation", "main", "search", "form", "article", "region", "none"]
+        },
+        "maxLength": {
+          "$comment": "Maximum character length for input controls.",
+          "type": "number"
+        },
+        "min": {
+          "$comment": "Minimum value for number/date inputs.",
+          "type": "string"
+        },
+        "max": {
+          "$comment": "Maximum value for number/date inputs.",
+          "type": "string"
+        },
+        "step": {
+          "$comment": "Step increment for number inputs.",
+          "type": "number"
+        },
+        "autoFocus": {
+          "$comment": "Whether the element should automatically receive focus on mount. React: HTML autofocus. Flutter: FocusNode.requestFocus in initState.",
+          "type": "boolean"
+        },
+        "onFocus": {
+          "$comment": "Action triggered when the element receives focus.",
+          "$ref": "#/$defs/action"
+        },
+        "onBlur": {
+          "$comment": "Action triggered when the element loses focus.",
+          "$ref": "#/$defs/action"
+        },
+        "onLongPress": {
+          "$comment": "Action triggered on a long press/tap. React: onMouseDown hold approximation. Flutter: GestureDetector.onLongPress.",
+          "$ref": "#/$defs/action"
+        },
+        "onSubmit": {
+          "$comment": "Action triggered when a form or input is submitted (Enter key). React: onSubmit. Flutter: TextFormField.onFieldSubmitted.",
+          "$ref": "#/$defs/action"
+        },
+        "onMouseEnter": {
+          "$comment": "Action triggered when the pointer enters the element. React: onMouseEnter. Flutter: MouseRegion.onEnter.",
+          "$ref": "#/$defs/action"
+        },
+        "onMouseLeave": {
+          "$comment": "Action triggered when the pointer leaves the element. React: onMouseLeave. Flutter: MouseRegion.onExit.",
+          "$ref": "#/$defs/action"
+        }
+      }
+    },
+    "states_map": {
+      "$comment": "Local reactive state for this component. Keys are state names,\nvalues are initial values. Any state can be referenced in styles,\nprops, or children as 'states.<name>'.\n\nState changes are triggered by actions (e.g. onClick: state.set).\nFor toggle/boolean state, use { variant: '<stateName>', action: 'state.set' }.",
+      "type": "object"
+    },
+    "effects_map": {
+      "$comment": "Side-effects run on component mount or when dependencies change.\nKeys are effect names, values describe the trigger and logic.\nGenerated as useEffect (React) or initState (Flutter).",
+      "type": "object"
+    },
+    "metadata": {
+      "$comment": "Internal translator metadata — not emitted to generated code.\nUsed by the Figma translator to attach surface presentation info\nand other non-generatable context.",
+      "type": "object",
+      "properties": {
+        "surface": {
+          "type": "string",
+          "enum": ["page", "overlay", "sheet", "dialog"]
+        }
+      }
+    },
+    "component_modifier": {
+      "$comment": "Modifier for a component spec. All fields are optional except where\nnoted. Mandatory fields depend on the component base type:\n  base: text   — props.children is expected (may be dynamic via states/inputs)\n  base: image  — props.src is required\n  base: container with extend — frame.base is strongly recommended\n                                to define the layout direction.",
+      "type": "object",
+      "properties": {
+        "extend": {
+          "$comment": "COMPOSITION: ordered list of child spec paths this component renders\nas top-down children. The composer passes its state and view context\ndown to each child. Children's own prop contracts are unchanged.\nA single path or an array of paths is accepted.",
+          "$ref": "#/$defs/local_path_or_array"
+        },
+        "styles": {
+          "$comment": "Visual styles for this node's own rendered container/widget.",
+          "$ref": "#/$defs/styles_value"
+        },
+        "props": {
+          "$comment": "Props passed to the rendered primitive (id, children, onClick, src, …).",
+          "$ref": "#/$defs/props"
+        },
+        "states": {
+          "$comment": "Local reactive state. Initial values. Referenced as 'states.<name>'.",
+          "$ref": "#/$defs/states_map"
+        },
+        "effects": {
+          "$comment": "Side-effect declarations run on mount or dependency change.",
+          "$ref": "#/$defs/effects_map"
+        },
+        "frame": {
+          "$comment": "REQUIRED when extend is set. Defines the layout axis, direction, and\nper-layer styles for this composer. Omit on leaf nodes (no children).",
+          "$ref": "#/$defs/frame"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "component_root": {
+      "$comment": "A renderable UI node. The most common spec primitive.\n\nMandatory: base (string primitive OR relative .yml path)\nMandatory: modifier (even if empty: {})\n\n--- Primitives ---\n  base: container  Generic box/frame. Use for layout wrappers and groups.\n                   Use with modifier.extend + modifier.frame to compose children.\n\n  base: text       Text node. modifier.props.children is the text content.\n                   Content may be a literal, a 'states.<name>' reference,\n                   or an 'inputs.<name>' reference (for loop templates).\n\n  base: image      Image node. modifier.props.src is the image URL.\n                   modifier.props.alt is the accessible label.\n\n--- Shared spec inheritance ---\n  base: ../../shared/common/iprimary_button.yml\n                   Inherits that spec's primitive and styles. Local modifier\n                   overrides and merges on top. Used for INSTANCE nodes that\n                   reuse a shared MAIN COMPONENT spec.",
+      "type": "object",
+      "required": ["base", "modifier"],
+      "properties": {
+        "base": {
+          "$comment": "Either a primitive type name OR a relative path to another spec file.\n  Primitive: 'container' | 'text' | 'image'\n  Shared spec: relative path ending in .yml or .yaml\n                e.g. '../../shared/common/iprimary_button.yml'",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["container", "text", "image"],
+              "description": "Primitive renderer type."
+            },
+            {
+              "$ref": "#/$defs/local_path",
+              "description": "Relative path to a shared spec to inherit from."
+            }
           ]
         },
         "modifier": {
+          "$ref": "#/$defs/component_modifier"
+        }
+      },
+      "additionalProperties": false
+    },
+    "condition_root": {
+      "$comment": "A conditional branch node. Renders `modifier.left` when\n`modifier.states.condition` is truthy, `modifier.right` otherwise.\n\nMandatory: modifier (with at least one of left/right)\nMandatory: modifier.states.condition (initial boolean)\n\nBoth left and right must be relative paths to sibling specs.\nThe condition state is toggled by state.set actions.\n\nExample:\n  condition:\n    modifier:\n      states:\n        condition: false\n      left: ./logged_in.yml\n      right: ./logged_out.yml\n      frame:\n        base: column.start\n        current:\n          width: 100%",
+      "type": "object",
+      "required": ["modifier"],
+      "properties": {
+        "modifier": {
           "type": "object",
+          "required": ["states"],
           "properties": {
-            "extend": {
+            "left": {
+              "$comment": "Path to the spec rendered when condition is TRUE.",
               "$ref": "#/$defs/local_path"
             },
-            "ref": {
+            "right": {
+              "$comment": "Path to the spec rendered when condition is FALSE.",
               "$ref": "#/$defs/local_path"
-            },
-            "props": {
-              "type": "object",
-              "properties": {
-                "children": {
-                  "type": "string"
-                }
-              }
             },
             "states": {
+              "$comment": "Must include 'condition' key with an initial boolean value.\nMay include additional state keys used by the rendered branches.",
               "type": "object",
-              "patternProperties": {
+              "required": ["condition"],
+              "properties": {
+                "condition": {
+                  "type": "boolean",
+                  "default": false
+                }
               }
             },
-            "effects": {
-              "type": "object"
-            },
             "styles": {
-              "oneOf": [
-                {
-                  "type": "string",
-                  "pattern": "^((services|logics)\\.)[a-zA-Z0-9]+"
-                },
-                {
-                  "$ref": "#/$defs/css"
-                }
-              ]
+              "$comment": "Styles for the outer wrapper that contains the active branch.",
+              "$ref": "#/$defs/styles_value"
+            },
+            "props": {
+              "$ref": "#/$defs/props"
+            },
+            "effects": {
+              "$ref": "#/$defs/effects_map"
             },
             "frame": {
               "$ref": "#/$defs/frame"
             },
-            "wrapper": {
-              "$ref": "#/$defs/wrapper"
+            "metadata": {
+              "$ref": "#/$defs/metadata"
             }
-          }
+          },
+          "additionalProperties": false
         }
       },
-      "required": [
-        "modifier"
-      ]
+      "additionalProperties": false
+    },
+    "loop_root": {
+      "$comment": "A repeating list node. Renders `modifier.feed` once per item in\n`modifier.states.data`. The feed spec receives the loop context:\n  inputs.loopElement  — the current item object\n  inputs.loopIndex    — the current zero-based index\n\nMandatory: modifier.feed (path to the item template spec)\nMandatory: modifier.states.data (initial array, may be empty)\n\nExample:\n  loop:\n    modifier:\n      states:\n        data: []\n      feed: ./list_item.yml\n      props:\n        scroll: vertical\n        id: product-list\n      styles:\n        width: 100%\n        flex: 1",
+      "type": "object",
+      "required": ["modifier"],
+      "properties": {
+        "modifier": {
+          "type": "object",
+          "required": ["feed"],
+          "properties": {
+            "feed": {
+              "$comment": "REQUIRED. Relative path to the item template spec file.\nThis spec will be rendered once per element in states.data.\nThe template should declare 'loopElement' and 'loopIndex' inputs.",
+              "$ref": "#/$defs/local_path"
+            },
+            "styles": {
+              "$comment": "Styles for the loop container (the scrollable list wrapper).",
+              "$ref": "#/$defs/styles_value"
+            },
+            "props": {
+              "$comment": "Props for the loop container. scroll controls scroll direction.",
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "scroll": {
+                  "type": "string",
+                  "enum": ["vertical", "horizontal", "both", "none"]
+                }
+              },
+              "additionalProperties": false
+            },
+            "states": {
+              "$comment": "Must include 'data' key with initial array value.\nThe generator subscribes to this state to drive re-renders.",
+              "type": "object",
+              "required": ["data"],
+              "properties": {
+                "data": {
+                  "type": "array",
+                  "default": []
+                }
+              }
+            },
+            "effects": {
+              "$ref": "#/$defs/effects_map"
+            },
+            "frame": {
+              "$ref": "#/$defs/frame"
+            },
+            "metadata": {
+              "$ref": "#/$defs/metadata"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "surface_root": {
+      "$comment": "Describes a navigation surface (page or overlay). Not rendered directly.\nUsed by the routing generator to build the app route table and the\nFlutter FastUINavigation runtime.\n\nMandatory: modifier.name (route name used in navigation.open actions)\nMandatory: modifier.mode\n\nModes:\n  page     — a full-screen surface pushed onto the navigation stack.\n  overlay  — floats above the current surface.\n  sheet    — bottom/top/side sheet presentation.\n  dialog   — modal dialog.\n\nExample:\n  surface:\n    modifier:\n      name: choices\n      mode: overlay\n      scroll: none\n      safeArea: false\n      barrierColor: '#00000066'\n      width: 100%\n      height: 360",
+      "type": "object",
+      "required": ["modifier"],
+      "properties": {
+        "modifier": {
+          "type": "object",
+          "required": ["name", "mode"],
+          "properties": {
+            "name": {
+              "$comment": "REQUIRED. The route name referenced by navigation.open actions.",
+              "type": "string"
+            },
+            "mode": {
+              "$comment": "REQUIRED. How this surface is presented in the navigation stack.",
+              "type": "string",
+              "enum": ["page", "overlay", "sheet", "dialog"]
+            },
+            "scroll": {
+              "$comment": "Scroll behaviour of the surface content.",
+              "type": "string",
+              "enum": ["vertical", "horizontal", "both", "none"],
+              "default": "none"
+            },
+            "safeArea": {
+              "$comment": "Whether the surface respects device safe-area insets (notch, home bar).",
+              "type": "boolean",
+              "default": true
+            },
+            "barrierColor": {
+              "$comment": "Background barrier color for overlays/sheets/dialogs (CSS color string).",
+              "type": "string"
+            },
+            "barrierDismissible": {
+              "$comment": "Whether tapping the barrier dismisses the surface.",
+              "type": "boolean",
+              "default": true
+            },
+            "width": {
+              "$comment": "Explicit width of the surface content area.",
+              "$ref": "#/$defs/length"
+            },
+            "height": {
+              "$comment": "Explicit height of the surface content area.",
+              "$ref": "#/$defs/length"
+            },
+            "transition": {
+              "$comment": "Transition animation type for route entry.",
+              "type": "string",
+              "enum": ["MOVE_IN", "PUSH", "DISSOLVE", "SMART_ANIMATE"]
+            },
+            "direction": {
+              "$comment": "Direction the transition enters from.",
+              "type": "string",
+              "enum": ["TOP", "BOTTOM", "LEFT", "RIGHT"]
+            },
+            "durationMs": {
+              "$comment": "Duration of the transition animation in milliseconds.",
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     },
     "length": {
       "anyOf": [
@@ -1117,8 +1398,10 @@
           ]
         },
         "opacity": {
-          "type": "integer",
-          "default": "1"
+          "$comment": "Element opacity 0.0 (transparent) – 1.0 (opaque). Flutter maps to Opacity widget; React maps to CSS opacity.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
         },
         "orphans": {
           "type": "integer",
@@ -1988,6 +2271,170 @@
               "type": "integer"
             }
           ]
+        },
+        "backgroundColor": {
+          "$comment": "Background fill color. Accepts hex (#RRGGBB / #RRGGBBAA), rgba(), or named CSS color. Flutter: BoxDecoration.color. React: CSS backgroundColor.",
+          "type": "string"
+        },
+        "background": {
+          "$comment": "CSS background shorthand — used as a backgroundColor alias when no image/gradient is needed. Flutter: same as backgroundColor. React: CSS background.",
+          "type": "string"
+        },
+        "padding": {
+          "$comment": "CSS padding shorthand: '8', '8 16', '8 16 8', or '8 16 8 16' (top right bottom left). Accepts px suffix. Flutter: Container.padding. React: CSS padding.",
+          "type": "string"
+        },
+        "margin": {
+          "$comment": "CSS margin shorthand. Same syntax as padding. Flutter: Container.margin. React: CSS margin.",
+          "type": "string"
+        },
+        "marginTop": {
+          "$comment": "Top margin. Overrides margin shorthand top value.",
+          "$ref": "#/$defs/length"
+        },
+        "marginRight": {
+          "$comment": "Right margin. Overrides margin shorthand right value.",
+          "$ref": "#/$defs/length"
+        },
+        "marginBottom": {
+          "$comment": "Bottom margin. Overrides margin shorthand bottom value.",
+          "$ref": "#/$defs/length"
+        },
+        "marginLeft": {
+          "$comment": "Left margin. Overrides margin shorthand left value.",
+          "$ref": "#/$defs/length"
+        },
+        "fontWeight": {
+          "$comment": "Font weight. Number 100–900 or named keyword. Flutter: FontWeight.wN. React: CSS fontWeight.",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["normal", "bold", "lighter", "bolder"]
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "fontStyle": {
+          "$comment": "Font style. Flutter: FontStyle.italic / FontStyle.normal. React: CSS fontStyle.",
+          "type": "string",
+          "enum": ["normal", "italic", "oblique"]
+        },
+        "lineHeightPx": {
+          "$comment": "FastUI-specific: absolute line height in pixels. Flutter maps to TextStyle.height = lineHeightPx / fontSize. React: use lineHeight instead.",
+          "type": "number"
+        },
+        "objectFit": {
+          "$comment": "How an image fills its box. Flutter: BoxFit enum. React: CSS object-fit.",
+          "type": "string",
+          "enum": ["fill", "contain", "cover", "none", "scale-down"]
+        },
+        "backdropFilter": {
+          "$comment": "CSS backdrop-filter (e.g. 'blur(8px)'). Flutter: BackdropFilter + ImageFilter.blur. React: CSS backdrop-filter.",
+          "type": "string"
+        },
+        "WebkitBackdropFilter": {
+          "$comment": "WebKit vendor-prefixed alias for backdropFilter. Used as fallback in Safari/older browsers. Flutter treats identically to backdropFilter.",
+          "type": "string"
+        },
+        "flex": {
+          "$comment": "CSS flex grow factor shorthand (number). Flutter: Expanded(flex: value). React: CSS flex.",
+          "type": "number"
+        },
+        "flexDirection": {
+          "$comment": "Flex axis direction. Flutter: Row vs Column. React: CSS flex-direction.",
+          "type": "string",
+          "enum": ["row", "column", "row-reverse", "column-reverse"]
+        },
+        "flexWrap": {
+          "$comment": "Whether flex items wrap. Flutter: Wrap widget. React: CSS flex-wrap.",
+          "type": "string",
+          "enum": ["nowrap", "wrap", "wrap-reverse"]
+        },
+        "gap": {
+          "$comment": "Uniform spacing between flex/grid children. Flutter: SizedBox spacers. React: CSS gap.",
+          "$ref": "#/$defs/length"
+        },
+        "rowGap": {
+          "$comment": "Vertical gap between flex rows. Flutter: column spacing. React: CSS row-gap.",
+          "$ref": "#/$defs/length"
+        },
+        "alignItems": {
+          "$comment": "Cross-axis child alignment. Flutter: CrossAxisAlignment. React: CSS align-items.",
+          "type": "string",
+          "enum": ["flex-start", "flex-end", "center", "baseline", "stretch", "start", "end"]
+        },
+        "justifyContent": {
+          "$comment": "Main-axis child distribution. Flutter: MainAxisAlignment. React: CSS justify-content.",
+          "type": "string",
+          "enum": ["flex-start", "flex-end", "center", "space-between", "space-around", "space-evenly", "start", "end"]
+        },
+        "alignSelf": {
+          "$comment": "Cross-axis alignment override for a single child. Flutter: Align widget. React: CSS align-self.",
+          "type": "string",
+          "enum": ["auto", "flex-start", "flex-end", "center", "baseline", "stretch"]
+        },
+        "position": {
+          "$comment": "CSS positioning scheme. Flutter: Stack + Positioned for absolute; ignored for static/relative. React: CSS position.",
+          "type": "string",
+          "enum": ["static", "relative", "absolute", "fixed", "sticky"]
+        },
+        "overflow": {
+          "$comment": "Content overflow handling. 'hidden' → ClipRect/ClipRRect in Flutter; passed through in React.",
+          "type": "string",
+          "enum": ["visible", "hidden", "scroll", "auto", "clip"]
+        },
+        "overflowX": {
+          "$comment": "Horizontal overflow handling. Flutter: approximated by overflow.",
+          "type": "string",
+          "enum": ["visible", "hidden", "scroll", "auto", "clip"]
+        },
+        "overflowY": {
+          "$comment": "Vertical overflow handling. Flutter: approximated by overflow.",
+          "type": "string",
+          "enum": ["visible", "hidden", "scroll", "auto", "clip"]
+        },
+        "boxShadow": {
+          "$comment": "CSS box-shadow string (e.g. '0 2 8 rgba(0,0,0,0.2)'). Flutter: BoxDecoration.boxShadow. React: CSS box-shadow.",
+          "type": "string"
+        },
+        "textDecoration": {
+          "$comment": "Text decoration line. Flutter: TextDecoration enum. React: CSS text-decoration.",
+          "type": "string",
+          "enum": ["none", "underline", "overline", "line-through"]
+        },
+        "textTransform": {
+          "$comment": "Text case transformation. Flutter: applied via String methods at build time. React: CSS text-transform.",
+          "type": "string",
+          "enum": ["none", "capitalize", "uppercase", "lowercase"]
+        },
+        "whiteSpace": {
+          "$comment": "White-space handling. Flutter: Text.softWrap / Text.overflow mapping. React: CSS white-space.",
+          "type": "string",
+          "enum": ["normal", "nowrap", "pre", "pre-wrap", "pre-line"]
+        },
+        "display": {
+          "$comment": "CSS display mode. React: CSS display. Flutter: ignored (layout controlled by frame.base).",
+          "type": "string",
+          "enum": ["block", "flex", "grid", "none", "inline", "inline-flex", "inline-block"]
+        },
+        "spaceValue": {
+          "$comment": "FastUI-specific: uniform gap (in px) injected as SizedBox spacers between Row/Column children. Equivalent to CSS gap in a frame context.",
+          "type": "number"
+        },
+        "fallbackWidth": {
+          "$comment": "FastUI-specific: fallback pixel width used when the parent has no bounded width constraint. Prevents zero-size layout in Flutter when width: '100%'.",
+          "type": "number"
+        },
+        "fallbackHeight": {
+          "$comment": "FastUI-specific: fallback pixel height used when the parent has no bounded height constraint. Prevents zero-size layout in Flutter when height: '100%'.",
+          "type": "number"
+        },
+        "childDirection": {
+          "$comment": "FastUI internal hint (deprecated — use frame.base instead). Retained for backwards compatibility with older translated specs.",
+          "type": "string",
+          "enum": ["row", "column"]
         }
       }
     }

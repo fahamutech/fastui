@@ -136,11 +136,12 @@ export function composeFrame(data, frame, ownView, extraProps = '') {
 
     const base = frame?.base;
     const baseId = `${frame?.id ?? ''}_base`;
+    const extraBaseStyles = reactStyleAssets(frame?.baseStyles ?? {});
     if (frameIsStack(base)) {
         const layers = [current, ...nextViews]
             .map(item => `<div style={{gridArea:'1 / 1'}}>${item}</div>`)
             .join('');
-        return `<div id={'${baseId}'} style={{display:'grid',flex:1}}>${layers}</div>`;
+        return `<div id={'${baseId}'} style={${JSON.stringify({display:'grid',flex:1,...extraBaseStyles})}}>${layers}</div>`;
     }
     const ordered = frameIsEnd(base) ? [...nextViews, current] : [current, ...nextViews];
     const baseStyle = `{${JSON.stringify({
@@ -148,6 +149,7 @@ export function composeFrame(data, frame, ownView, extraProps = '') {
         flexDirection: frameDirection(base),
         flex: 1,
         gap: Number(frame?.current?.spaceValue ?? 0) || undefined,
+        ...extraBaseStyles,
     })}}`;
     return `<div id={'${baseId}'} style=${baseStyle}>${ordered.join('')}</div>`;
 }
@@ -170,13 +172,11 @@ export function getSrcPathFromBlueprintPath(unParsedPath) {
  */
 export function getBase(data) {
     const base = data?.base ?? '';
-    if (`${base}` === 'image') {
-        return 'img';
-    } else if (`${base}` === 'input' || (`${base}` === 'container' && data?.modifier?.props?.control === 'input')) {
-        return 'input';
-    } else {
-        return 'div';
-    }
+    if (`${base}` === 'image') return 'img';
+    if (`${base}` === 'input' || (`${base}` === 'container' && data?.modifier?.props?.control === 'input')) return 'input';
+    // Render as anchor element when href prop is present
+    if (getProps(data).href) return 'a';
+    return 'div';
 }
 
 /**
@@ -240,6 +240,8 @@ export function getPropsStatement(data) {
             if (/^on[A-Z]/.test(k) && value && typeof value === 'object') {
                 return `${k}={${eventExpression(value)}}`;
             }
+            // 'label' maps to aria-label for accessibility on arbitrary elements
+            if (k === 'label') return `aria-label={${getValue(value)}}`;
             return `${k}={${getValue(value)}}`;
         })
         .join('\n\t\t\t')
@@ -288,7 +290,7 @@ export function getStatesStatement(data, specPath) {
             `const ${key}=componentState.${key};`,
             `const set${firstUpperCase(key)}=React.useCallback((next)=>setComponentState((current)=>({${key}:typeof next==='function'?next(current.${key}):next})),[setComponentState]);`
         ]);
-        return `const [componentState,setComponentState]=useModuleState(${JSON.stringify(componentName)},${initialExpression});\n\t${declarations.join('\n\t')}`;
+        return `const [componentState,setComponentState]=useModuleState(${JSON.stringify(componentName)},{...${initialExpression},...overrideStates});\n\t${declarations.join('\n\t')}`;
     }
     const getStateIV = k => /^(inputs\.)/ig.test(`${states[k]}`.trim())
         ? `${states[k]}`.replace(/^(inputs.)/ig, '')
@@ -512,8 +514,49 @@ function componentOwnView(data) {
         <${base}
             style={style}
             ${propsString}
+            {...overrideProps}
         >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
     `;
+}
+
+/**
+ * Generates a thin wrapper component that imports the base component (from
+ * `data.__specBaseRelative`) and re-renders it, forwarding local modifier
+ * overrides as `overrideStyles`, `overrideProps`, and `overrideStates` props.
+ * The base component is responsible for merging these with its own defaults.
+ *
+ * @param data {*} map of the specification (contains __specBaseRelative)
+ * @param path {string} specification path
+ * @return {Promise<void>}
+ */
+export async function composeReactSpecBaseWrapper({data, path}) {
+    const baseRelative = data.__specBaseRelative;
+    const baseJsxPath = baseRelative.replace(/\.ya?ml$/i, '.jsx');
+    const baseName = getFileName(baseRelative);
+    const overrideStyles = JSON.stringify(reactStyleAssets(getStyles(data)));
+    const overrideProps = JSON.stringify(Object.fromEntries(
+        Object.entries(getProps(data)).filter(([, v]) => v !== undefined && v !== null)
+    ));
+    const overrideStates = JSON.stringify(getStates(data));
+    const inputsStatement = getInputsStatement(data);
+    const content = `
+import React from 'react';
+import {${baseName}} from '${baseJsxPath}';
+
+// eslint-disable-next-line react/prop-types
+export function ${getFileName(path)}(${inputsStatement === '' ? '' : `{${inputsStatement}}`}){
+    return(<${baseName}
+        loopIndex={loopIndex}
+        loopElement={loopElement}
+        overrideStyles={${overrideStyles}}
+        overrideProps={${overrideProps}}
+        overrideStates={${overrideStates}}
+    />);
+}
+    `;
+    const srcPath = getSrcPathFromBlueprintPath(path);
+    await ensurePathExist(srcPath);
+    await writeFile(srcPath, removeWhiteSpaces(content));
 }
 
 /**
@@ -523,6 +566,10 @@ function componentOwnView(data) {
  * @return {Promise<void>}
  */
 export async function composeReactComponent({data, path, projectPath}) {
+    if (data.__specBase) {
+        return composeReactSpecBaseWrapper({data, path});
+    }
+
     const statesInString = getStatesStatement(data, path)
     const effectsString = getEffectsStatement(data);
 
@@ -536,6 +583,8 @@ export async function composeReactComponent({data, path, projectPath}) {
     const frame = getFrame(data);
     const ownView = componentOwnView(data);
 
+    const styleStatementRenamed = styleStatement.replace(/\bconst style\b/, 'const _baseStyle');
+    const inputsDecl = getInputsStatement(data) === '' ? '' : `${getInputsStatement(data)},`;
     const content = `
 import React from 'react';
 ${logicsStatement}
@@ -544,12 +593,13 @@ ${componentsImportStatement}
 ${actionImportStatement}
 
 // eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}){
+export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overrideProps={},overrideStates={}}){
     ${statesInString}
     
     ${componentStatement}
     
-    ${styleStatement}
+    ${styleStatementRenamed}
+    const style = React.useMemo(()=>({..._baseStyle,...overrideStyles}),[_baseStyle,overrideStyles]);
     
     ${effectsString}
     
@@ -603,6 +653,7 @@ export async function composeReactCondition({data, path, projectPath}) {
     const frame = getFrame(data);
     const ownView = conditionOwnView(data);
     const ownProps = conditionOwnProps(data);
+    const inputsDecl = getInputsStatement(data) === '' ? '' : `${getInputsStatement(data)},`;
 
     const content = `
 import React from 'react';
@@ -612,7 +663,7 @@ ${componentsImportStatement}
 ${actionImportStatement}
 
 // eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}) {
+export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overrideProps={},overrideStates={}}) {
     ${statesInString}
     
     ${componentStatement}
@@ -676,6 +727,7 @@ export async function composeReactLoop({data, path, projectPath}) {
 
     const frame = getFrame(data);
     const ownView = loopOwnView(data);
+    const inputsDecl = getInputsStatement(data) === '' ? '' : `${getInputsStatement(data)},`;
 
     const content = `
 import React from 'react';
@@ -687,7 +739,7 @@ ${actionImportStatement}
 let keyIndex=0;
 
 // eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}) {
+export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overrideProps={},overrideStates={}}) {
     ${statesInString}
     
     ${componentMemoStatement}

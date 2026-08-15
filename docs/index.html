@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FastUI Docs</title>
+  <meta name="description" content="FastUI — YAML-driven React and Flutter code generator. Full documentation." />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- marked.js for markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+  <button id="sidebar-toggle" aria-label="Toggle navigation">☰</button>
+
+  <nav id="sidebar" aria-label="Documentation navigation">
+    <div id="sidebar-logo">
+      <div>
+        <span class="logo-title">FastUI</span>
+        <span class="logo-version">v2</span>
+      </div>
+      <div class="logo-sub">YAML → React / Flutter</div>
+    </div>
+    <div id="sidebar-nav"></div>
+  </nav>
+
+  <!-- ── Main ────────────────────────────────────────────────────────────── -->
+  <div id="content-wrap">
+
+    <header id="topbar">
+      <div id="breadcrumb">FastUI Docs</div>
+      <input
+        id="search-box"
+        type="search"
+        placeholder="Search docs…"
+        aria-label="Search documentation"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </header>
+
+    <!-- Search results -->
+    <div id="search-results" role="listbox" aria-label="Search results"></div>
+
+    <!-- Page content -->
+    <main id="content" aria-live="polite"></main>
+
+  </div>
+
+  <!-- On-page TOC -->
+  <aside id="toc" aria-label="On this page"></aside>
+
+</div>
+
+<script src="nav.js"></script>
+</body>
+</html>

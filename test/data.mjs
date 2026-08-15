@@ -24,21 +24,22 @@ import React from 'react';
 import {getColor} from '../services/test_comp.mjs';
 
 // eslint-disable-next-line react/prop-types
-export function TestComp({loopElement, loopIndex}) {
+export function TestComp({loopElement, loopIndex, overrideStyles={}, overrideProps={}, overrideStates={}}) {
     // eslint-disable-next-line no-unused-vars
     const component = React.useMemo(() => ({
         states: {},
         inputs: {"loopElement": loopElement, "loopIndex": loopIndex}
     }), [loopElement, loopIndex]);
     
-    const style = React.useMemo(() => ({
+    const _baseStyle = React.useMemo(() => ({
         "height": 54,
         "backgroundColor": "blue",
         "color": getColor({component, args: []})
     }), [component]);
+    const style = React.useMemo(() => ({..._baseStyle, ...overrideStyles}), [_baseStyle, overrideStyles]);
     
     return (
-        <div style={style}></div>
+        <div style={style} {...overrideProps}></div>
     );
 }
     

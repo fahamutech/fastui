@@ -113,7 +113,7 @@ describe('Specs', function () {
             }});
             await composeComponent({path: labelPath, projectPath: root, data: {
                 base: 'text',
-                modifier: {extend: './icon.yml', states: {value: 'Continue for $100'}, props: {children: 'states.value'}, styles: {fontSize: 16}, frame: {base: 'row.start', styles: {flex: 1, height: '100%'}}}
+                modifier: {extend: './icon.yml', states: {value: 'Continue for $100'}, props: {id: 'label_id', children: 'states.value'}, styles: {fontSize: 16}, frame: {base: 'row.start', styles: {flex: 1, height: '100%'}}}
             }});
             await composeCondition({path: buttonPath, projectPath: root, data: {
                 modifier: {left: './label.yml', props: {onClick: 'logics.onClick'}, frame: {base: 'row.start'}}
@@ -129,14 +129,16 @@ describe('Specs', function () {
             const button = await readFile(join(root, 'lib', 'modules', 'button.dart'), 'utf8');
             const list = await readFile(join(root, 'lib', 'modules', 'items.dart'), 'utf8');
             const staticWidget = await readFile(join(root, 'lib', 'modules', 'static.dart'), 'utf8');
-            expect(label).to.include('class FastUILabel');
+            expect(label).to.include('class Label');
             expect(label).to.include("import './icon.dart';");
-            expect(label).to.include("stateValue = 'Continue for \\$100'");
+            // widget.overrideStates is required inside a StatefulWidget's State class
+            expect(label).to.include("stateValue = (widget.overrideStates['value'] ?? 'Continue for \\$100') as dynamic;");
+            expect(label).to.include("FastUIStyleHelper.applyMeta(child, id: widget.overrideProps['id'] ?? 'label_id')");
             expect(label).to.include('LayoutBuilder(builder: (context, constraints)');
             expect(label).to.include('constraints.hasBoundedWidth');
             expect(label).to.include('height: constraints.hasBoundedHeight ? constraints.maxHeight');
             expect(button).to.include('GestureDetector(onTap:');
-            expect(button).to.include('FastUILabel(');
+            expect(button).to.include('Label(');
             expect(list).to.include('List<dynamic>.from(stateData');
             expect(list).to.include('ListView.builder(scrollDirection: Axis.vertical');
             expect(staticWidget).to.include('extends StatelessWidget');
@@ -148,9 +150,11 @@ describe('Specs', function () {
             const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
             const feedPath = join(flutterRoot, 'feed.yml');
             const scrollingPath = join(flutterRoot, 'scrolling.yml');
+            const horizontalPath = join(flutterRoot, 'horizontal.yml');
             const staticPath = join(flutterRoot, 'static_loop.yml');
             await writeFile(feedPath, 'component: {}');
             await writeFile(scrollingPath, 'loop: {}');
+            await writeFile(horizontalPath, 'loop: {}');
             await writeFile(staticPath, 'loop: {}');
             await composeLoop({path: scrollingPath, projectPath: root, data: {
                 modifier: {feed: './feed.yml', props: {scroll: 'vertical'}, states: {data: []}, frame: {base: 'column.start'}}
@@ -158,9 +162,14 @@ describe('Specs', function () {
             await composeLoop({path: staticPath, projectPath: root, data: {
                 modifier: {feed: './feed.yml', states: {data: []}, frame: {base: 'column.start'}}
             }});
+            await composeLoop({path: horizontalPath, projectPath: root, data: {
+                modifier: {feed: './feed.yml', props: {scroll: 'horizontal'}, states: {data: []}, frame: {base: 'row.start'}}
+            }});
             const scrollingFlutter = await readFile(join(root, 'lib', 'modules', 'scrolling.dart'), 'utf8');
+            const horizontalFlutter = await readFile(join(root, 'lib', 'modules', 'horizontal.dart'), 'utf8');
             const staticFlutter = await readFile(join(root, 'lib', 'modules', 'static_loop.dart'), 'utf8');
             expect(scrollingFlutter).to.include('ListView.builder(scrollDirection: Axis.vertical');
+            expect(horizontalFlutter).to.include('SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(mainAxisSize: MainAxisSize.min');
             expect(staticFlutter).not.to.include('ListView.builder');
             expect(staticFlutter).not.to.include('SingleChildScrollView');
 
@@ -181,6 +190,7 @@ describe('Specs', function () {
             }});
             const scrollingReact = await readFile(join(root, 'src', 'modules', 'scrolling.jsx'), 'utf8');
             const staticReact = await readFile(join(root, 'src', 'modules', 'static_loop.jsx'), 'utf8');
+            expect(scrollingReact).to.include('overrideStates={}');
             expect(scrollingReact).to.include("overflowX: 'auto'");
             expect(scrollingReact).not.to.include('scroll=');
             expect(staticReact).not.to.include('overflowX');
@@ -198,7 +208,25 @@ describe('Specs', function () {
             await readdir(join(root, 'lib', 'blueprints'));
             expect(await readFile(join(root, 'lib', 'main.dart'), 'utf8')).to.include('FastUIAppRoute');
             expect(await readFile(join(root, 'lib', 'main.dart'), 'utf8')).to.include('FastUIStateScope');
+            expect(await readFile(join(root, 'lib', 'app_route.dart'), 'utf8')).to.include('FastUIStyleHelper.lightTheme()');
+            expect(await readFile(join(root, 'lib', 'app_route.dart'), 'utf8')).to.include('FastUIStyleHelper.darkTheme()');
+            const runtime = await readFile(join(root, 'lib', 'fastui_runtime.dart'), 'utf8');
+            expect(runtime).to.include(`RegExp(r'''^['"]|['"]$''')`);
+            const startScript = await readFile(join(root, 'fastui_dev.sh'), 'utf8');
+            expect(startScript).to.include('WATCHER_PID_FILE=".fastui/watch.pid"');
+            expect(startScript).to.include('export FASTUI_FLUTTER_PID="$FLUTTER_PID"');
+            expect(startScript).to.include('wait "$FLUTTER_PID"');
+            expect(startScript).to.include('trap cleanup EXIT');
+            expect(startScript).to.include("trap 'cleanup; exit 130' INT TERM");
             expect(await readFile(join(root, 'lib', 'stores', 'observable_store.dart'), 'utf8')).to.include('extends ChangeNotifier');
+        });
+
+        it('builds from the configured blueprint root when no path is supplied', async function () {
+            const specPath = join(root, 'lib', 'blueprints', 'modules', 'default_root.yml');
+            await writeFile(specPath, 'component:\n  base: container\n  modifier: {}\n');
+            const results = await generateCodeFromSpecs({projectPath: root});
+            expect(results.some(result => result.specPath.endsWith('default_root.yml'))).to.equal(true);
+            await stat(join(root, 'lib', 'modules', 'default_root.dart'));
         });
 
         it('initializes a ReactJS project and selects src/blueprints', async function () {
@@ -509,9 +537,10 @@ describe('Specs', function () {
             }
         });
 
-        it('inherits a referenced primitive before applying local overrides', async function () {
-            const sharedRoot = join(root, 'lib', 'blueprints', 'shared', 'common');
-            const moduleRoot = join(root, 'lib', 'blueprints', 'modules', 'example');
+        it('tags a spec-file base as __specBase and generates a wrapper that forwards overrides', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const sharedRoot = join(root, 'src', 'blueprints', 'shared', 'common');
+            const moduleRoot = join(root, 'src', 'blueprints', 'modules', 'example');
             await mkdir(sharedRoot, {recursive: true});
             await mkdir(moduleRoot, {recursive: true});
             await writeFile(join(sharedRoot, 'text.yml'), `component:
@@ -525,36 +554,38 @@ describe('Specs', function () {
     states:
       value: Shared
 `);
-            await writeFile(join(moduleRoot, 'leading.yml'), 'component:\n  base: image\n  modifier: {}\n');
             const labelPath = join(moduleRoot, 'label.yml');
             await writeFile(labelPath, `component:
   base: ../../shared/common/text.yml
   modifier:
-    extend: ./leading.yml
     styles:
       color: '#0000FF'
     states:
       value: Label
 `);
             const resolved = await specToJSON(labelPath);
-            expect(resolved.component.base).to.equal('text');
-            expect(resolved.component.modifier.styles).to.deep.equal({color: '#0000FF', fontSize: 14});
-            expect(resolved.component.modifier.states.value).to.equal('Label');
-            expect(resolved.component.modifier.extend).to.equal('./leading.yml');
+            // base is deleted; __specBase points to the absolute path of the shared spec
+            expect(resolved.component.base).to.equal(undefined);
+            expect(resolved.component.__specBase).to.include('text.yml');
+            expect(resolved.component.__specBaseRelative).to.equal('../../shared/common/text.yml');
+            // local modifier overrides are preserved as-is
+            expect(resolved.component.modifier.styles.color).to.equal('#0000FF');
             expect(resolved.component.modifier).not.to.have.property('ref');
+            // generator emits a wrapper that imports the base and passes overrides
             await composeComponent({data: resolved.component, path: labelPath, projectPath: root});
-            const generated = await readFile(join(root, 'lib', 'modules', 'example', 'label.dart'), 'utf8');
-            expect(generated).to.include('fontSize: 14');
-            expect(generated).to.include('Color(0xFF0000FF)');
+            const generated = await readFile(join(root, 'src', 'modules', 'example', 'label.jsx'), 'utf8');
+            expect(generated).to.include('import {Text} from');
+            expect(generated).to.include('overrideStyles=');
+            expect(generated).to.include('overrideProps=');
+            expect(generated).to.include('overrideStates=');
+            process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
-        it('rebases an inherited array extend when a component spec is included via base', async function () {
-            const sharedRoot = join(root, 'lib', 'blueprints', 'shared', 'common');
-            const moduleRoot = join(root, 'lib', 'blueprints', 'modules', 'feature');
+        it('preserves local modifier override paths for spec-file base references', async function () {
+            const sharedRoot = join(root, 'src', 'blueprints', 'shared', 'common');
+            const moduleRoot = join(root, 'src', 'blueprints', 'modules', 'feature');
             await mkdir(sharedRoot, {recursive: true});
             await mkdir(moduleRoot, {recursive: true});
-            await writeFile(join(sharedRoot, 'leaf_one.yml'), 'component:\n  base: container\n  modifier: {}\n');
-            await writeFile(join(sharedRoot, 'leaf_two.yml'), 'component:\n  base: container\n  modifier: {}\n');
             await writeFile(join(sharedRoot, 'group.yml'), `component:
   base: container
   modifier:
@@ -568,10 +599,56 @@ describe('Specs', function () {
   modifier: {}
 `);
             const resolved = await specToJSON(localPath);
-            expect(resolved.component.modifier.extend).to.deep.equal([
-                '../../shared/common/leaf_one.yml',
-                '../../shared/common/leaf_two.yml',
-            ]);
+            // base tagged, not merged — local modifier is empty, no extend here
+            expect(resolved.component.__specBaseRelative).to.equal('../../shared/common/group.yml');
+            expect(resolved.component.modifier).to.deep.equal({});
+        });
+
+        it('base component merges overrideStyles, overrideProps, and overrideStates at render time', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const moduleRoot = join(root, 'src', 'blueprints', 'modules', 'overrides');
+            await mkdir(moduleRoot, {recursive: true});
+            // Base component: has its own styles, props (id), and a state
+            const basePath = join(moduleRoot, 'base_card.yml');
+            await writeFile(basePath, `component:
+  base: container
+  modifier:
+    styles:
+      background: grey
+      width: 200px
+    props:
+      id: base-card
+    states:
+      label: Base label
+`);
+            await composeComponent({data: (await specToJSON(basePath)).component, path: basePath, projectPath: root});
+            const baseGenerated = await readFile(join(root, 'src', 'modules', 'overrides', 'base_card.jsx'), 'utf8');
+            // styles: _baseStyle is the base styles; style merges overrideStyles on top
+            expect(baseGenerated).to.include('_baseStyle');
+            expect(baseGenerated).to.include('...overrideStyles');
+            // props: static id prop followed by {...overrideProps} spread so overrides win
+            expect(baseGenerated).to.include('{...overrideProps}');
+            // states: initial value spreads overrideStates so wrapper can seed different initial state
+            expect(baseGenerated).to.include('...overrideStates');
+            // wrapper component: passes all three as overrides to the base
+            const wrapperPath = join(moduleRoot, 'card_variant.yml');
+            await writeFile(wrapperPath, `component:
+  base: ./base_card.yml
+  modifier:
+    styles:
+      background: '#f7f7f7'
+    props:
+      id: card-variant
+    states:
+      label: Variant label
+`);
+            await composeComponent({data: (await specToJSON(wrapperPath)).component, path: wrapperPath, projectPath: root});
+            const wrapperGenerated = await readFile(join(root, 'src', 'modules', 'overrides', 'card_variant.jsx'), 'utf8');
+            expect(wrapperGenerated).to.include('import {BaseCard} from');
+            expect(wrapperGenerated).to.include('"background":"#f7f7f7"');
+            expect(wrapperGenerated).to.include('"id":"card-variant"');
+            expect(wrapperGenerated).to.include('"label":"Variant label"');
+            process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
         it('composes multiple extend children in frame.base order for React', async function () {
@@ -604,7 +681,8 @@ describe('Specs', function () {
             expect(start.indexOf('<ChildA')).to.be.lessThan(start.indexOf('<ChildB'));
             expect(end.indexOf('<ChildA')).to.be.lessThan(end.indexOf('<ChildB'));
             expect(end.indexOf('<ChildB')).to.be.lessThan(end.indexOf('ParentMarker'));
-            expect(stack).to.include("style={{display:'grid',flex:1}}");
+            expect(stack).to.include('"display":"grid"');
+            expect(stack).to.include('"flex":1');
             expect(stack).to.include("style={{gridArea:'1 / 1'}}");
             process.env.FASTUI_TEMPLATE = 'flutter';
         });
@@ -627,9 +705,24 @@ describe('Specs', function () {
             const stack = await readFile(join(root, 'lib', 'modules', 'composer_stack.dart'), 'utf8');
             expect(start).to.include("import './child_a.dart';");
             expect(start).to.include("import './child_b.dart';");
-            expect(start.indexOf('FastUIChildA(')).to.be.lessThan(start.indexOf('FastUIChildB('));
-            expect(start.indexOf('FastUIChildB(')).to.be.lessThan(start.indexOf("Text('ParentMarker'"));
+            expect(start.indexOf('ChildA(')).to.be.lessThan(start.indexOf('ChildB('));
+            expect(start.indexOf('ChildB(')).to.be.lessThan(start.indexOf("Text('ParentMarker'"));
             expect(stack).to.include('Stack(children:');
+        });
+
+        it('keeps fixed-size Flutter children loose inside expanded frame wrappers', async function () {
+            const moduleRoot = join(root, 'lib', 'blueprints', 'modules');
+            await composeComponent({path: join(moduleRoot, 'fixed_child.yml'), projectPath: root, data: {
+                base: 'text',
+                modifier: {props: {children: 'Fixed'}, styles: {width: 200, height: 50}, frame: {base: 'row.start'}}
+            }});
+            const composerPath = join(moduleRoot, 'flex_composer.yml');
+            await composeComponent({path: composerPath, projectPath: root, data: {
+                base: 'container',
+                modifier: {extend: ['./fixed_child.yml'], frame: {base: 'row.start', next: {flex: 1, background: '#f5f5f5'}}}
+            }});
+            const generated = await readFile(join(root, 'lib', 'modules', 'flex_composer.dart'), 'utf8');
+            expect(generated).to.include('Expanded(child: Container(decoration: BoxDecoration(color: Color(0xFFF5F5F5)), child: Align(alignment: Alignment.topLeft, heightFactor: 1');
         });
 
         it('translates a plain Figma frame into a container composer with ordered extend children', async function () {
@@ -718,6 +811,7 @@ describe('Specs', function () {
             expect(openWidget).to.include('extends StatelessWidget');
             expect(openSpec).to.match(/width:\s+100%/);
             expect(appRoute).to.include("'choices': FastUISurfaceDefinition(");
+            expect(appRoute).to.include('builder: () => ChoicesSheet()');
             expect(appRoute).to.include("type: 'sheet'");
             expect(appRoute).to.include('presentation: FastUISurfacePresentation(');
             expect(appRoute).to.include('MaterialApp.router');
@@ -744,7 +838,7 @@ describe('Specs', function () {
             expect(sheetSpec).to.include('mode: overlay');
             expect(sheetSpec).to.include('scroll: none');
             const resolvedInstance = await specToJSON(join(srcPath, 'modules', 'presentation', 'pages', 'ilabel_Primary_label.yml'));
-            expect(resolvedInstance.component.base).to.equal('container');
+            expect(resolvedInstance.component.__specBase).to.include('ishared_text_Label.yml');
             expect(resolvedInstance.component.modifier).not.to.have.property('ref');
             expect(resolvedInstance.component.modifier.extend).to.equal('./ilabel_copy_Copy_text.yml');
         });

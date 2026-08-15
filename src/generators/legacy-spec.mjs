@@ -23,6 +23,8 @@ function normalizeExtend(modifier = {}) {
 
 /**
  * `modifier.frame` is always normalized to `{base, id, current, next}`.
+ * `frame.base` may be a string token or an object `{type, styles}` — both
+ * forms are preserved as-is so `modifier.mjs#getFrame` can resolve them.
  * Legacy documents that still only carry `frame.styles` (the pre-top-down
  * shape) are read as `frame.current` so already-authored specs keep working
  * without generators needing to know about the old field name.

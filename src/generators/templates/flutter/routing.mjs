@@ -34,7 +34,7 @@ function routeEntry(page) {
       direction: '${transition.direction ?? 'none'}',
       durationMs: ${Number.isFinite(Number(transition.durationMs)) ? Number(transition.durationMs) : 0},
     ),
-    builder: () => FastUI${getFileName(page.surfaceName)}(),
+    builder: () => ${getFileName(page.surfaceName)}(),
   ),`;
 }
 
@@ -87,6 +87,9 @@ class FastUIAppRoute extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
+      theme: FastUIStyleHelper.lightTheme(),
+      darkTheme: FastUIStyleHelper.darkTheme(),
+      themeMode: ThemeMode.system,
       routerDelegate: fastUIRouter,
       routeInformationParser: const FastUIRouteInformationParser(),
     );

@@ -7,6 +7,8 @@ import {ensureFileExist, ensurePathExist} from '../shared/fs.mjs';
 import {getBlueprintRoot, normalizeTemplate} from './config.mjs';
 import {
     ensureBlueprintFolderExist,
+    ensureFlutterStartScript,
+    ensureFlutterWatchFileExist,
     ensureSchemaFileExist,
     ensureStartScript,
     ensureWatchFileExist
@@ -72,7 +74,7 @@ async function ensureReactProject() {
     await writeIfMissing(resolve('src', 'main.jsx'), "import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport App from './App.jsx';\n\nReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);\n");
     await writeIfMissing(resolve('src', 'fastui.css'), `*, *::before, *::after { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; }
-#root { display: flex;}
+#root { /*display: flex;*/}
 `);
     const mainPath = resolve('src', 'main.jsx');
     const mainSource = await readFile(mainPath, 'utf8');
@@ -151,7 +153,7 @@ async function ensureFlutterProject(runCommand = execFileAsync) {
     }, {lineWidth: -1}));
     await ensurePathExist(resolve('assets', 'images', 'figma'));
     await writeIfMissing(resolve('lib', 'fastui_runtime.dart'), flutterRuntimeSource());
-    await writeIfMissing(resolve('lib', 'app_route.dart'), "import 'package:flutter/material.dart';\n\nclass FastUIAppRoute extends StatelessWidget {\n  const FastUIAppRoute({super.key});\n\n  @override\n  Widget build(BuildContext context) => const MaterialApp(home: Scaffold(body: SizedBox.shrink()));\n}\n");
+    await writeIfMissing(resolve('lib', 'app_route.dart'), "import 'package:flutter/material.dart';\nimport 'fastui_runtime.dart';\n\nclass FastUIAppRoute extends StatelessWidget {\n  const FastUIAppRoute({super.key});\n\n  @override\n  Widget build(BuildContext context) => MaterialApp(\n    theme: FastUIStyleHelper.lightTheme(),\n    darkTheme: FastUIStyleHelper.darkTheme(),\n    themeMode: ThemeMode.system,\n    home: const Scaffold(body: SizedBox.shrink()),\n  );\n}\n");
     await writeIfMissing(resolve('lib', 'stores', 'observable_store.dart'), `import 'package:flutter/widgets.dart';
 
 class ObservableStore extends ChangeNotifier {
@@ -239,5 +241,9 @@ export async function initializeProject({template, runCommand} = {}) {
     await ensureWatchFileExist(blueprintRoot);
     await ensureSchemaFileExist();
     if (selected === 'reactjs') await ensureStartScript(selected, blueprintRoot);
+    if (selected === 'flutter') {
+        await ensureFlutterWatchFileExist(blueprintRoot);
+        await ensureFlutterStartScript(blueprintRoot);
+    }
     return {template: selected, blueprintRoot};
 }
