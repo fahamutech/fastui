@@ -17,7 +17,7 @@ import {ensurePathExist} from "../../../shared/fs.mjs";
 import {
     getChildren,
     getEffects,
-    getExtend,
+    getExtendList,
     getFeed,
     getFrame,
     getLeft,
@@ -25,7 +25,6 @@ import {
     getRight,
     getStates,
     getStyles,
-    getWrapper,
 } from "../../modifier.mjs";
 import {dirname as pathDirname, relative as pathRelative, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {writeFile} from 'node:fs/promises';
@@ -67,65 +66,90 @@ function frameIsStack(base) {
     return `${base ?? ''}`.trim().toLowerCase().includes('.stack');
 }
 
-// The subset of a frame's real styles that must travel with the wrapper div,
-// since the wrapper (not the frame) is the box exposed as a flex item to
-// whichever sibling/parent composes this node.
-function participationStyles(styles = {}) {
-    const {flex, width, height} = styles ?? {};
-    return {flex, width, height};
-}
-
 /**
- * Real, own-axis styles for this node's frame div (background, padding,
- * alignment, sizing, etc). Own axis is frame.base, distinct from the
- * sibling-facing wrapper axis.
- * @param frame {{base,styles}}
+ * Real styles for this node's own rendered view (background, padding,
+ * alignment, sizing, etc), driven by `frame.current`.
+ * @param frame {{base,current}}
  * @return {string}
  */
 export function frameStyleString(frame) {
     return `{${JSON.stringify({
-        ...reactStyleAssets(frame?.styles ?? {}),
+        ...reactStyleAssets(frame?.current ?? {}),
         display: 'flex',
         flexDirection: frameDirection(frame?.base),
     })}}`;
 }
 
 /**
- * Renders the positional wrapper div (driven by the PARENT/sibling axis) that
- * places this node's own frame/composition chain next to the {view} slot used
- * by whoever further composes this node.
- *
- * @param frame {{base,id,styles}} this node's own frame (used for id/styles fallback)
- * @param wrapper {{base,id}} sibling axis; falls back to frame.base/id when absent
- * @param onChild {(boolean)=>*} returns this node's own composed content, given `withStack`
+ * Wraps this node's own rendered view in a div carrying `frame.id`/
+ * `frame.current` styles. Returns the view unwrapped when there is no
+ * meaningful frame metadata, so leaf specs stay free of empty wrapper divs.
+ * @param frame {{base,id,current}}
+ * @param ownView {string} already-valid JSX for this node's own content
  * @return {string}
  */
-export function getFrameStatement(frame, wrapper, onChild) {
-    const frameId = frame?.id ?? '';
-    const wrapperBase = wrapper?.base ?? frame?.base ?? frame;
-    const wrapperId = wrapper?.id ?? (frameId ? `${frameId}_wrapper` : '');
-    const withStack = frameIsStack(wrapperBase);
-    const wrapperStyle = `{${JSON.stringify({
-        ...reactStyleAssets(participationStyles(frame?.styles)),
-        display: 'flex',
-        flexDirection: frameDirection(wrapperBase),
-    })}}`;
-    const child = onChild(withStack);
-    const ordered = frameIsEnd(wrapperBase) ? `{view}${child}` : `${child}{view}`;
-    return `<div id={'${wrapperId}'} style=${wrapperStyle}>${ordered}</div>`;
+function ownFrameElement(frame, ownView, extraProps = '') {
+    const hasFrame = Boolean(frame?.base) || Boolean(frame?.id) || Object.keys(frame?.current ?? {}).length > 0 || Boolean(extraProps);
+    if (!hasFrame) return ownView;
+    return `<div id={'${frame?.id ?? ''}'} style=${frameStyleString(frame)} ${extraProps}>${ownView}</div>`;
 }
 
 /**
- *
- * @param data{*}
- * @return {undefined|string}
+ * Ordered `{path, alias}` entries for `modifier.extend`, aliasing the
+ * imported component name only when two extend targets share the same
+ * generated component name.
+ * @param data {*}
+ * @return {{path:string, base:string, alias:string}[]}
  */
-export function getExtendBase(data) {
-    const extend = getExtend(data);
-    if (typeof extend === 'string' && extend.includes('.yml')) {
-        return firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(extend)));
+function extendImportSpecs(data) {
+    const paths = getExtendList(data);
+    const baseNames = paths.map(path => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(path))));
+    const counts = baseNames.reduce((map, name) => map.set(name, (map.get(name) ?? 0) + 1), new Map());
+    return paths.map((path, index) => {
+        const base = baseNames[index];
+        const alias = counts.get(base) > 1 ? `${base}_${index}` : base;
+        return {path, base, alias};
+    });
+}
+
+/**
+ * Renders the top-down composition for one primitive: this node's own view
+ * (styled by `frame.current`) plus one wrapper per `modifier.extend` child
+ * (styled uniformly by `frame.next`), ordered and arranged per `frame.base`
+ * (row.start/row.end/column.start/column.end/*.stack). `frame.base` is the
+ * outer container and always fills the space available to it (`flex: 1`).
+ *
+ * @param data {*}
+ * @param frame {{base,id,current,next}}
+ * @param ownView {string} already-valid JSX for this node's own content
+ * @return {string}
+ */
+export function composeFrame(data, frame, ownView, extraProps = '') {
+    const current = ownFrameElement(frame, ownView, extraProps);
+    const extend = extendImportSpecs(data);
+    if (extend.length === 0) return current;
+
+    const nextStyle = `{${JSON.stringify({...reactStyleAssets(frame?.next ?? {}), display: 'flex'})}}`;
+    const nextViews = extend.map(({alias}, index) =>
+        `<div id={'${frame?.id ?? ''}_next_${index}'} style=${nextStyle}><${alias} loopIndex={loopIndex} loopElement={loopElement}/></div>`
+    );
+
+    const base = frame?.base;
+    const baseId = `${frame?.id ?? ''}_base`;
+    if (frameIsStack(base)) {
+        const layers = [current, ...nextViews]
+            .map(item => `<div style={{gridArea:'1 / 1'}}>${item}</div>`)
+            .join('');
+        return `<div id={'${baseId}'} style={{display:'grid',flex:1}}>${layers}</div>`;
     }
-    return undefined;
+    const ordered = frameIsEnd(base) ? [...nextViews, current] : [current, ...nextViews];
+    const baseStyle = `{${JSON.stringify({
+        display: 'flex',
+        flexDirection: frameDirection(base),
+        flex: 1,
+        gap: Number(frame?.current?.spaceValue ?? 0) || undefined,
+    })}}`;
+    return `<div id={'${baseId}'} style=${baseStyle}>${ordered.join('')}</div>`;
 }
 
 /**
@@ -230,31 +254,6 @@ export function getActionImportStatement(data, unParsedPath) {
     return `import {setCurrentRoute} from '${importPath}';`;
 }
 
-/**
- * Builds this node's own content (`viewWithoutExtend`), passed as the `view`
- * prop into the extended sibling so it lands next to that sibling's own
- * composition chain, wrapped in a plain `{frameId}_ww` div that only exists
- * to route/name the composed call - it carries no styling of its own.
- *
- * @param data {*}
- * @param viewWithoutExtend {string}
- * @param frameId {string}
- * @return {function(boolean): string|*}
- */
-export function prepareGetContentView({data, viewWithoutExtend, frameId = ''}) {
-    const base = getBase(data);
-    const propsString = getPropsStatement(data);
-    const extendBase = getExtendBase(data);
-
-    return function (withStack) {
-        if (!extendBase) return viewWithoutExtend;
-        if (withStack === true) {
-            return `<${base}  style={style} ${propsString}><${extendBase} loopIndex={loopIndex} loopElement={loopElement}></${extendBase}></${base}>`;
-        }
-        return `<div id={'${frameId}_ww'}><${extendBase} loopIndex={loopIndex} loopElement={loopElement} view={${viewWithoutExtend}}></${extendBase}></div>`;
-    };
-}
-
 function sanitizeEffectDependency(watch) {
     const mapWatch = watchItem => {
         if (`${watchItem}`.trim().toLowerCase().startsWith('states.')) {
@@ -335,7 +334,7 @@ export function getInputsStatement(data = {}) {
             ...itOrEmptyList(effects[b]?.watch).filter(filter).map(map)
         ]
     }, []);
-    let inputs = propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['view', 'loopElement', 'loopIndex']);
+    let inputs = propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['loopElement', 'loopIndex']);
     inputs = inputs.filter(x => !`${x}`.trim().startsWith('loopElement.'));
     return TEMPLATE_MAPPING.inputsPresentation[template](inputs);
 }
@@ -432,19 +431,26 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
  * @return {string}
  */
 export function getComponentsImportStatement(data) {
-    const extend = getExtend(data);
     const left = getLeft(data);
     const right = getRight(data);
     const feed = getFeed(data);
 
-    return [extend, left, right, feed].map(x => {
+    const singleImports = [left, right, feed].map(x => {
         if (typeof x === 'string' && x.endsWith('.yml')) {
             const component = firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
             const importPath = `${x}`.trim().startsWith('.') ? x : `./${x}`;
             return `import {${component}} from '${importPath.replace('.yml', '.jsx')}';`;
         }
         return null;
-    }).filter(y => y !== null).join('\n');
+    }).filter(y => y !== null);
+
+    const extendImports = extendImportSpecs(data).map(({path, base, alias}) => {
+        const importPath = `${path}`.trim().startsWith('.') ? path : `./${path}`;
+        const specifier = base === alias ? base : `${base} as ${alias}`;
+        return `import {${specifier}} from '${importPath.replace('.yml', '.jsx')}';`;
+    });
+
+    return [...singleImports, ...extendImports].join('\n');
 }
 
 function getStyleMap(style) {
@@ -496,21 +502,18 @@ export function getStyleStatement(data) {
 
 // -- component -------------------------------------------------------------
 
-// This node's own frame: real styles (background, padding, sizing) + own
-// direction, wrapping the leaf element. Distinct from the positional wrapper
-// (driven by the parent's axis) rendered by getFrameStatement.
-function componentOwnFrame(data) {
+// This node's own leaf element; frame wrapping/composition happens in
+// composeFrame(), shared with condition and loop.
+function componentOwnView(data) {
     const base = getBase(data);
-    const frame = getFrame(data);
     const propsString = getPropsStatement(data);
     const children = getChildren(data);
-    const leaf = `
+    return `
         <${base}
             style={style}
             ${propsString}
         >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
     `;
-    return `<div id={'${frame?.id ?? ''}'} style=${frameStyleString(frame)}>${leaf}</div>`;
 }
 
 /**
@@ -530,8 +533,8 @@ export async function composeReactComponent({data, path, projectPath}) {
     const componentStatement = getComponentMemoStatement(data);
 
     const styleStatement = getStyleStatement(data);
-    const viewWithoutExtend = componentOwnFrame(data);
     const frame = getFrame(data);
+    const ownView = componentOwnView(data);
 
     const content = `
 import React from 'react';
@@ -550,7 +553,7 @@ export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{
     
     ${effectsString}
     
-    return(${getFrameStatement(frame, getWrapper(data), prepareGetContentView({data, viewWithoutExtend, frameId: frame?.id ?? ''}))});
+    return(${composeFrame(data, frame, ownView)});
 }
     `;
 
@@ -561,25 +564,25 @@ export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{
 
 // -- condition --------------------------------------------------------------
 
-// This node's own frame: real styles + own direction, wrapping the left/right
-// composed call. Distinct from the positional wrapper rendered by
-// getFrameStatement, which is driven by the parent's axis.
-function conditionOwnFrame(data) {
-    const frame = getFrame(data);
-    const extend = getExtend(data);
+// This node's own branch result (left/right); frame wrapping/composition
+// (including this node's own props) happens in composeFrame(), shared with
+// component and loop.
+function conditionOwnView(data) {
     const left = getLeft(data);
     const right = getRight(data);
+    const getComponentName = x => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
+    const leftComponent = left ? `<${getComponentName(left)} loopIndex={loopIndex} loopElement={loopElement}/>` : '<span/>';
+    const rightComponent = right ? `<${getComponentName(right)} loopIndex={loopIndex} loopElement={loopElement}/>` : '<span/>';
+    const view = right ? `condition===true?${rightComponent}:${leftComponent}` : leftComponent;
+    return `{${view}}`;
+}
+
+// Props for the condition's own wrapping element (e.g. onClick, cursor);
+// `id` is dropped because composeFrame() already applies frame.id there.
+function conditionOwnProps(data) {
     const propsData = structuredClone(data);
     if (propsData?.modifier?.props) delete propsData.modifier.props.id;
-    const propsString = getPropsStatement(propsData);
-    const styleString = frameStyleString(frame);
-    const frameId = frame?.id ?? '';
-
-    const getComponentName = x => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
-    const leftComponent = left ? `<div id={'${frameId}'} style=${styleString} ${propsString}><${getComponentName(left)} loopIndex={loopIndex} loopElement={loopElement}/></div>` : '<span/>';
-    const rightComponent = right ? `<div id={'${frameId}'} style=${styleString} ${propsString}><${getComponentName(right)} loopIndex={loopIndex} loopElement={loopElement}/></div>` : '<span/>';
-    const view = right ? `condition===true?${rightComponent}:${leftComponent}` : leftComponent;
-    return extend ? view : `{${view}}`;
+    return getPropsStatement(propsData);
 }
 
 /**
@@ -597,8 +600,9 @@ export async function composeReactCondition({data, path, projectPath}) {
     const componentsImportStatement = getComponentsImportStatement(data);
     const actionImportStatement = getActionImportStatement(data, path);
 
-    const viewWithoutExtend = conditionOwnFrame(data);
     const frame = getFrame(data);
+    const ownView = conditionOwnView(data);
+    const ownProps = conditionOwnProps(data);
 
     const content = `
 import React from 'react';
@@ -608,14 +612,14 @@ ${componentsImportStatement}
 ${actionImportStatement}
 
 // eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}({view,loopIndex,loopElement}) {
+export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}) {
     ${statesInString}
     
     ${componentStatement}
 
     ${effectsString}
 
-    return(${getFrameStatement(frame, getWrapper(data), prepareGetContentView({data, viewWithoutExtend, frameId: frame?.id ?? ''}))});
+    return(${composeFrame(data, frame, ownView, ownProps)});
 }
     `;
 
@@ -626,11 +630,10 @@ export function ${getFileName(path)}({view,loopIndex,loopElement}) {
 
 // -- loop ---------------------------------------------------------------
 
-// This node's own frame: real styles + own direction, wrapping the scrollable
-// feed. Distinct from the positional wrapper rendered by getFrameStatement.
-function loopOwnFrame(data) {
+// This node's own scrollable feed; frame wrapping/composition happens in
+// composeFrame(), shared with component and condition.
+function loopOwnView(data) {
     const feed = getFeed(data);
-    const frame = getFrame(data);
     const scroll = data?.modifier?.props?.scroll;
     const propsData = structuredClone(data);
     if (propsData?.modifier?.props) delete propsData.modifier.props.scroll;
@@ -643,7 +646,8 @@ function loopOwnFrame(data) {
             : scroll === 'vertical'
                 ? "{{...style, overflowY: 'auto'}}"
                 : '{style}';
-    const feedDiv = `
+    if (!feed) return '<span/>';
+    return `
         <div 
             style=${scrollStyle}
             ${propsString}
@@ -651,8 +655,6 @@ function loopOwnFrame(data) {
             {data?.map((item,index)=> (<div key={item?._key??keyIndex++}><${getComponentName(feed)} loopIndex={index} loopElement={item}/></div>))}
         </div>
     `;
-    if (!feed) return '<span/>';
-    return `<div id={'${frame?.id ?? ''}'} style=${frameStyleString(frame)}>${feedDiv}</div>`;
 }
 
 /**
@@ -672,8 +674,8 @@ export async function composeReactLoop({data, path, projectPath}) {
     const actionImportStatement = getActionImportStatement(data, path);
     const styleStatement = getStyleStatement(data);
 
-    const viewWithoutExtend = loopOwnFrame(data);
     const frame = getFrame(data);
+    const ownView = loopOwnView(data);
 
     const content = `
 import React from 'react';
@@ -685,7 +687,7 @@ ${actionImportStatement}
 let keyIndex=0;
 
 // eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}({view,loopIndex,loopElement}) {
+export function ${getFileName(path)}(${getInputsStatement(data) === '' ? '' : `{${getInputsStatement(data)}}`}) {
     ${statesInString}
     
     ${componentMemoStatement}
@@ -694,7 +696,7 @@ export function ${getFileName(path)}({view,loopIndex,loopElement}) {
 
     ${effectsString}
 
-    return(${getFrameStatement(frame, getWrapper(data), prepareGetContentView({data, viewWithoutExtend, frameId: frame?.id ?? ''}))});
+    return(${composeFrame(data, frame, ownView)});
 }
     `;
 

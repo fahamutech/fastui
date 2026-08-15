@@ -23,19 +23,25 @@ import {configureAssetDownloads, getFigmaImagePath} from './assets.mjs';
 import {
     createContainerComponent,
     createConditionComponent,
+    createFrameComponent,
+    createInstanceComponent,
     createLoopComponent,
     createTextComponent,
     createVectorComponent,
     handleRectangleComponent,
 } from './spec-writer.mjs';
 
+const DEFAULT_PAGE_MODULE = 'presentation/pages';
+
 let routeLookup = {};
 let sharedComponentMap = {};
 
 /**
  * Annotates one frame's direct children with the layout metadata every spec
- * writer needs (own axis + styles under `mainFrame`, sibling axis under
- * `wrapperBase`), recursing into container-like children first.
+ * writer needs (own axis + styles under `mainFrame`/`childFrame`), recursing
+ * into container-like children first. Composition itself (which children
+ * compose which parent) is expressed later, at spec-write time, purely from
+ * each parent's own `children` array (see spec-writer.mjs).
  */
 async function transformFrameChildren({frame, module, isLoopElement, token, figFile, srcPath}) {
     const children = [];
@@ -46,9 +52,6 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
     }
     for (let i = 0; i < fChildren?.length; i++) {
         const child = fChildren[i] ?? {};
-        const extendFrame = isCondition && i === 1
-            ? undefined
-            : generatedNodeName(fChildren[i - 1]);
         const name = generatedNodeName(child);
 
         if (child?.type === 'FRAME' || child?.type === 'INSTANCE' || child?.type === 'COMPONENT') {
@@ -70,7 +73,6 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                 ...child,
                 name,
                 module,
-                extendFrame: i > 0 && extendFrame ? `./${extendFrame}.yml` : undefined,
                 isLoopElement,
                 styles: isLoop ? {
                     display: 'flex',
@@ -88,7 +90,6 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     filter: getLayerBlurEffect(child),
                     flex: flexForAxis,
                 },
-                wrapperBase: frame?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                 mainFrame: {
                     base: child?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                     id: sanitizeFullColon(`${name ?? ''}_frame`),
@@ -144,7 +145,6 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                     WebkitBackdropFilter: getBackgroundBlurEffect(child),
                     filter: getLayerBlurEffect(child),
                 },
-                extendFrame: i > 0 && extendFrame ? `./${extendFrame}.yml` : undefined,
                 childFrame: {
                     base: frame?.layoutMode === 'HORIZONTAL' ? 'row.start' : 'column.start',
                     id: sanitizeFullColon(`${name ?? ''}_frame`),
@@ -208,14 +208,14 @@ export async function getPagesAndTraverseChildren({document, components, token, 
         const surface = routeFromSurfaceName(stripModuleSuffix(page?.name));
         routeLookup[page?.id] = {
             ...surface,
-            module: moduleFromName(page?.name),
+            module: moduleFromName(page?.name) || DEFAULT_PAGE_MODULE,
             barrierDismissible: page?.overlayBackgroundInteraction === 'CLOSE_ON_CLICK_OUTSIDE',
             overlayPositionType: page?.overlayPositionType,
             presentation: surfacePresentationFor(page),
         };
     }
     for (const page of sPages ?? []) {
-        const module = moduleFromName(page?.name);
+        const module = moduleFromName(page?.name) || DEFAULT_PAGE_MODULE;
         const backGroundImage = await getFigmaImagePath({token, figFile, srcPath, imageRef: getImageRef(page?.fills)});
         const pageChildren = await transformFrameChildren({frame: page, module, isLoopElement: false, token, srcPath, figFile});
         pages.push({
@@ -254,7 +254,6 @@ export async function getPagesAndTraverseChildren({document, components, token, 
             type: 'COMPONENT',
             name: shared.name,
             module,
-            extendFrame: undefined,
             mainFrame: {
                 base: component?.layoutMode === 'HORIZONTAL' ? 'row.start' : 'column.start',
                 id: sanitizeFullColon(`${shared.name}_frame`),
@@ -296,12 +295,15 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
             await createVectorComponent({filename, child, srcPath, token, figFile});
         } else if (child?.type === 'FRAME' || child?.type === 'INSTANCE' || child?.type === 'COMPONENT') {
             if (isRepeatType(getBaseType(child))) {
-                await createLoopComponent({filename, child, srcPath, sharedComponentMap});
-                await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
+                await createLoopComponent({filename, child});
+            } else if (child?.type === 'INSTANCE') {
+                await createInstanceComponent({filename, child: structuredClone(child), srcPath, sharedComponentMap, routeLookup});
+            } else if (getBaseType(child) === 'condition') {
+                await createConditionComponent({filename, child: structuredClone(child), routeLookup});
             } else {
-                await createConditionComponent({filename, child: structuredClone(child), srcPath, sharedComponentMap, routeLookup});
-                await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
+                await createFrameComponent({filename, child: structuredClone(child), routeLookup});
             }
+            await walkFrameChildren(structuredClone({children: child?.children, srcPath, token, figFile}));
         } else {
             const backGroundImage = await getFigmaImagePath({
                 token,

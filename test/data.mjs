@@ -24,12 +24,12 @@ import React from 'react';
 import {getColor} from '../services/test_comp.mjs';
 
 // eslint-disable-next-line react/prop-types
-export function TestComp({view, loopElement, loopIndex}) {
+export function TestComp({loopElement, loopIndex}) {
     // eslint-disable-next-line no-unused-vars
     const component = React.useMemo(() => ({
         states: {},
-        inputs: {"view": view, "loopElement": loopElement, "loopIndex": loopIndex}
-    }), [view, loopElement, loopIndex]);
+        inputs: {"loopElement": loopElement, "loopIndex": loopIndex}
+    }), [loopElement, loopIndex]);
     
     const style = React.useMemo(() => ({
         "height": 54,
@@ -38,16 +38,12 @@ export function TestComp({view, loopElement, loopIndex}) {
     }), [component]);
     
     return (
-        <div id={''} style={{"boxSizing": "border-box", "minWidth": 0, "display": "flex", "flexDirection": "column"}}>
-            <div id={''} style={{"boxSizing": "border-box", "minWidth": 0, "display": "flex", "flexDirection": "column"}}>
-                <div style={style}></div>
-            </div>
-            {view}
-        </div>
+        <div style={style}></div>
     );
 }
     
 `;
+
 export const logicFile = `
 /**
 * @param data {

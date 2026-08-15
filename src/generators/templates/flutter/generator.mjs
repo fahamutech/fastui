@@ -4,7 +4,7 @@ import {ensureFileExist, ensurePathExist} from '../../../shared/fs.mjs';
 import {firstUpperCase} from '../../../shared/fn.mjs';
 import {
     getEffects,
-    getExtend,
+    getExtendList,
     getFeed,
     getFrame,
     getLeft,
@@ -12,12 +12,10 @@ import {
     getRight,
     getStates,
     getStyles,
-    getWrapper
 } from '../../modifier.mjs';
 import {analyzeBehavior} from '../../behavior.mjs';
 import {flutterRuntimeSource} from './runtime.mjs';
 import {ensureServiceFile, relativeImport, specStructure} from '../../project-structure.mjs';
-import {specToJSON} from '../../../specs/reader.mjs';
 
 export {flutterRuntimeSource};
 
@@ -83,7 +81,7 @@ function valueExpression(value) {
 }
 
 function collectInputs(data = {}) {
-    const found = new Set(['view', 'loopElement', 'loopIndex']);
+    const found = new Set(['loopElement', 'loopIndex']);
     const visit = value => {
         if (typeof value === 'string') {
             const matches = value.matchAll(/inputs\.([a-zA-Z_][a-zA-Z0-9_]*)/g);
@@ -116,24 +114,6 @@ function referenceImport(specPath, reference) {
     let importPath = relative(dirname(generatedPath(specPath)), targetOutput).split(sep).join('/');
     if (!importPath.startsWith('.')) importPath = `./${importPath}`;
     return {className: classNameFromPath(reference), importPath, targetSpec};
-}
-
-async function addReferenceLayout(reference) {
-    if (!reference) return reference;
-    const document = await specToJSON(reference.targetSpec);
-    const data = document?.component ?? document?.condition ?? document?.loop;
-    const frame = getFrame(data);
-    const wrapper = getWrapper(data);
-    const wrapperRaw = typeof wrapper === 'string' ? wrapper : wrapper?.base;
-    const styles = typeof frame === 'object' ? frame?.styles ?? {} : {};
-    // Sibling axis (parent-driven): decides whether this referenced widget
-    // sits inside a Row or Column when its composer embeds it as `previous`.
-    const isRow = `${wrapperRaw ?? ''}`.toLowerCase().startsWith('row');
-    return {
-        ...reference,
-        flexible: Number(styles.flex ?? 0) > 0
-            || fillsAxis(styles[isRow ? 'width' : 'height'], isRow ? 'width' : 'height'),
-    };
 }
 
 function colorExpression(value) {
@@ -373,12 +353,12 @@ function inputExpression(data) {
     return width || height ? `SizedBox(${width ? `width: ${width}, ` : ''}${height ? `height: ${height}, ` : ''}child: ${field})` : field;
 }
 
-function componentBody(data, nestedChild = null) {
+function componentBody(data) {
     const base = `${data?.base ?? 'container'}`.toLowerCase();
     if (base === 'text') return textExpression(data);
     if (base === 'image') return imageExpression(data);
     if (base === 'input' || (base === 'container' && data?.modifier?.props?.control === 'input')) return inputExpression(data);
-    const body = containerExpression(getStyles(data), nestedChild ?? 'null');
+    const body = containerExpression(getStyles(data), 'null');
     return applyInteractions(data, body);
 }
 
@@ -400,35 +380,49 @@ function alignedContent(styles, isRow, content) {
     return `Align(alignment: Alignment(${horizontal}, ${vertical}), child: ${content})`;
 }
 
-function frameExpression(frame, wrapper, content, previous = null, previousFlexible = false) {
-    const styles = typeof frame === 'object' ? frame?.styles ?? {} : {};
-    // Sibling axis (parent-driven): governs the outer Row/Column that places
-    // this node's own content next to `previous` (extended sibling) and
-    // widget.view. Distinct from frame's own axis, used only for styling.
-    const wrapperRaw = typeof wrapper === 'string' ? wrapper : wrapper?.base ?? (typeof frame === 'string' ? frame : frame?.base);
-    const isRow = `${wrapperRaw ?? ''}`.toLowerCase().startsWith('row');
-    const isEnd = `${wrapperRaw ?? ''}`.toLowerCase().includes('.end');
-    const gap = Number(styles.spaceValue ?? 0);
-    const fillsViewport = isRow
-        ? ['100vw', '100%'].includes(`${styles.width ?? ''}`.toLowerCase())
-        : ['100vh', '100%'].includes(`${styles.height ?? ''}`.toLowerCase());
-    const useFlexibleLayout = Number(styles.flex ?? 0) > 0 || fillsViewport;
+function isFlexibleFrame(styles = {}, isRow) {
+    return Number(styles.flex ?? 0) > 0 || fillsAxis(styles[isRow ? 'width' : 'height'], isRow ? 'width' : 'height');
+}
+
+/**
+ * Renders the top-down composition for one primitive: this node's own view
+ * (wrapped by `frame.current`) plus one wrapper per `modifier.extend` child
+ * (wrapped uniformly by `frame.next`), ordered and arranged per `frame.base`
+ * (row.start/row.end/column.start/column.end/*.stack). Without extend
+ * children, `frame.base` has nothing to arrange, so only the current view is
+ * returned.
+ * @param frame {{base,current,next}}
+ * @param ownContentExpr {string} Dart expression for this node's own content
+ * @param extendRefs {{className:string}[]} ordered extend widget references
+ * @return {string}
+ */
+function composeFrame(frame, ownContentExpr, extendRefs = []) {
+    const current = frame?.current ?? {};
+    const base = frame?.base;
+    const isRow = `${base ?? ''}`.toLowerCase().startsWith('row');
+    const currentWidget = containerExpression(current, alignedContent(current, isRow, ownContentExpr));
+    if (extendRefs.length === 0) return currentWidget;
+
+    const next = frame?.next ?? {};
+    const nextWidgets = extendRefs.map(ref => containerExpression(next, widgetInvocation(ref)));
+
+    if (`${base ?? ''}`.toLowerCase().includes('.stack')) {
+        return `Stack(children: [${[currentWidget, ...nextWidgets].join(', ')}])`;
+    }
+
+    const isEnd = `${base ?? ''}`.toLowerCase().includes('.end');
     const bounded = isRow ? 'constraints.hasBoundedWidth' : 'constraints.hasBoundedHeight';
-    const currentNode = containerExpression(styles, alignedContent(styles, isRow, content));
-    const own = useFlexibleLayout
-        ? `if (${bounded}) Expanded(child: ${currentNode}) else ${currentNode}`
-        : currentNode;
-    const previousNode = previous && previousFlexible
-        ? `if (${bounded}) Expanded(child: ${previous}) else ${previous}`
-        : previous;
-    const spacing = gap > 0 && previousNode
-        ? `SizedBox(${isRow ? `width: ${gap}` : `height: ${gap}`})`
-        : null;
-    const ordered = isEnd
-        ? ['if (widget.view != null) widget.view!', own, spacing, previousNode]
-        : [previousNode, spacing, own, 'if (widget.view != null) widget.view!'];
-    const children = ordered.filter(Boolean).join(', ');
-    return `LayoutBuilder(builder: (context, constraints) => ${isRow ? 'Row' : 'Column'}(mainAxisSize: ${bounded} ? MainAxisSize.max : MainAxisSize.min, mainAxisAlignment: ${mainAxis(styles.justifyContent)}, crossAxisAlignment: ${crossAxis(styles.alignItems)}, children: [${children}]))`;
+    const currentFlexible = isFlexibleFrame(current, isRow);
+    const nextFlexible = isFlexibleFrame(next, isRow);
+    const currentItem = currentFlexible ? `if (${bounded}) Expanded(child: ${currentWidget}) else ${currentWidget}` : currentWidget;
+    const nextItems = nextWidgets.map(widget => nextFlexible ? `if (${bounded}) Expanded(child: ${widget}) else ${widget}` : widget);
+    const orderedBase = isEnd ? [...nextItems, currentItem] : [currentItem, ...nextItems];
+    const gap = Number(current.spaceValue ?? 0);
+    const spacer = gap > 0 ? `SizedBox(${isRow ? `width: ${gap}` : `height: ${gap}`})` : null;
+    const ordered = spacer
+        ? orderedBase.flatMap((item, index) => index === 0 ? [item] : [spacer, item])
+        : orderedBase;
+    return `LayoutBuilder(builder: (context, constraints) => ${isRow ? 'Row' : 'Column'}(mainAxisSize: ${bounded} ? MainAxisSize.max : MainAxisSize.min, mainAxisAlignment: ${mainAxis(current.justifyContent)}, crossAxisAlignment: ${crossAxis(current.alignItems)}, children: [${ordered.join(', ')}]))`;
 }
 
 async function serviceImportAndStubs(data, specPath) {
@@ -446,12 +440,13 @@ async function serviceImportAndStubs(data, specPath) {
 
 function referencedWidgets(data, specPath) {
     const refs = {
-        extend: referenceImport(specPath, getExtend(data)),
+        extendList: getExtendList(data).map(path => referenceImport(specPath, path)).filter(Boolean),
         left: referenceImport(specPath, getLeft(data)),
         right: referenceImport(specPath, getRight(data)),
         feed: referenceImport(specPath, getFeed(data))
     };
-    const imports = [...new Map(Object.values(refs).filter(Boolean).map(item => [item.importPath, item])).values()]
+    const allRefs = [...refs.extendList, refs.left, refs.right, refs.feed].filter(Boolean);
+    const imports = [...new Map(allRefs.map(item => [item.importPath, item])).values()]
         .map(item => `import '${item.importPath}';`)
         .join('\n');
     return {refs, imports};
@@ -460,25 +455,6 @@ function referencedWidgets(data, specPath) {
 function widgetInvocation(ref, extra = '') {
     if (!ref) return 'const SizedBox.shrink()';
     return `${ref.className}(loopIndex: widget.loopIndex, loopElement: widget.loopElement${extra})`;
-}
-
-function composeWithExtend(data, refs, ownBuilder) {
-    const frame = getFrame(data);
-    const wrapper = getWrapper(data);
-    const wrapperRaw = typeof wrapper === 'string' ? wrapper : wrapper?.base ?? (typeof frame === 'string' ? frame : frame?.base);
-    const stack = `${wrapperRaw ?? ''}`.toLowerCase().includes('.stack');
-    if (!refs.extend) return {content: ownBuilder(null), previous: null};
-    if (stack) return {content: ownBuilder(widgetInvocation(refs.extend)), previous: null};
-    const previous = widgetInvocation(refs.extend);
-    const bounded = `${wrapperRaw ?? ''}`.toLowerCase().startsWith('row')
-        ? 'constraints.hasBoundedWidth'
-        : 'constraints.hasBoundedHeight';
-    return {
-        content: ownBuilder(null),
-        previous: refs.extend.flexible
-            ? `if (${bounded}) Expanded(child: ${previous}) else ${previous}`
-            : previous,
-    };
 }
 
 function stateMembers(data) {
@@ -539,7 +515,6 @@ async function writeWidget({data, specPath, buildExpression}) {
     const hasLogic = collectLogicNames(data).length > 0;
     const behavior = analyzeBehavior(data);
     const {refs, imports} = referencedWidgets(data, specPath);
-    refs.extend = await addReferenceLayout(refs.extend);
     const serviceImport = await serviceImportAndStubs(data, specPath);
     const runtimePath = resolve(flutterLibRoot(specPath), 'fastui_runtime.dart');
     await ensureFileExist(runtimePath);
@@ -557,12 +532,12 @@ async function writeWidget({data, specPath, buildExpression}) {
     const storeMembers = stateStoreMembers(data, specPath);
     const init = stateInitializers(data);
     const effects = effectsInit(data);
-    const composition = buildExpression(refs);
+    const composedContent = composeFrame(getFrame(data), buildExpression(refs), refs.extendList);
     const runtimeImport = (`${data?.base}`.toLowerCase() === 'image' || behavior.hasNavigation) ? `import '${runtimeImportPath}';` : '';
     const contextSource = hasLogic ? contextMembers(data, inputs) : '';
     const storeComponentName = structure.componentName;
-    const stateful = `class ${name} extends StatefulWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n\n  @override\n  State<${name}> createState() => _${name}State();\n}\n\nclass _${name}State extends State<${name}> {\n  ${stateFields}\n  ${storeMembers}\n\n  @override\n  void initState() {\n    super.initState();\n    ${hasState ? `_storeId = '${storeComponentName}:\${identityHashCode(this)}';` : ''}\n    ${init}\n    ${hasState ? '_publishState();' : ''}\n    ${effects}\n  }\n\n  ${hasState ? `@override\n  void dispose() {\n    moduleStore.remove<${stateModelName(specPath)}>(_storeId);\n    super.dispose();\n  }` : ''}\n\n  ${contextSource}\n\n  @override\n  Widget build(BuildContext context) {\n    final content = ${composition.content};\n    return ${frameExpression(getFrame(data), getWrapper(data), 'content', composition.previous)};\n  }\n}`;
-    const stateless = `class ${name} extends StatelessWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n  ${name} get widget => this;\n\n  ${contextSource}\n\n  @override\n  Widget build(BuildContext context) {\n    final content = ${composition.content};\n    return ${frameExpression(getFrame(data), getWrapper(data), 'content', composition.previous)};\n  }\n}`;
+    const stateful = `class ${name} extends StatefulWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n\n  @override\n  State<${name}> createState() => _${name}State();\n}\n\nclass _${name}State extends State<${name}> {\n  ${stateFields}\n  ${storeMembers}\n\n  @override\n  void initState() {\n    super.initState();\n    ${hasState ? `_storeId = '${storeComponentName}:\${identityHashCode(this)}';` : ''}\n    ${init}\n    ${hasState ? '_publishState();' : ''}\n    ${effects}\n  }\n\n  ${hasState ? `@override\n  void dispose() {\n    moduleStore.remove<${stateModelName(specPath)}>(_storeId);\n    super.dispose();\n  }` : ''}\n\n  ${contextSource}\n\n  @override\n  Widget build(BuildContext context) {\n    return ${composedContent};\n  }\n}`;
+    const stateless = `class ${name} extends StatelessWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n  ${name} get widget => this;\n\n  ${contextSource}\n\n  @override\n  Widget build(BuildContext context) {\n    return ${composedContent};\n  }\n}`;
     const blurImport = JSON.stringify(data).includes('backdropFilter') ? "import 'dart:ui' as ui;" : '';
     const content = `import 'package:flutter/material.dart';\n${blurImport}\n${runtimeImport}\n${imports}\n${storeImport}\n${serviceImport}\n\n${behavior.requiresFlutterStatefulWidget ? stateful : stateless}\n`;
     await ensurePathExist(dirname(outputPath));
@@ -574,7 +549,7 @@ export async function composeFlutterComponent({data, path: specPath}) {
     await writeWidget({
         data,
         specPath,
-        buildExpression: refs => composeWithExtend(data, refs, nested => componentBody(data, nested))
+        buildExpression: () => componentBody(data)
     });
 }
 
@@ -583,12 +558,12 @@ export async function composeFlutterCondition({data, path: specPath}) {
     await writeWidget({
         data,
         specPath,
-        buildExpression: refs => composeWithExtend(data, refs, nested => {
+        buildExpression: refs => {
             const left = widgetInvocation(refs.left);
             const right = widgetInvocation(refs.right);
             const branch = refs.right ? `(${stateIdentifier('condition')} == true ? ${right} : ${left})` : left;
-            return applyInteractions(data, containerExpression(getStyles(data), nested ? `Stack(children: [${branch}, ${nested}])` : branch));
-        })
+            return applyInteractions(data, containerExpression(getStyles(data), branch));
+        }
     });
 }
 
@@ -598,7 +573,7 @@ export async function composeFlutterLoop({data, path: specPath}) {
     await writeWidget({
         data,
         specPath,
-        buildExpression: refs => composeWithExtend(data, refs, nested => {
+        buildExpression: refs => {
             const feed = refs.feed
                 ? `${refs.feed.className}(loopIndex: index, loopElement: item)`
                 : 'const SizedBox.shrink()';
@@ -610,7 +585,7 @@ export async function composeFlutterLoop({data, path: specPath}) {
                 : direction === 'both'
                     ? `SingleChildScrollView(scrollDirection: Axis.horizontal, child: SingleChildScrollView(scrollDirection: Axis.vertical, child: ${column}))`
                     : column;
-            return applyInteractions(data, containerExpression(getStyles(data), nested ? `Stack(children: [${list}, ${nested}])` : list));
-        })
+            return applyInteractions(data, containerExpression(getStyles(data), list));
+        }
     });
 }

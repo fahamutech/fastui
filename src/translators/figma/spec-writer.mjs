@@ -2,7 +2,15 @@
  * Serializes one already-annotated Figma node (see tree.mjs) to its FastUI
  * YAML spec file. Each `create*Component` function owns exactly one of the
  * spec primitives (component/condition/loop) for exactly one Figma node
- * shape (text/image/vector/rectangle/frame).
+ * shape (text/image/vector/rectangle/frame/instance).
+ *
+ * Composition is top-down: a node that owns children (FRAME/INSTANCE/
+ * COMPONENT) emits `modifier.extend` listing those children in order, and
+ * `modifier.frame` as `{base, id, current, next}` - `current` styles this
+ * node's own view, `next` styles each extended child's wrapper. Leaf nodes
+ * (text/image/vector/rectangle) never have children, so they never emit
+ * `extend`. There is no `ref`/`compose`: an INSTANCE reuses its shared MAIN
+ * COMPONENT spec by pointing `base` at it (see shared-components.mjs).
  */
 import * as yaml from 'js-yaml';
 import {writeFile} from 'node:fs/promises';
@@ -11,15 +19,30 @@ import {getContainerLikeStyles, getImageRef, getSizeStyles, repeatScrollDirectio
 import {getColor} from './color.mjs';
 import {getBaseType, sanitizedNameForLoopElement} from './naming.mjs';
 import {interactionBehavior} from './route.mjs';
-import {sharedComponentRef} from './shared-components.mjs';
+import {sharedComponentBasePath} from './shared-components.mjs';
 import {getFigmaImagePath} from './assets.mjs';
+
+/**
+ * Maps tree.mjs's internal `{base, id, styles}` frame annotation to the
+ * spec-level `{base, id, current, next}` contract. `next` is left empty:
+ * the translator does not yet infer per-parent child participation styles,
+ * so authored specs can add `frame.next` by hand where needed.
+ */
+function toFrameShape(internalFrame, extraCurrentStyles = {}) {
+    if (!internalFrame) return undefined;
+    return {
+        base: internalFrame.base,
+        id: internalFrame.id,
+        current: {...internalFrame.styles, ...extraCurrentStyles},
+        next: {},
+    };
+}
 
 export async function createTextComponent(filename, child) {
     const yamlData = yaml.dump({
         component: {
             base: 'text',
             modifier: {
-                compose: child?.extendFrame,
                 styles: {
                     ...child?.style ?? {},
                     ...getSizeStyles(child),
@@ -39,7 +62,7 @@ export async function createTextComponent(filename, child) {
                         : child?.characters,
                     id: sanitizeFullColon(`${child?.name}`)
                 },
-                frame: child?.childFrame,
+                frame: toFrameShape(child?.childFrame),
             }
         }
     });
@@ -51,7 +74,6 @@ export async function createTextInputComponent(filename, child, type = 'text') {
         component: {
             base: 'container',
             modifier: {
-                compose: child?.extendFrame,
                 styles: {
                     ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child),
@@ -72,7 +94,7 @@ export async function createTextInputComponent(filename, child, type = 'text') {
                     inputType: type,
                     borderColor: getColor(child?.strokes) ?? 'transparent',
                 },
-                frame: child?.childFrame,
+                frame: toFrameShape(child?.childFrame),
             }
         }
     }, undefined);
@@ -85,13 +107,12 @@ export async function createContainerComponent(filename, child, backgroundImage)
             base: 'container',
             modifier: {
                 props: {id: sanitizeFullColon(`${child?.name}`)},
-                compose: child?.extendFrame,
                 styles: {
                     ...getContainerLikeStyles(child, backgroundImage),
                     ...getSizeStyles(child)
                 },
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
-                frame: child?.childFrame,
+                frame: toFrameShape(child?.childFrame),
             }
         }
     }, undefined);
@@ -99,72 +120,105 @@ export async function createContainerComponent(filename, child, backgroundImage)
 }
 
 /**
+ * A plain Figma FRAME/COMPONENT container (no explicit condition/loop/
+ * instance metadata): a top-down composer whose visible children become an
+ * ordered `modifier.extend` list.
+ */
+export async function createFrameComponent({filename, child, routeLookup}) {
+    const baseType = getBaseType(child);
+    const behavior = interactionBehavior(child, routeLookup);
+    const childPaths = (child?.children ?? []).map(item => `./${item?.name}.yml`);
+    const yamlData = yaml.dump({
+        component: {
+            base: 'container',
+            modifier: {
+                extend: childPaths.length > 0 ? childPaths : undefined,
+                styles: child?.styles,
+                props: {
+                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
+                    onClick: behavior.onClick
+                },
+                states: Object.keys(behavior.states).length > 0 ? behavior.states : undefined,
+                metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
+                frame: toFrameShape(child?.mainFrame, {
+                    cursor: baseType === 'button' ? 'pointer' : undefined,
+                    overflow: child?.clipsContent ? 'hidden' : undefined,
+                }),
+            }
+        }
+    }, undefined);
+    await writeFile(filename, yamlData);
+}
+
+/**
+ * A Figma INSTANCE: reuses its shared MAIN COMPONENT spec via `base`, and
+ * composes its own overriding child (if any) via `extend` so the instance's
+ * local override replaces the shared definition's own child in that slot.
  * @param sharedComponentMap {Record<string, {name: string}>}
  * @param routeLookup {Record<string, *>}
  */
-export async function createConditionComponent({filename, child, srcPath, sharedComponentMap, routeLookup}) {
+export async function createInstanceComponent({filename, child, srcPath, sharedComponentMap, routeLookup}) {
+    const behavior = interactionBehavior(child, routeLookup);
+    const override = child?.children?.[child?.children?.length - 1];
+    const yamlData = yaml.dump({
+        component: {
+            base: sharedComponentBasePath({filename, child, srcPath, sharedComponentMap}),
+            modifier: {
+                extend: override ? `./${override?.name}.yml` : undefined,
+                styles: child?.styles,
+                props: {
+                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
+                    onClick: behavior.onClick
+                },
+                states: Object.keys(behavior.states).length > 0 ? behavior.states : undefined,
+                metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
+                frame: toFrameShape(child?.mainFrame),
+            }
+        }
+    }, undefined);
+    await writeFile(filename, yamlData);
+}
+
+/**
+ * A Figma node explicitly named/flagged as a condition (`getBaseType(child)
+ * === 'condition'`). Only ever called for that explicit case; a plain frame
+ * is a container (see createFrameComponent), not a condition.
+ * @param routeLookup {Record<string, *>}
+ */
+export async function createConditionComponent({filename, child, routeLookup}) {
     const baseType = getBaseType(child);
     const behavior = interactionBehavior(child, routeLookup);
+    const rightName = child?.children?.[0]?.name;
+    const leftName = child?.children?.[1]?.name;
 
-    let isCondition = false;
-    let leftName, rightName;
-    if (baseType === 'condition') {
-        isCondition = true;
-        rightName = child?.children?.[0]?.name;
-        leftName = child?.children?.[1]?.name;
-    }
-
-    const last = child?.children?.[child?.children?.length - 1];
     const yamlData = yaml.dump({
         condition: {
             modifier: {
-                ref: sharedComponentRef({filename, child, srcPath, sharedComponentMap}),
-                compose: child?.extendFrame,
                 styles: child.styles,
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
                     onClick: behavior.onClick
                 },
-                left: (isCondition && leftName)
-                    ? `./${leftName}.yml`
-                    : (last ? `./${last?.name}.yml` : undefined),
-                right: (isCondition && rightName)
-                    ? `./${rightName}.yml`
-                    : undefined,
-                states: isCondition || Object.keys(behavior.states).length > 0 ? {
-                    ...(isCondition ? {condition: false} : {}),
-                    ...behavior.states,
-                } : undefined,
+                left: leftName ? `./${leftName}.yml` : undefined,
+                right: rightName ? `./${rightName}.yml` : undefined,
+                states: {condition: false, ...behavior.states},
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
-                frame: {
-                    base: child?.mainFrame?.base,
-                    id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}_frame'` : `${child?.name}_frame`),
-                    styles: {
-                        ...child?.mainFrame?.styles,
-                        cursor: baseType === 'button' ? 'pointer' : undefined,
-                        overflow: child?.clipsContent ? 'hidden' : undefined,
-                    }
-                },
-                wrapper: {
-                    base: child?.wrapperBase ?? child?.mainFrame?.base,
-                },
+                frame: toFrameShape(child?.mainFrame, {
+                    cursor: baseType === 'button' ? 'pointer' : undefined,
+                    overflow: child?.clipsContent ? 'hidden' : undefined,
+                }),
             }
         }
     }, undefined);
     await writeFile(filename, yamlData);
 }
 
-/**
- * @param sharedComponentMap {Record<string, {name: string}>}
- */
-export async function createLoopComponent({filename, child, srcPath, sharedComponentMap}) {
+export async function createLoopComponent({filename, child}) {
     child = structuredClone(child);
     const last = child?.children?.[0];
     const yamlData = yaml.dump({
         loop: {
             modifier: {
-                ref: sharedComponentRef({filename, child, srcPath, sharedComponentMap}),
-                compose: child?.extendFrame,
                 styles: {
                     ...child.styles,
                     overflow: child?.clipsContent ? 'hidden' : undefined
@@ -176,17 +230,9 @@ export async function createLoopComponent({filename, child, srcPath, sharedCompo
                     scroll: repeatScrollDirection(child),
                 },
                 feed: last ? `./${last?.name}.yml` : undefined,
-                frame: {
-                    base: child?.mainFrame?.base,
-                    id: child?.mainFrame?.id,
-                    styles: {
-                        ...child?.mainFrame?.styles,
-                        overflow: child?.clipsContent ? 'hidden' : undefined,
-                    }
-                },
-                wrapper: {
-                    base: child?.wrapperBase ?? child?.mainFrame?.base,
-                },
+                frame: toFrameShape(child?.mainFrame, {
+                    overflow: child?.clipsContent ? 'hidden' : undefined,
+                }),
             }
         }
     }, undefined);
@@ -203,13 +249,12 @@ export function dumpImageYaml({child, srcUrl, objectFit = 'cover'}) {
                     alt: child?.name,
                     src: child?.isLoopElement ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??${srcUrl ?? ''}` : srcUrl ?? '',
                 },
-                compose: child?.extendFrame,
                 styles: {
                     ...getContainerLikeStyles(child, null),
                     ...getSizeStyles(child),
                     objectFit
                 },
-                frame: child?.childFrame,
+                frame: toFrameShape(child?.childFrame),
             }
         }
     }, undefined);

@@ -2,7 +2,9 @@
  * Figma COMPONENT/INSTANCE handling: finding every component definition
  * used by the document (even ones only referenced as an INSTANCE, never
  * placed on a canvas themselves) so they can be generated once under
- * `modules/shared/common` and referenced (`ref:`) from every call site.
+ * `modules/shared/common` and reused from every call site by pointing an
+ * INSTANCE spec's `base` at the shared MAIN COMPONENT spec (top-down
+ * `extend` composition, not structural `ref`).
  */
 import {dirname, join, relative, resolve, sep} from 'node:path';
 import {generatedNodeName} from './naming.mjs';
@@ -50,16 +52,18 @@ export function collectSharedComponents(document, components = {}, sharedCompone
 }
 
 /**
- * The `ref:` a spec file should point at when `child` is an instance of an
- * already-generated shared component, relative to the spec file being
- * written.
+ * The `base:` path a Figma INSTANCE spec should point at to reuse its
+ * already-generated shared MAIN COMPONENT spec, relative to the spec file
+ * being written. `specs/reader.mjs` resolves this the same way it resolves
+ * any other `base` spec-file reference: the shared spec's shape is read
+ * first, then this instance's own `modifier` is deep-merged on top.
  * @return {string|undefined}
  */
-export function sharedComponentRef({filename, child, srcPath, sharedComponentMap = {}}) {
+export function sharedComponentBasePath({filename, child, srcPath, sharedComponentMap = {}}) {
     if (child?.type !== 'INSTANCE' || !child?.componentId) return undefined;
     const shared = sharedComponentMap[child.componentId];
     if (!shared) return undefined;
-    let ref = relative(dirname(filename), resolve(join(srcPath, 'modules', 'shared', 'common', `${shared.name}.yml`))).split(sep).join('/');
-    if (!ref.startsWith('.')) ref = `./${ref}`;
-    return ref;
+    let path = relative(dirname(filename), resolve(join(srcPath, 'modules', 'shared', 'common', `${shared.name}.yml`))).split(sep).join('/');
+    if (!path.startsWith('.')) path = `./${path}`;
+    return path;
 }

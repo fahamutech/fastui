@@ -383,8 +383,8 @@ describe('Specs', function () {
             const children = await getPagesAndTraverseChildren({document, srcPath});
             await walkFrameChildren({children, srcPath});
             await generateCodeFromSpecs({root: srcPath, projectPath: root});
-            const spec = await readFile(join(srcPath, 'modules', 'state_page', 'itoggle_Toggle_button.yml'), 'utf8');
-            const widget = await readFile(join(root, 'lib', 'modules', 'state_page', 'itoggle_toggle_button.dart'), 'utf8');
+            const spec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'itoggle_Toggle_button.yml'), 'utf8');
+            const widget = await readFile(join(root, 'lib', 'modules', 'presentation', 'pages', 'itoggle_toggle_button.dart'), 'utf8');
             expect(spec).to.include('variant: toggle');
             expect(spec).to.include('action: state.set');
             expect(widget).to.include('extends StatefulWidget');
@@ -528,8 +528,8 @@ describe('Specs', function () {
             await writeFile(join(moduleRoot, 'leading.yml'), 'component:\n  base: image\n  modifier: {}\n');
             const labelPath = join(moduleRoot, 'label.yml');
             await writeFile(labelPath, `component:
+  base: ../../shared/common/text.yml
   modifier:
-    ref: ../../shared/common/text.yml
     extend: ./leading.yml
     styles:
       color: '#0000FF'
@@ -546,6 +546,118 @@ describe('Specs', function () {
             const generated = await readFile(join(root, 'lib', 'modules', 'example', 'label.dart'), 'utf8');
             expect(generated).to.include('fontSize: 14');
             expect(generated).to.include('Color(0xFF0000FF)');
+        });
+
+        it('rebases an inherited array extend when a component spec is included via base', async function () {
+            const sharedRoot = join(root, 'lib', 'blueprints', 'shared', 'common');
+            const moduleRoot = join(root, 'lib', 'blueprints', 'modules', 'feature');
+            await mkdir(sharedRoot, {recursive: true});
+            await mkdir(moduleRoot, {recursive: true});
+            await writeFile(join(sharedRoot, 'leaf_one.yml'), 'component:\n  base: container\n  modifier: {}\n');
+            await writeFile(join(sharedRoot, 'leaf_two.yml'), 'component:\n  base: container\n  modifier: {}\n');
+            await writeFile(join(sharedRoot, 'group.yml'), `component:
+  base: container
+  modifier:
+    extend:
+      - ./leaf_one.yml
+      - ./leaf_two.yml
+`);
+            const localPath = join(moduleRoot, 'local_group.yml');
+            await writeFile(localPath, `component:
+  base: ../../shared/common/group.yml
+  modifier: {}
+`);
+            const resolved = await specToJSON(localPath);
+            expect(resolved.component.modifier.extend).to.deep.equal([
+                '../../shared/common/leaf_one.yml',
+                '../../shared/common/leaf_two.yml',
+            ]);
+        });
+
+        it('composes multiple extend children in frame.base order for React', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const moduleRoot = join(root, 'src', 'blueprints', 'modules');
+            await mkdir(moduleRoot, {recursive: true});
+            await composeComponent({path: join(moduleRoot, 'child_a.yml'), projectPath: root, data: {base: 'container', modifier: {}}});
+            await composeComponent({path: join(moduleRoot, 'child_b.yml'), projectPath: root, data: {base: 'container', modifier: {}}});
+            const startPath = join(moduleRoot, 'composer_start.yml');
+            const endPath = join(moduleRoot, 'composer_end.yml');
+            const stackPath = join(moduleRoot, 'composer_stack.yml');
+            await composeComponent({path: startPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {extend: ['./child_a.yml', './child_b.yml'], props: {children: 'ParentMarker'}, frame: {base: 'row.start'}}
+            }});
+            await composeComponent({path: endPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {extend: ['./child_a.yml', './child_b.yml'], props: {children: 'ParentMarker'}, frame: {base: 'row.end'}}
+            }});
+            await composeComponent({path: stackPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {extend: ['./child_a.yml', './child_b.yml'], props: {children: 'ParentMarker'}, frame: {base: 'row.start.stack'}}
+            }});
+            const start = await readFile(join(root, 'src', 'modules', 'composer_start.jsx'), 'utf8');
+            const end = await readFile(join(root, 'src', 'modules', 'composer_end.jsx'), 'utf8');
+            const stack = await readFile(join(root, 'src', 'modules', 'composer_stack.jsx'), 'utf8');
+            expect(start).to.include("import {ChildA} from './child_a.jsx';");
+            expect(start).to.include("import {ChildB} from './child_b.jsx';");
+            expect(start.indexOf('ParentMarker')).to.be.lessThan(start.indexOf('<ChildA'));
+            expect(start.indexOf('<ChildA')).to.be.lessThan(start.indexOf('<ChildB'));
+            expect(end.indexOf('<ChildA')).to.be.lessThan(end.indexOf('<ChildB'));
+            expect(end.indexOf('<ChildB')).to.be.lessThan(end.indexOf('ParentMarker'));
+            expect(stack).to.include("style={{display:'grid',flex:1}}");
+            expect(stack).to.include("style={{gridArea:'1 / 1'}}");
+            process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
+        it('composes multiple extend children in frame.base order for Flutter', async function () {
+            const moduleRoot = join(root, 'lib', 'blueprints', 'modules');
+            await composeComponent({path: join(moduleRoot, 'child_a.yml'), projectPath: root, data: {base: 'container', modifier: {}}});
+            await composeComponent({path: join(moduleRoot, 'child_b.yml'), projectPath: root, data: {base: 'container', modifier: {}}});
+            const startPath = join(moduleRoot, 'composer_start.yml');
+            const stackPath = join(moduleRoot, 'composer_stack.yml');
+            await composeComponent({path: startPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {extend: ['./child_a.yml', './child_b.yml'], props: {children: 'ParentMarker'}, frame: {base: 'column.end'}}
+            }});
+            await composeComponent({path: stackPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {extend: ['./child_a.yml', './child_b.yml'], props: {children: 'ParentMarker'}, frame: {base: 'column.start.stack'}}
+            }});
+            const start = await readFile(join(root, 'lib', 'modules', 'composer_start.dart'), 'utf8');
+            const stack = await readFile(join(root, 'lib', 'modules', 'composer_stack.dart'), 'utf8');
+            expect(start).to.include("import './child_a.dart';");
+            expect(start).to.include("import './child_b.dart';");
+            expect(start.indexOf('FastUIChildA(')).to.be.lessThan(start.indexOf('FastUIChildB('));
+            expect(start.indexOf('FastUIChildB(')).to.be.lessThan(start.indexOf("Text('ParentMarker'"));
+            expect(stack).to.include('Stack(children:');
+        });
+
+        it('translates a plain Figma frame into a container composer with ordered extend children', async function () {
+            const document = {children: [{
+                id: 'page', name: 'demo_page', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
+                children: [{
+                    id: 'group', name: 'Group', type: 'FRAME', layoutMode: 'VERTICAL', children: [
+                        {id: 'a', name: 'A_text', type: 'TEXT', characters: 'A'},
+                        {id: 'b', name: 'B_text', type: 'TEXT', characters: 'B'},
+                        {id: 'c', name: 'C_text', type: 'TEXT', characters: 'C'},
+                    ]
+                }]
+            }]};
+            const srcPath = join(root, 'lib', 'blueprints');
+            const children = await getPagesAndTraverseChildren({document, srcPath});
+            await walkFrameChildren({children, srcPath});
+            const groupSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'igroup_Group.yml'), 'utf8');
+            expect(groupSpec).to.include('component:');
+            expect(groupSpec).not.to.include('condition:');
+            expect(groupSpec).to.include('extend:');
+            expect(groupSpec).to.include('./ia_A_text.yml');
+            expect(groupSpec).to.include('./ib_B_text.yml');
+            expect(groupSpec).to.include('./ic_C_text.yml');
+            const orderA = groupSpec.indexOf('./ia_A_text.yml');
+            const orderB = groupSpec.indexOf('./ib_B_text.yml');
+            const orderC = groupSpec.indexOf('./ic_C_text.yml');
+            expect(orderA).to.be.lessThan(orderB);
+            expect(orderB).to.be.lessThan(orderC);
         });
 
         it('translates neutral Figma navigation and generates Flutter overlays', async function () {
@@ -587,14 +699,14 @@ describe('Specs', function () {
             });
             await generateCodeFromSpecs({root: srcPath, projectPath: root});
 
-            const openSpec = await readFile(join(srcPath, 'modules', 'home_page', 'iopen_Open_button.yml'), 'utf8');
-            const openWidget = await readFile(join(root, 'lib', 'modules', 'home_page', 'iopen_open_button.dart'), 'utf8');
+            const openSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'iopen_Open_button.yml'), 'utf8');
+            const openWidget = await readFile(join(root, 'lib', 'modules', 'presentation', 'pages', 'iopen_open_button.dart'), 'utf8');
             const appRoute = await readFile(join(root, 'lib', 'app_route.dart'), 'utf8');
             const runtime = await readFile(join(root, 'lib', 'fastui_runtime.dart'), 'utf8');
             const guard = await readFile(join(root, 'lib', 'routing_guard.dart'), 'utf8');
-            const instanceSpec = await readFile(join(srcPath, 'modules', 'home_page', 'ilabel_Primary_label.yml'), 'utf8');
+            const instanceSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'ilabel_Primary_label.yml'), 'utf8');
             const sharedSpec = await readFile(join(srcPath, 'modules', 'shared', 'common', 'ishared_text_Label.yml'), 'utf8');
-            const sheetSpec = await readFile(join(srcPath, 'modules', 'choices_sheet', 'choices_sheet.yml'), 'utf8');
+            const sheetSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'choices_sheet.yml'), 'utf8');
             expect(openSpec).to.include('action: navigation.open');
             expect(openSpec).to.include('type: sheet');
             expect(openSpec).not.to.include('onStart');
@@ -622,16 +734,19 @@ describe('Specs', function () {
             expect(runtime).to.include('presentation.barrierColor');
             expect(runtime).to.include('SvgPicture.asset');
             expect(guard).to.include('Future<FastUINavigationDecision> beforeNavigate');
-            expect(instanceSpec).to.include('ref: ../shared/common/ishared_text_Label.yml');
-            expect(instanceSpec).to.include('compose: ./iopen_Open_button.yml');
-            expect(sharedSpec).to.include('condition:');
+            expect(instanceSpec).to.include('base: ../../shared/common/ishared_text_Label.yml');
+            expect(instanceSpec).to.include('extend: ./ilabel_copy_Copy_text.yml');
+            expect(instanceSpec).not.to.include('ref:');
+            expect(instanceSpec).not.to.include('compose:');
+            expect(sharedSpec).to.include('component:');
             expect(sharedSpec).not.to.include('onStart');
             expect(sheetSpec).to.include('surface:');
             expect(sheetSpec).to.include('mode: overlay');
             expect(sheetSpec).to.include('scroll: none');
-            const resolvedInstance = await specToJSON(join(srcPath, 'modules', 'home_page', 'ilabel_Primary_label.yml'));
-            expect(resolvedInstance.condition.modifier).not.to.have.property('ref');
-            expect(resolvedInstance.condition.modifier.left).to.equal('./ilabel_copy_Copy_text.yml');
+            const resolvedInstance = await specToJSON(join(srcPath, 'modules', 'presentation', 'pages', 'ilabel_Primary_label.yml'));
+            expect(resolvedInstance.component.base).to.equal('container');
+            expect(resolvedInstance.component.modifier).not.to.have.property('ref');
+            expect(resolvedInstance.component.modifier.extend).to.equal('./ilabel_copy_Copy_text.yml');
         });
     });
 });

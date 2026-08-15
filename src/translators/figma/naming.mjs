@@ -50,7 +50,10 @@ export function sanitizedNameForLoopElement(child) {
 /**
  * Figma page/frame names may carry a `[module/path]` suffix used to group
  * generated files under a module folder. These two helpers split a raw layer
- * name into the visible route name and the module path.
+ * name into the visible route name and the module path. When no `[...]`
+ * suffix is present, `moduleFromName` returns an empty string so the caller
+ * can fall back to a default surface folder (e.g. `presentation/pages`)
+ * instead of guessing a per-page module from the visible name.
  */
 export const stripModuleSuffix = value => justString(value).replaceAll(/(\[.*])/g, '').trim();
-export const moduleFromName = value => justString(value).replaceAll(/(.*\[)|(].*)/g, '').trim();
+export const moduleFromName = value => (justString(value).match(/\[(.*)]/)?.[1] ?? '').trim();

@@ -43,32 +43,39 @@ export function getEffects(data) {
     return {...data?.modifier?.effects ?? {}};
 }
 
+/**
+ * The composer's own frame contract: `{base, id, current, next}`.
+ * - `base` is the outer layout token (row.start/row.end/column.start/
+ *   column.end/*.stack) governing how the current view and every extended
+ *   child wrapper are ordered.
+ * - `current` are styles applied only to this node's own rendered view.
+ * - `next` are styles applied uniformly to each extended child's wrapper.
+ * Normalizes on read (accepting the legacy `frame.styles` field as
+ * `current`) so this accessor is correct whether or not legacy-spec.mjs's
+ * normalization already ran on `data`.
+ */
 export function getFrame(data) {
-    return data?.modifier?.frame;
+    const frame = data?.modifier?.frame;
+    if (typeof frame === 'string') return {base: frame, id: undefined, current: {}, next: {}};
+    return {
+        base: frame?.base,
+        id: frame?.id,
+        current: {...(frame?.current ?? frame?.styles ?? {})},
+        next: {...(frame?.next ?? {})},
+    };
 }
 
 /**
- * Wrapper describes how this node positions itself against the next composed
- * sibling ({view}); it is driven by the PARENT's axis. When absent, it falls
- * back to frame.base for backward compatibility with single-level specs.
+ * Ordered list of child spec paths this node composes as its top-down
+ * children. Always normalized to an array by legacy-spec.mjs, so this is a
+ * thin, explicit accessor kept for readability at call sites.
+ * @return {string[]}
  */
-export function getWrapper(data) {
-    if (data?.modifier?.wrapper) return data.modifier.wrapper;
-    const frame = data?.modifier?.frame;
-    if (typeof frame === 'string') return {base: frame};
-    return frame?.base ? {base: frame.base} : undefined;
-}
-
-export function getExtend(data) {
-    return data?.modifier?.compose ?? data?.modifier?.extend;
-}
-
-export function getCompose(data) {
-    return data?.modifier?.compose ?? data?.modifier?.extend;
-}
-
-export function getRef(data) {
-    return data?.modifier?.ref ?? data?.ref;
+export function getExtendList(data) {
+    const extend = data?.modifier?.extend;
+    if (Array.isArray(extend)) return extend.filter(item => typeof item === 'string' && item);
+    if (typeof extend === 'string' && extend) return [extend];
+    return [];
 }
 
 export function getLeft(data) {
