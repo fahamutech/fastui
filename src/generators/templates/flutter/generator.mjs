@@ -579,6 +579,22 @@ function applyScrollableArea(scroll, child) {
     return child;
 }
 
+function transformSize(width){
+    if(Number.isNaN(Number(width))){
+        if(width.endsWith('vw')){
+            return 'MediaQuery.of(context).size.width';
+        } if(width.endsWith('vh')){
+            return 'MediaQuery.of(context).size.height';
+        }else if(`${width}`.toLowerCase().endsWith('px')){
+            return `${width}`.toLowerCase().replaceAll('px');
+        }else {
+            return null;
+        }
+    }else {
+        return width;
+    }
+}
+
 function composeFrame(data, frame, ownContentExpr, extendRefs = [], applyScroll = true) {
     const current = frame?.current ?? {};
     const base = frame?.base;
@@ -669,11 +685,11 @@ function composeFrame(data, frame, ownContentExpr, extendRefs = [], applyScroll 
     if (hasBaseContainerStyles) {
         const contArgs = [];
         const decorArgs = [];
-        const width = baseContainerStyles?.width ?? null;
-        const height = baseContainerStyles?.height ?? null;
+        const width = transformSize(baseContainerStyles?.width ?? null);
+        const height = transformSize(baseContainerStyles?.height ?? null);
         // console.log(width, height);
-        if(width && Boolean(Number(width)))contArgs.push(`width: ${width}`);
-        if(height && Boolean(Number(height)))contArgs.push(`height: ${height}`);
+        if(width)contArgs.push(`width: ${width}`);
+        if(height)contArgs.push(`height: ${height}`);
         const padding = edgeInsets(baseContainerStyles, 'padding');
         const margin = edgeInsets(baseContainerStyles, 'margin');
         if (padding) decorArgs.push(`padding: ${padding}`);
