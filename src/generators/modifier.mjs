@@ -6,18 +6,39 @@
  */
 
 /**
+ * Parses `logics.*` / `services.*` references, including direct calls such as
+ * `logics.t('hello')`, into `{name,argsSource,isCall}`.
+ * @param value {*}
+ * @return {{name: string, argsSource: string, isCall: boolean}|null}
+ */
+export function parseLogicReference(value) {
+    if (typeof value !== 'string') return null;
+    const text = value.trim();
+    if (!/^(?:logics|services)\./i.test(text)) return null;
+    const body = text.replace(/^(?:logics|services)\./i, '');
+    const call = body.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\((.*)\)$/s);
+    if (call) {
+        return {name: call[1], argsSource: call[2].trim(), isCall: true};
+    }
+    return {name: body.replace(/\(\)$/g, ''), argsSource: '', isCall: /\(\)$/.test(body)};
+}
+
+/**
  * @param data
- * @return {{type: string, value: (*|string)}|{type: string, value: string | undefined}}
+ * @return {{type: string, value: (*|string), logic?: {name: string, argsSource: string, isCall: boolean}}|{type: string, value: string | undefined}}
  */
 export function getChildren(data) {
     const modifier = {...data?.modifier ?? {}};
     const children = modifier?.props?.children;
+    const logic = parseLogicReference(children);
     if (`${children}`.trim().toLowerCase().startsWith('states.')) {
         return {type: 'state', value: `${children}`?.replace(/^(states.)/ig, '')};
     } else if (`${children}`.trim().toLowerCase().startsWith('components.')) {
         return {type: 'component', value: `${children}`?.replace(/^(components.)/ig, '')};
     } else if (`${children}`.trim().toLowerCase().startsWith('inputs.')) {
         return {type: 'input', value: `${children}`?.replace(/^(inputs.)/ig, '')};
+    } else if (logic) {
+        return {type: 'logic', value: children, logic};
     } else {
         return {type: 'raw', value: children ?? ''};
     }
@@ -79,7 +100,7 @@ export function getFrame(data) {
         base: token,
         id: frame?.id,
         baseStyles,
-        current: {...(frame?.current ?? frame?.styles ?? {})},
+        current: {...(frame?.current ?? {})},
         next: {...(frame?.next ?? {})},
     };
 }
@@ -108,3 +129,5 @@ export function getRight(data) {
 export function getFeed(data) {
     return data?.modifier?.feed;
 }
+
+

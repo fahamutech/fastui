@@ -7,6 +7,22 @@ import {dirname, join, resolve} from 'node:path';
 import {readFile, writeFile} from 'node:fs/promises';
 import {ensurePathExist} from '../../shared/fs.mjs';
 
+function formatRetryAfter(value) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds < 0) return value;
+    const totalSeconds = Math.floor(seconds);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0 || days > 0) parts.push(`${hours}h`);
+    if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
+    parts.push(`${remainingSeconds}s`);
+    return parts.join(' ');
+}
+
 export function getFigmaCachePath(figFile, cachePath) {
     if (cachePath) return resolve(cachePath);
     const safeFileKey = `${figFile ?? 'figma-file'}`.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -40,7 +56,9 @@ export async function fetchFigmaFile({token, figFile, fresh = false, cachePath, 
         }));
     } catch (error) {
         const status = error?.response?.status;
-        throw new Error(`Unable to download Figma file${status ? ` (HTTP ${status})` : ''}: ${error?.response?.data?.message ?? error?.message ?? 'request failed'}`);
+        const retryAfter = error?.response?.headers?.['retry-after'];
+        const formattedRetryAfter = retryAfter ? formatRetryAfter(retryAfter) : undefined;
+        throw new Error(`Unable to download Figma file${status ? ` (HTTP ${status})` : ''}${status === 429 && formattedRetryAfter ? `; retry after ${formattedRetryAfter}` : ''}: ${error?.response?.data?.message ?? error?.message ?? 'request failed'}`);
     }
     await ensurePathExist(dirname(localPath));
     await writeFile(localPath, JSON.stringify(data, null, 2));

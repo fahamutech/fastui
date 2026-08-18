@@ -9,6 +9,22 @@ import {createWriteStream} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {ensureFileExist, ensurePathExist} from '../../shared/fs.mjs';
 
+function formatRetryAfter(value) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds < 0) return value;
+    const totalSeconds = Math.floor(seconds);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0 || days > 0) parts.push(`${hours}h`);
+    if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
+    parts.push(`${remainingSeconds}s`);
+    return parts.join(' ');
+}
+
 // Download state for the current translation run. Reset via
 // configureAssetDownloads() at the start of every getPagesAndTraverseChildren
 // call so a rate limit hit on one run never suppresses downloads on the next.
@@ -110,7 +126,9 @@ export async function getFigmaImagePath({token, figFile, srcPath, imageRef, chil
             if (error?.response?.status === 429) downloadState.disabledForRun = true;
             if (!downloadState.warningWritten) {
                 const status = error?.response?.status;
-                console.warn(`WARN : Figma asset download unavailable${status ? ` (HTTP ${status})` : ''}; continuing with cached assets and specs.`);
+                const retryAfter = error?.response?.headers?.['retry-after'];
+                const formattedRetryAfter = retryAfter ? formatRetryAfter(retryAfter) : undefined;
+                console.warn(`WARN : Figma asset download unavailable${status ? ` (HTTP ${status})` : ''}${status === 429 && formattedRetryAfter ? `; retry after ${formattedRetryAfter}` : ''}; continuing with cached assets and specs.`);
                 downloadState.warningWritten = true;
             }
         }

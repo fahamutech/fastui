@@ -173,8 +173,8 @@ function surfacePresentationFor(page) {
         mode: route.type === 'page' ? 'flow' : 'overlay',
         placement,
         viewport: {
-            width: page?.absoluteBoundingBox?.width,
-            height: page?.absoluteBoundingBox?.height,
+            width: '100vw', // page?.absoluteBoundingBox?.width,
+            height: '100vh', //page?.absoluteBoundingBox?.height,
         },
         safeArea: false,
         scroll: 'none',
@@ -191,9 +191,11 @@ function surfacePresentationFor(page) {
  * annotating each with its own mainFrame and the sibling wrapper axis its
  * children compose against.
  * @param document {*}
+ * @param components
  * @param token {string}
  * @param figFile {string}
  * @param srcPath {string}
+ * @param downloadAssets
  * @return {Promise<*[]>}
  */
 export async function getPagesAndTraverseChildren({document, components, token, figFile, srcPath, downloadAssets = false}) {
@@ -226,7 +228,7 @@ export async function getPagesAndTraverseChildren({document, components, token, 
             children: pageChildren?.children ?? [],
             surfacePresentation: surfacePresentationFor(page),
             mainFrame: {
-                base: page?.layoutMode === 'VERTICAL' ? 'column.start.stack' : 'row.start.stack',
+                base: page?.layoutMode === 'VERTICAL' ? 'column.start' : 'row.start',
                 id: sanitizeFullColon(`${stripModuleSuffix(page?.name)}_frame`),
                 styles: {
                     paddingLeft: page?.paddingLeft,

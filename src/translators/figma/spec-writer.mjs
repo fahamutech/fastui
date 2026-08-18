@@ -23,22 +23,53 @@ import {sharedComponentBasePath} from './shared-components.mjs';
 import {getFigmaImagePath} from './assets.mjs';
 
 /**
+ * Derives a safe Dart/JS identifier from a Figma node name for use as a
+ * logics function name.
+ */
+function logicsFnName(child) {
+    return sanitizeFullColon(`${child?.name}`).replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/**
  * Maps tree.mjs's internal `{base, id, styles}` frame annotation to the
  * spec-level `{base, id, current, next}` contract. `next` is left empty:
  * the translator does not yet infer per-parent child participation styles,
  * so authored specs can add `frame.next` by hand where needed.
  */
-function toFrameShape(internalFrame, extraCurrentStyles = {}) {
+function toFrameShape(internalFrame, extraBaseStyles = {}) {
     if (!internalFrame) return undefined;
     return {
-        base: internalFrame.base,
+        base: {
+            type: internalFrame.base,
+            styles: {...internalFrame.styles, ...extraBaseStyles}
+        },
         id: internalFrame.id,
-        current: {...internalFrame.styles, ...extraCurrentStyles},
+        current: {},
         next: {},
     };
 }
 
+/**
+ * Derives a stable i18n translation key from a text string.
+ * Lowercases, replaces non-alphanumeric runs with underscores, trims, and
+ * caps at 40 characters so keys stay readable in translation files.
+ */
+function translationKey(text) {
+    return `${text ?? ''}`
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 40) || 'text';
+}
+
 export async function createTextComponent(filename, child) {
+    // Loop element texts are bound dynamically via inputs.loopElement — no
+    // translation key is generated for them because the value comes from data.
+    const isLoopEl = child?.isLoopElement;
+    const raw = child?.characters ?? '';
+    const childrenProp = isLoopEl
+        ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??${JSON.stringify(raw)}`
+        : `logics.t('${translationKey(raw)}', ${JSON.stringify(raw)})`;
     const yamlData = yaml.dump({
         component: {
             base: 'text',
@@ -57,9 +88,7 @@ export async function createTextComponent(filename, child) {
                                 : undefined,
                 },
                 props: {
-                    children: child?.isLoopElement
-                        ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??${JSON.stringify(child?.characters ?? '')}`
-                        : child?.characters,
+                    children: childrenProp,
                     id: sanitizeFullColon(`${child?.name}`)
                 },
                 frame: toFrameShape(child?.childFrame),
@@ -70,6 +99,10 @@ export async function createTextComponent(filename, child) {
 }
 
 export async function createTextInputComponent(filename, child, type = 'text') {
+    // onSubmit calls a logics function so the generator auto-creates a service
+    // stub for input business logic (validation, API calls, etc).
+    // onChange remains a state.set action to keep value state updated live.
+    const inputFn = `logics.${logicsFnName(child)}`;
     const yamlData = yaml.dump({
         component: {
             base: 'container',
@@ -86,6 +119,7 @@ export async function createTextInputComponent(filename, child, type = 'text') {
                     type: 'states.inputType',
                     value: 'states.value',
                     onChange: {action: 'state.set', target: 'value', value: 'event.value'},
+                    onSubmit: inputFn,
                     placeholder: 'Type here',
                     id: sanitizeFullColon(`${child?.name}`)
                 },
@@ -128,15 +162,19 @@ export async function createFrameComponent({filename, child, routeLookup}) {
     const baseType = getBaseType(child);
     const behavior = interactionBehavior(child, routeLookup);
     const childPaths = (child?.children ?? []).map(item => `./${item?.name}.yml`);
+    // _button nodes wire their onClick to a logics service function so the
+    // generator auto-creates a stub. Other frame types don't need a default.
+    const isButton = baseType === 'button';
+    const logicsFn = isButton ? `logics.${logicsFnName(child)}` : undefined;
     const yamlData = yaml.dump({
         component: {
             base: 'container',
             modifier: {
                 extend: childPaths.length > 0 ? childPaths : undefined,
-                styles: child?.styles,
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
-                    onClick: behavior.onClick
+                    onClick: behavior.onClick ?? logicsFn,
+                    scroll: repeatScrollDirection(child),
                 },
                 states: Object.keys(behavior.states).length > 0 ? behavior.states : undefined,
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
@@ -165,10 +203,10 @@ export async function createInstanceComponent({filename, child, srcPath, sharedC
             base: sharedComponentBasePath({filename, child, srcPath, sharedComponentMap}),
             modifier: {
                 extend: override ? `./${override?.name}.yml` : undefined,
-                styles: child?.styles,
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
-                    onClick: behavior.onClick
+                    onClick: behavior.onClick,
+                    scroll: repeatScrollDirection(child),
                 },
                 states: Object.keys(behavior.states).length > 0 ? behavior.states : undefined,
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
@@ -190,22 +228,25 @@ export async function createConditionComponent({filename, child, routeLookup}) {
     const behavior = interactionBehavior(child, routeLookup);
     const rightName = child?.children?.[0]?.name;
     const leftName = child?.children?.[1]?.name;
+    // Condition nodes get an onInit effect that calls a logics function so
+    // the generator auto-creates a stub for driving the condition state.
+    const conditionFn = `logics.${logicsFnName(child)}`;
 
     const yamlData = yaml.dump({
         condition: {
             modifier: {
-                styles: child.styles,
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
-                    onClick: behavior.onClick
+                    onClick: behavior.onClick,
+                    scroll: repeatScrollDirection(child),
                 },
                 left: leftName ? `./${leftName}.yml` : undefined,
                 right: rightName ? `./${rightName}.yml` : undefined,
                 states: {condition: false, ...behavior.states},
+                effects: {onInit: {body: conditionFn}},
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
                 frame: toFrameShape(child?.mainFrame, {
                     cursor: baseType === 'button' ? 'pointer' : undefined,
-                    overflow: child?.clipsContent ? 'hidden' : undefined,
                 }),
             }
         }
@@ -216,19 +257,19 @@ export async function createConditionComponent({filename, child, routeLookup}) {
 export async function createLoopComponent({filename, child}) {
     child = structuredClone(child);
     const last = child?.children?.[0];
+    // Loop nodes get an onInit effect that calls a logics function so the
+    // generator auto-creates a stub for loading the list data.
+    const loopFn = `logics.${logicsFnName(child)}`;
     const yamlData = yaml.dump({
         loop: {
             modifier: {
-                styles: {
-                    ...child.styles,
-                    overflow: child?.clipsContent ? 'hidden' : undefined
-                },
                 states: {data: child.childrenData ?? []},
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
                 props: {
                     id: sanitizeFullColon(`${child?.name}`),
                     scroll: repeatScrollDirection(child),
                 },
+                effects: {onInit: {body: loopFn}},
                 feed: last ? `./${last?.name}.yml` : undefined,
                 frame: toFrameShape(child?.mainFrame, {
                     overflow: child?.clipsContent ? 'hidden' : undefined,

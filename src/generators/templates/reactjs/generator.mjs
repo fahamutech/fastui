@@ -25,9 +25,11 @@ import {
     getRight,
     getStates,
     getStyles,
+    parseLogicReference,
 } from "../../modifier.mjs";
 import {dirname as pathDirname, relative as pathRelative, resolve as pathResolve, sep as pathSep} from 'node:path';
-import {writeFile} from 'node:fs/promises';
+import {readFile, writeFile} from 'node:fs/promises';
+import * as yaml from 'js-yaml';
 import {getTemplateSelected} from "../../../tooling/config.mjs";
 import {TEMPLATE_MAPPING} from "../mapping.mjs";
 import {containsLogicReference, containsNavigationAction} from '../../behavior.mjs';
@@ -54,6 +56,10 @@ const reactStyleAssets = styles => {
     return normalized;
 };
 
+function hasMeaningfulStyleEntries(styles = {}) {
+    return Object.entries(styles).some(([, value]) => value !== undefined && value !== null);
+}
+
 function frameDirection(base) {
     return `${base ?? ''}`.trim().toLowerCase().startsWith('row') ? 'row' : 'column';
 }
@@ -72,26 +78,8 @@ function frameIsStack(base) {
  * @param frame {{base,current}}
  * @return {string}
  */
-export function frameStyleString(frame) {
-    return `{${JSON.stringify({
-        ...reactStyleAssets(frame?.current ?? {}),
-        display: 'flex',
-        flexDirection: frameDirection(frame?.base),
-    })}}`;
-}
-
-/**
- * Wraps this node's own rendered view in a div carrying `frame.id`/
- * `frame.current` styles. Returns the view unwrapped when there is no
- * meaningful frame metadata, so leaf specs stay free of empty wrapper divs.
- * @param frame {{base,id,current}}
- * @param ownView {string} already-valid JSX for this node's own content
- * @return {string}
- */
-function ownFrameElement(frame, ownView, extraProps = '') {
-    const hasFrame = Boolean(frame?.base) || Boolean(frame?.id) || Object.keys(frame?.current ?? {}).length > 0 || Boolean(extraProps);
-    if (!hasFrame) return ownView;
-    return `<div id={'${frame?.id ?? ''}'} style=${frameStyleString(frame)} ${extraProps}>${ownView}</div>`;
+export function frameCurrentStyleString(frame) {
+    return `{${JSON.stringify(reactStyleAssets(frame?.current ?? {}))}}`;
 }
 
 /**
@@ -119,39 +107,86 @@ function extendImportSpecs(data) {
  * (row.start/row.end/column.start/column.end/*.stack). `frame.base` is the
  * outer container and always fills the space available to it (`flex: 1`).
  *
- * @param data {*}
- * @param frame {{base,id,current,next}}
- * @param ownView {string} already-valid JSX for this node's own content
  * @return {string}
+ * @param frameId
+ * @param extraProps
  */
-export function composeFrame(data, frame, ownView, extraProps = '') {
-    const current = ownFrameElement(frame, ownView, extraProps);
-    const extend = extendImportSpecs(data);
-    if (extend.length === 0) return current;
+function frameWrapperProps(frameId, extraProps = '') {
+    const idProp = frameId ? `id={'${frameId}'}` : '';
+    return [idProp, extraProps].filter(Boolean).join(' ');
+}
 
-    const nextStyle = `{${JSON.stringify({...reactStyleAssets(frame?.next ?? {}), display: 'flex'})}}`;
-    const nextViews = extend.map(({alias}, index) =>
-        `<div id={'${frame?.id ?? ''}_next_${index}'} style=${nextStyle}><${alias} loopIndex={loopIndex} loopElement={loopElement}/></div>`
-    );
+function containerScrollStyles(scroll, baseStyles = {}) {
+    const scrollStyles = scroll === 'both'
+        ? {overflowX: 'auto', overflowY: 'auto'}
+        : scroll === 'horizontal'
+            ? {overflowX: 'auto', overflowY: 'hidden'}
+            : scroll === 'vertical'
+                ? {overflowY: 'auto', overflowX: 'hidden'}
+                : {};
+    const hasExplicitHeight = baseStyles.height !== undefined || baseStyles.minHeight !== undefined || baseStyles.maxHeight !== undefined;
+    const hasExplicitWidth = baseStyles.width !== undefined || baseStyles.minWidth !== undefined || baseStyles.maxWidth !== undefined;
+    const hasExplicitFlex = baseStyles.flex !== undefined || baseStyles.flexGrow !== undefined || baseStyles.flexBasis !== undefined;
+    if ((scroll === 'vertical' || scroll === 'both') && !hasExplicitHeight && !hasExplicitFlex) {
+        scrollStyles.flex = 1;
+    }
+    if (scroll === 'vertical' || scroll === 'both') {
+        scrollStyles.minHeight = 0;
+    }
+    if ((scroll === 'horizontal' || scroll === 'both') && !hasExplicitWidth) {
+        scrollStyles.minWidth = 0;
+    }
+    return scrollStyles;
+}
+
+export function composeFrame(data, frame, ownView, extraProps = '') {
+    const extend = extendImportSpecs(data);
+    const hasCurrentWrapper = hasMeaningfulStyleEntries(frame?.current ?? {});
+    const hasNextWrapper = hasMeaningfulStyleEntries(frame?.next ?? {});
+    const hasOwnView = `${ownView ?? ''}`.trim() !== '';
+    const current = hasCurrentWrapper
+        ? `<div ${frameWrapperProps(frame?.id, extraProps)} style=${frameCurrentStyleString(frame)}>${ownView}</div>`
+        : ownView;
+    const nextStyle = `{${JSON.stringify(reactStyleAssets(frame?.next ?? {}))}}`;
+    const nextViews = extend.map(({alias}, index) => {
+        const child = `<${alias} loopIndex={loopIndex} loopElement={loopElement}/>`;
+        return hasNextWrapper
+            ? `<div id={'${frame?.id ?? ''}_next_${index}'} style=${nextStyle}>${child}</div>`
+            : child;
+    });
+
+    const hasBaseWrapper = Boolean(frame?.base)
+        || hasMeaningfulStyleEntries(frame?.baseStyles ?? {})
+        || extend.length > 0
+        || hasCurrentWrapper
+        || Boolean(extraProps)
+        || Boolean(frame?.id);
+    if (!hasBaseWrapper) return current;
 
     const base = frame?.base;
-    const baseId = `${frame?.id ?? ''}_base`;
-    const extraBaseStyles = reactStyleAssets(frame?.baseStyles ?? {});
+    const baseId = hasCurrentWrapper ? `${frame?.id ?? ''}_base` : frame?.id;
+    const baseProps = !hasCurrentWrapper ? extraProps : '';
+    const currentItem = hasOwnView || hasCurrentWrapper ? current : '';
+    const ordered = frameIsEnd(base)
+        ? [...nextViews, ...[currentItem].filter(Boolean)]
+        : [...[currentItem].filter(Boolean), ...nextViews];
+    const scrollStyles = getFeed(data) ? {} : containerScrollStyles(data?.modifier?.props?.scroll, frame?.baseStyles ?? {});
+    const extraBaseStyles = {...reactStyleAssets(frame?.baseStyles ?? {}), ...scrollStyles};
     if (frameIsStack(base)) {
-        const layers = [current, ...nextViews]
+        const layers = ordered
             .map(item => `<div style={{gridArea:'1 / 1'}}>${item}</div>`)
             .join('');
-        return `<div id={'${baseId}'} style={${JSON.stringify({display:'grid',flex:1,...extraBaseStyles})}}>${layers}</div>`;
+        return `<div ${frameWrapperProps(baseId, baseProps)} style={${JSON.stringify({
+            display: 'grid',
+            ...extraBaseStyles
+        })}}>${layers}</div>`;
     }
-    const ordered = frameIsEnd(base) ? [...nextViews, current] : [current, ...nextViews];
     const baseStyle = `{${JSON.stringify({
         display: 'flex',
         flexDirection: frameDirection(base),
-        flex: 1,
-        gap: Number(frame?.current?.spaceValue ?? 0) || undefined,
         ...extraBaseStyles,
     })}}`;
-    return `<div id={'${baseId}'} style=${baseStyle}>${ordered.join('')}</div>`;
+    return `<div ${frameWrapperProps(baseId, baseProps)} style=${baseStyle}>${ordered.join('')}</div>`;
 }
 
 /**
@@ -184,6 +219,15 @@ export function getBase(data) {
  * @param data{*}
  * @return {string}
  */
+function logicArgsArraySource(logic) {
+    return `${logic?.argsSource ?? ''}`.trim() === '' ? '[]' : `[${logic.argsSource}]`;
+}
+
+function reactLogicInvocation(value) {
+    const logic = parseLogicReference(value);
+    return logic?.isCall ? `${logic.name}({component,args:${logicArgsArraySource(logic)}})` : null;
+}
+
 export function getPropsStatement(data) {
     const props = getProps(data);
     const targetValue = value => typeof value === 'string'
@@ -217,18 +261,22 @@ export function getPropsStatement(data) {
             v => `${v}`.trim().replace(/^(inputs.)/ig, '')
                 .replace(/asset:\/\/figma\/([a-zA-Z0-9._-]+)/g, "'/images/figma/$1'"),
             ifDoElse(
-                v => /^(?:logics|services)\./i.test(`${v}`.trim()),
+                v => reactLogicInvocation(v) !== null,
+                v => reactLogicInvocation(v),
                 ifDoElse(
-                    x => `${x}`.trim().endsWith('()'),
-                    x => `${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args:[]})`,
-                    x => `(...args)=>${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args})`
-                ),
-                ifDoElse(
-                    t => `${t}`.startsWith("'_'+"),
-                    t => `${t}`,
-                    t => `${JSON.stringify(targetValue(t) ?? '')}`
-                        .replaceAll(/^"|"$/ig, "'")
-                ),
+                    v => /^(?:logics|services)\./i.test(`${v}`.trim()),
+                    ifDoElse(
+                        x => `${x}`.trim().endsWith('()'),
+                        x => `${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args:[]})`,
+                        x => `(...args)=>${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args})`
+                    ),
+                    ifDoElse(
+                        t => `${t}`.startsWith("'_'+"),
+                        t => `${t}`,
+                        t => `${JSON.stringify(targetValue(t) ?? '')}`
+                            .replaceAll(/^"|"$/ig, "'")
+                    ),
+                )
             )
         )
     );
@@ -396,7 +444,7 @@ export function getComponentMemoStatement(data) {
  */
 export async function getLogicsImportStatement(data = {}, unParsedPath = '', projectPath = '') {
     const filter = x => /^(?:logics|services)\./i.test(`${x}`.trim());
-    const map = x => `${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '');
+    const map = x => parseLogicReference(x)?.name ?? `${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '');
     const getStyleInputs = ifDoElse(
         x => /^(?:logics|services)\./i.test(`${x}`.trim()),
         compose(justList, map),
@@ -404,18 +452,16 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
     );
     const styleInputs = getStyleInputs(getStyles(data));
     const propsInputs = Object.values(getProps(data)).filter(filter).map(map);
+    const childLogic = getChildren(data)?.type === 'logic' ? [map(getChildren(data)?.value)] : [];
     const effects = getEffects(data);
     const effectsInputs = Object.keys(effects).reduce((a, b) => {
         return [
             ...a,
-            `${effects[b]?.body}`
-                .trim()
-                .replace(/^(?:logics|services)\.|\(\)/ig, '')
+            map(`${effects[b]?.body}`.trim())
         ]
     }, []);
-    const exports = Array.from([...propsInputs, ...effectsInputs, ...styleInputs].reduce((a, b) => a.add(b), new Set()));
+    const exports = Array.from([...propsInputs, ...effectsInputs, ...styleInputs, ...childLogic].reduce((a, b) => a.add(b), new Set()));
     if (exports.length === 0) return '';
-
     const structure = specStructure(unParsedPath, 'reactjs');
     const servicePath = await ensureServiceFile({
         servicePath: structure.servicePath,
@@ -463,9 +509,13 @@ function getStyleMap(style) {
             v => `${v}`.trim().toLowerCase().startsWith('inputs.'),
             v => `${v}`.trim().replace(/^(inputs.)/ig, ''),
             ifDoElse(
-                v => /^(?:logics|services)\./i.test(`${v}`.trim()),
-                v => `${`${v}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args: []})`,
-                v => `${JSON.stringify(typeof v === 'string' ? v.replace(/asset:\/\/figma\//g, '/images/figma/') : v ?? '')}`.trim()
+                v => reactLogicInvocation(v) !== null,
+                v => reactLogicInvocation(v),
+                ifDoElse(
+                    v => /^(?:logics|services)\./i.test(`${v}`.trim()),
+                    v => `${`${v}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args: []})`,
+                    v => `${JSON.stringify(typeof v === 'string' ? v.replace(/asset:\/\/figma\//g, '/images/figma/') : v ?? '')}`.trim()
+                )
             )
         )
     );
@@ -506,16 +556,42 @@ export function getStyleStatement(data) {
 
 // This node's own leaf element; frame wrapping/composition happens in
 // composeFrame(), shared with condition and loop.
+function componentHasPlaceholderOwnView(data) {
+    const base = getBase(data);
+    const children = getChildren(data);
+    const props = getProps(data);
+    const ownProps = Object.fromEntries(Object.entries(props).filter(([key, value]) => value !== undefined && value !== null && !['id', 'onClick', 'children', 'control', 'scroll'].includes(key)));
+    return base === 'div'
+        && !hasMeaningfulStyleEntries(getStyles(data))
+        && !`${children?.value ?? ''}`.trim()
+        && Object.keys(ownProps).length === 0;
+}
+
+function componentOwnWrapperProps(data) {
+    const propsData = structuredClone(data);
+    if (propsData?.modifier?.props) {
+        delete propsData.modifier.props.id;
+        delete propsData.modifier.props.scroll;
+    }
+    const propsString = getPropsStatement(propsData);
+    return [propsString, '{...overrideProps}'].filter(Boolean).join('\n\t\t\t');
+}
+
 function componentOwnView(data) {
     const base = getBase(data);
     const propsString = getPropsStatement(data);
     const children = getChildren(data);
+    const childContent = children?.type === 'state' || children?.type === 'input'
+        ? `{${children?.value}}`
+        : children?.type === 'logic'
+            ? `{${reactLogicInvocation(children?.value)}}`
+            : `${children?.value}`;
     return `
         <${base}
             style={style}
             ${propsString}
             {...overrideProps}
-        >${children?.type === 'state' || children?.type === 'input' ? `{${children?.value}}` : `${children?.value}`}</${base}>
+        >${childContent}</${base}>
     `;
 }
 
@@ -581,7 +657,8 @@ export async function composeReactComponent({data, path, projectPath}) {
 
     const styleStatement = getStyleStatement(data);
     const frame = getFrame(data);
-    const ownView = componentOwnView(data);
+    const ownView = componentHasPlaceholderOwnView(data) ? '' : componentOwnView(data);
+    const ownProps = componentHasPlaceholderOwnView(data) ? componentOwnWrapperProps(data) : '';
 
     const styleStatementRenamed = styleStatement.replace(/\bconst style\b/, 'const _baseStyle');
     const inputsDecl = getInputsStatement(data) === '' ? '' : `${getInputsStatement(data)},`;
@@ -603,7 +680,7 @@ export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overridePro
     
     ${effectsString}
     
-    return(${composeFrame(data, frame, ownView)});
+    return(${composeFrame(data, frame, ownView, ownProps)});
 }
     `;
 
@@ -631,7 +708,10 @@ function conditionOwnView(data) {
 // `id` is dropped because composeFrame() already applies frame.id there.
 function conditionOwnProps(data) {
     const propsData = structuredClone(data);
-    if (propsData?.modifier?.props) delete propsData.modifier.props.id;
+    if (propsData?.modifier?.props) {
+        delete propsData.modifier.props.id;
+        delete propsData.modifier.props.scroll;
+    }
     return getPropsStatement(propsData);
 }
 
@@ -681,29 +761,96 @@ export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overridePro
 
 // -- loop ---------------------------------------------------------------
 
+function getLoopScrollProp(data) {
+    const layoutDirection =
+        frameDirection(data?.modifier?.frame?.base?.type ?? data?.modifier?.frame?.base);
+    return data?.modifier?.props?.scroll ?? layoutDirection === 'row' ? 'horizontal' : 'vertical';
+}
+
+function getIsLoopHorizontal(data) {
+    return getLoopScrollProp(data) === 'horizontal';
+}
+
 // This node's own scrollable feed; frame wrapping/composition happens in
 // composeFrame(), shared with component and condition.
+function loopOwnProps(data) {
+    const propsData = structuredClone(data);
+    if (propsData?.modifier?.props) {
+        delete propsData.modifier.props.scroll;
+        delete propsData.modifier.props.id;
+    }
+    return getPropsStatement(propsData);
+}
+
+async function getLoopEstimate(data, path) {
+    const isHorizontal = getIsLoopHorizontal(data);
+    const axis = isHorizontal ? 'width' : 'height';
+    const fallbackAxis = isHorizontal ? 'fallbackWidth' : 'fallbackHeight';
+    const estimateFrom = spec => Number(getFrame(spec)?.baseStyles?.[axis]) || Number(getFrame(spec)?.baseStyles?.[fallbackAxis]) || Number(getStyles(spec)?.[axis]);
+    const directEstimate = estimateFrom(data);
+    if (directEstimate) return directEstimate;
+    const feedPath = getFeed(data);
+    if (!feedPath || !path) return isHorizontal ? 240 : 80;
+    try {
+        const absoluteFeedPath = pathResolve(pathDirname(path), feedPath);
+        const feedSource = await readFile(absoluteFeedPath, 'utf8');
+        const feedSpec = yaml.load(feedSource) ?? {};
+        const feedData = feedSpec.component ?? feedSpec.condition ?? feedSpec.loop ?? {};
+        return estimateFrom(feedData) || (isHorizontal ? 240 : 80);
+    } catch (_) {
+        return isHorizontal ? 240 : 80;
+    }
+}
+
 function loopOwnView(data) {
     const feed = getFeed(data);
-    const scroll = data?.modifier?.props?.scroll;
-    const propsData = structuredClone(data);
-    if (propsData?.modifier?.props) delete propsData.modifier.props.scroll;
-    const propsString = getPropsStatement(propsData);
+    const scroll = getLoopScrollProp(data);
+    const propsString = loopOwnProps(data);
+    const hasOwnStyles = hasMeaningfulStyleEntries(getStyles(data));
+    const hasOwnProps = `${propsString}`.trim() !== '';
+    const frame = getFrame(data);
+    const gap = Number(frame?.baseStyles?.spaceValue) || 0;
     const getComponentName = x => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
     const scrollStyle = scroll === 'both'
-        ? "{{...style, overflowX: 'auto', overflowY: 'auto'}}"
+        ? "{{...style, overflowX: 'auto', overflowY: 'auto', position: 'relative', minWidth: 0, minHeight: 0}}"
         : scroll === 'horizontal'
-            ? "{{...style, overflowX: 'auto'}}"
+            ? `{{...style, display:'flex', flexDirection:'row', flexWrap:'nowrap', width:'100%', minWidth:0, overflowY:'hidden', overflowX:'auto'${gap > 0 ? `, gap:${gap}` : ''}}}`
             : scroll === 'vertical'
-                ? "{{...style, overflowY: 'auto'}}"
+                ? "{{...style, overflowY: 'auto', overflowX:'hidden',  position: 'relative', minHeight: 0, flex: 1}}"
                 : '{style}';
     if (!feed) return '<span/>';
-    return `
+    if (!scroll && !hasOwnStyles && !hasOwnProps) {
+        return `{data?.map((item,index)=> (<${getComponentName(feed)} key={item?._key??index} loopIndex={index} loopElement={item}/>))}`;
+    }
+    if (!scroll) {
+        return `
+        <div 
+            style={style}
+            ${propsString}
+        >
+            {data?.map((item,index)=> (<${getComponentName(feed)} key={item?._key??index} loopIndex={index} loopElement={item}/>))}
+        </div>
+    `;
+    }
+    if (scroll === 'horizontal') {
+        return `
         <div 
             style=${scrollStyle}
             ${propsString}
         >
-            {data?.map((item,index)=> (<div key={item?._key??keyIndex++}><${getComponentName(feed)} loopIndex={index} loopElement={item}/></div>))}
+            {data?.map((item,index)=> (<div key={item?._key??index} style={{flex:'0 0 auto'}}><${getComponentName(feed)} loopIndex={index} loopElement={item}/></div>))}
+        </div>
+    `;
+    }
+    return `
+        <div 
+            ref={listRef}
+            style=${scrollStyle}
+            ${propsString}
+        >
+            <div style={virtualInnerStyle}>
+                {visibleItems.map(({item,index})=> (<div key={item?._key??index} style={virtualItemStyle(index)}><${getComponentName(feed)} loopIndex={index} loopElement={item}/></div>))}
+            </div>
         </div>
     `;
 }
@@ -727,7 +874,37 @@ export async function composeReactLoop({data, path, projectPath}) {
 
     const frame = getFrame(data);
     const ownView = loopOwnView(data);
+    const ownProps = ownView === '<span/>' ? loopOwnProps(data) : '';
+    const needsStyleStatement = ownView.includes('style={style}') || ownView.includes('{...style,');
     const inputsDecl = getInputsStatement(data) === '' ? '' : `${getInputsStatement(data)},`;
+    const scroll = getLoopScrollProp(data);
+    const isHorizontal = getIsLoopHorizontal(data);
+    const estimate = await getLoopEstimate(data, path);
+    const virtualization = scroll && scroll !== 'horizontal'
+        ? `const listRef = React.useRef(null);
+    const [viewport,setViewport]=React.useState({offset:0,size:0});
+    const estimateSize=${estimate};
+    const items=Array.isArray(data)?data:[];
+    const isHorizontal=${isHorizontal};
+    React.useLayoutEffect(()=>{
+        const node=listRef.current;
+        if(!node) return;
+        const update=()=>setViewport({offset:isHorizontal?node.scrollLeft:node.scrollTop,size:isHorizontal?node.clientWidth:node.clientHeight});
+        update();
+        node.addEventListener('scroll',update,{passive:true});
+        window.addEventListener('resize',update);
+        return ()=>{
+            node.removeEventListener('scroll',update);
+            window.removeEventListener('resize',update);
+        };
+    },[isHorizontal,items.length]);
+    const overscan=3;
+    const startIndex=Math.max(0,Math.floor(viewport.offset/estimateSize)-overscan);
+    const endIndex=Math.min(items.length,Math.ceil((viewport.offset+viewport.size)/estimateSize)+overscan);
+    const visibleItems=items.slice(startIndex,endIndex).map((item,offset)=>({item,index:startIndex+offset}));
+    const virtualInnerStyle=isHorizontal?{position:'relative',width:items.length*estimateSize,height:'100%'}:{position:'relative',height:items.length*estimateSize};
+    const virtualItemStyle=index=>isHorizontal?{position:'absolute',left:index*estimateSize,top:0,width:estimateSize}:{position:'absolute',top:index*estimateSize,left:0,right:0};`
+        : '';
 
     const content = `
 import React from 'react';
@@ -736,19 +913,18 @@ ${storeStatement}
 ${componentsImportStatement}
 ${actionImportStatement}
 
-let keyIndex=0;
-
 // eslint-disable-next-line react/prop-types
 export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overrideProps={},overrideStates={}}) {
     ${statesInString}
     
     ${componentMemoStatement}
     
-    ${styleStatement}
+    ${needsStyleStatement ? styleStatement : ''}
+    ${virtualization}
 
     ${effectsString}
 
-    return(${composeFrame(data, frame, ownView)});
+    return(${composeFrame(data, frame, ownView === '<span/>' ? '' : ownView, ownProps)});
 }
     `;
 

@@ -6,7 +6,7 @@ import {normalizeSpecDocument, prepareBehavior} from './legacy-spec.mjs';
 import {copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {basename, dirname, resolve, sep} from 'node:path';
 import {getBlueprintRoot, getTemplateSelected} from '../tooling/config.mjs';
-import {getStates} from './modifier.mjs';
+import {getStates, parseLogicReference} from './modifier.mjs';
 import {identifier, pascalIdentifier, relativeImport, specStructure} from './project-structure.mjs';
 import {flutterRuntimeSource} from './templates/flutter/generator.mjs';
 
@@ -22,6 +22,181 @@ async function syncTranslatedAssets(projectPath) {
         : resolve(projectPath, 'public', 'images', 'figma');
     await mkdir(target, {recursive: true});
     await cp(source, target, {recursive: true, force: false, errorOnExist: false});
+}
+
+async function writeIfMissing(path, content) {
+    try {
+        await stat(path);
+        return;
+    } catch (_) {
+    }
+    await mkdir(dirname(path), {recursive: true});
+    await writeFile(path, content);
+}
+
+async function ensureReactSupportFiles(projectPath) {
+    await writeIfMissing(resolve(projectPath, 'src', 'stores', 'observable_store.mjs'), `import {BehaviorSubject} from 'rxjs';
+
+export function createObservableStore(initialState = {}) {
+  const subject = new BehaviorSubject(Object.freeze({...initialState}));
+  return {
+    state$: subject.asObservable(),
+    get value() { return subject.value; },
+    set(patch) { subject.next(Object.freeze({...subject.value, ...patch})); },
+    update(reducer) { subject.next(Object.freeze(reducer(subject.value))); },
+    subscribe(observer) { return subject.subscribe(observer); },
+    dispose() { subject.complete(); },
+  };
+}
+
+export const appState = createObservableStore();
+`);
+    await writeIfMissing(resolve(projectPath, 'src', 'stores', 'use_observable.mjs'), `import {useSyncExternalStore} from 'react';
+
+export function useObservable(store, selector = value => value) {
+  return useSyncExternalStore(
+    listener => {
+      const subscription = store.subscribe(listener);
+      return () => subscription.unsubscribe();
+    },
+    () => selector(store.value),
+    () => selector(store.value),
+  );
+}
+`);
+}
+
+function humanizeTranslationKey(key) {
+    return `${key ?? ''}`
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function parseTranslationArgs(argsSource = '') {
+    const values = [];
+    let index = 0;
+    while (index < `${argsSource}`.length && values.length < 2) {
+        const quote = `${argsSource}`[index];
+        if (quote !== "'" && quote !== '"') {
+            index += 1;
+            continue;
+        }
+        let current = '';
+        index += 1;
+        while (index < `${argsSource}`.length) {
+            const char = `${argsSource}`[index];
+            if (char === '\\') {
+                const next = `${argsSource}`[index + 1];
+                if (next !== undefined) {
+                    current += next === 'n' ? '\n' : next === 't' ? '\t' : next;
+                    index += 2;
+                    continue;
+                }
+            }
+            if (char === quote) {
+                index += 1;
+                break;
+            }
+            current += char;
+            index += 1;
+        }
+        values.push(current);
+    }
+    return values;
+}
+
+function collectTranslationEntries(data) {
+    const entries = new Map();
+    const visit = value => {
+        const logic = parseLogicReference(value);
+        if (logic?.isCall && logic.name === 't') {
+            const [key, fallback] = parseTranslationArgs(logic.argsSource);
+            if (key) entries.set(key, fallback ?? humanizeTranslationKey(key));
+            return;
+        }
+        if (Array.isArray(value)) value.forEach(visit);
+        else if (value && typeof value === 'object') Object.values(value).forEach(visit);
+    };
+    visit(data);
+    return Object.fromEntries(entries);
+}
+
+function reactGeneratedTranslationsSource(entries) {
+    const translations = JSON.stringify({default: entries}, null, 2);
+    return `const generatedTranslations = ${translations};
+
+function defaultTranslationText(key) {
+  return String(key ?? '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim().replace(/\\b\\w/g, char => char.toUpperCase());
+}
+
+function createFastUITranslations() {
+  return {
+    locale: 'default',
+    translations: {},
+    load(locale, entries) {
+      this.translations[locale] = {...(this.translations[locale] ?? {}), ...entries};
+      return this;
+    },
+    setLocale(locale) {
+      this.locale = locale;
+      return this;
+    },
+    t(key, fallback) {
+      return this.translations[this.locale]?.[key]
+        ?? this.translations.en?.[key]
+        ?? fallback
+        ?? defaultTranslationText(key);
+    },
+  };
+}
+
+export function installFastUITranslations(target = globalThis) {
+  const store = target.fastUITranslations ?? createFastUITranslations();
+  if (typeof store.load !== 'function') store.load = createFastUITranslations().load;
+  if (typeof store.setLocale !== 'function') store.setLocale = createFastUITranslations().setLocale;
+  if (typeof store.t !== 'function') store.t = createFastUITranslations().t;
+  store.locale = store.locale ?? 'default';
+  store.translations = store.translations ?? {};
+  store.load('default', generatedTranslations.default ?? {});
+  target.fastUITranslations = store;
+  return store;
+}
+
+export const fastUITranslations = installFastUITranslations();
+`;
+}
+
+function flutterGeneratedTranslationsSource(entries) {
+    const mapEntries = Object.entries(entries)
+        .map(([key, value]) => `  ${JSON.stringify(key)}: ${JSON.stringify(value)},`)
+        .join('\n');
+    return `import '../fastui_runtime.dart';
+
+const Map<String, String> fastUITranslationsDefault = <String, String>{
+${mapEntries}
+};
+
+bool _fastUITranslationsInstalled = false;
+
+void installFastUITranslations() {
+  if (_fastUITranslationsInstalled) return;
+  FastUITranslations.instance.load('default', fastUITranslationsDefault);
+  _fastUITranslationsInstalled = true;
+}
+`;
+}
+
+async function writeGeneratedTranslations(projectPath, template, entries) {
+    const target = template === 'flutter'
+        ? resolve(projectPath, 'lib', 'translations', 'generated.dart')
+        : resolve(projectPath, 'src', 'translations', 'generated.mjs');
+    await mkdir(dirname(target), {recursive: true});
+    await writeFile(target, template === 'flutter'
+        ? flutterGeneratedTranslationsSource(entries)
+        : reactGeneratedTranslationsSource(entries));
+    return target;
 }
 
 function flutterFileName(value) {
@@ -268,14 +443,14 @@ export async function generateSpecFile({specPath, projectPath = process.cwd()}) 
     const document = await specToJSON(specPath);
     const normalized = normalizeSpecDocument(document);
     if (!normalized.data || normalized.kind === 'unknown') {
-        return {specPath, kind: normalized.kind, generated: false};
+        return {specPath, kind: normalized.kind, generated: false, translations: {}};
     }
     const data = prepareBehavior(normalized.kind, normalized.data);
     const paths = {path: specPath, projectPath};
     if (normalized.kind === 'condition') await composeCondition({data, ...paths});
     else if (normalized.kind === 'loop') await composeLoop({data, ...paths});
     else await composeComponent({data, ...paths});
-    return {specPath, kind: normalized.kind, generated: true, states: getStates(data)};
+    return {specPath, kind: normalized.kind, generated: true, states: getStates(data), translations: collectTranslationEntries(data)};
 }
 
 export async function generateCodeFromSpecs({root, projectPath = process.cwd()} = {}) {
@@ -285,13 +460,17 @@ export async function generateCodeFromSpecs({root, projectPath = process.cwd()} 
     await removeDuplicateLegacyState(projectPath, template);
     if (template === 'flutter') {
         await writeFile(resolve(projectPath, 'lib', 'fastui_runtime.dart'), flutterRuntimeSource());
+    } else {
+        await ensureReactSupportFiles(projectPath);
     }
     await migrateLegacyServices(specRoot, template);
     const results = [];
     for (const specPath of await readSpecs(specRoot)) {
         results.push(await generateSpecFile({specPath, projectPath}));
     }
+    const translations = Object.assign({}, ...results.map(result => result.translations ?? {}));
+    const translationFile = await writeGeneratedTranslations(projectPath, template, translations);
     const storeFiles = await writeModuleStores(results, template);
-    await updateGeneratedManifest({projectPath, specRoot, results, template, additionalFiles: storeFiles});
+    await updateGeneratedManifest({projectPath, specRoot, results, template, additionalFiles: [...storeFiles, translationFile]});
     return results;
 }

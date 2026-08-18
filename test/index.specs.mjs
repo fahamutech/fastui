@@ -11,7 +11,9 @@ import {ensureBlueprintFolderExist, ensureWatchFileExist} from "../src/tooling/s
 import {initializeProject} from "../src/tooling/project.mjs";
 import {routeFromSurfaceName} from "../src/shared/routing.mjs";
 import {fetchFigmaFile, getDesignDocument, getPagesAndTraverseChildren, resolvePrototypeRoute, walkFrameChildren} from "../src/translators/figma/index.mjs";
+import {repeatScrollDirection} from "../src/translators/figma/layout.mjs";
 import {generateCodeFromSpecs} from '../src/generators/spec-to-code.mjs';
+import {createFrameComponent, createTextComponent} from '../src/translators/figma/spec-writer.mjs';
 import {specFile, logicFile} from './data.mjs'
 
 describe('Specs', function () {
@@ -146,16 +148,18 @@ describe('Specs', function () {
             expect(await readFile(join(root, 'lib', 'services', 'button.dart'), 'utf8')).to.include('dynamic onClick');
         });
 
-        it('generates scrolling only when a loop spec explicitly requests it', async function () {
+        it('distinguishes scrollable areas from loop lists in React and Flutter', async function () {
             const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
             const feedPath = join(flutterRoot, 'feed.yml');
             const scrollingPath = join(flutterRoot, 'scrolling.yml');
             const horizontalPath = join(flutterRoot, 'horizontal.yml');
             const staticPath = join(flutterRoot, 'static_loop.yml');
+            const areaPath = join(flutterRoot, 'scroll_area.yml');
             await writeFile(feedPath, 'component: {}');
             await writeFile(scrollingPath, 'loop: {}');
             await writeFile(horizontalPath, 'loop: {}');
             await writeFile(staticPath, 'loop: {}');
+            await writeFile(areaPath, 'component: {}');
             await composeLoop({path: scrollingPath, projectPath: root, data: {
                 modifier: {feed: './feed.yml', props: {scroll: 'vertical'}, states: {data: []}, frame: {base: 'column.start'}}
             }});
@@ -165,13 +169,20 @@ describe('Specs', function () {
             await composeLoop({path: horizontalPath, projectPath: root, data: {
                 modifier: {feed: './feed.yml', props: {scroll: 'horizontal'}, states: {data: []}, frame: {base: 'row.start'}}
             }});
+            await composeComponent({path: areaPath, projectPath: root, data: {
+                base: 'container', modifier: {props: {scroll: 'vertical'}, frame: {base: 'column.start'}, extend: './feed.yml'}
+            }});
             const scrollingFlutter = await readFile(join(root, 'lib', 'modules', 'scrolling.dart'), 'utf8');
             const horizontalFlutter = await readFile(join(root, 'lib', 'modules', 'horizontal.dart'), 'utf8');
             const staticFlutter = await readFile(join(root, 'lib', 'modules', 'static_loop.dart'), 'utf8');
+            const areaFlutter = await readFile(join(root, 'lib', 'modules', 'scroll_area.dart'), 'utf8');
             expect(scrollingFlutter).to.include('ListView.builder(scrollDirection: Axis.vertical');
-            expect(horizontalFlutter).to.include('SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(mainAxisSize: MainAxisSize.min');
-            expect(staticFlutter).not.to.include('ListView.builder');
+            expect(horizontalFlutter).to.include('ListView.builder(scrollDirection: Axis.horizontal');
+            expect(horizontalFlutter).to.include('SizedBox(height: listHeight, child: ListView.builder');
+            expect(staticFlutter).to.include('ListView.builder(scrollDirection: Axis.vertical');
             expect(staticFlutter).not.to.include('SingleChildScrollView');
+            expect(areaFlutter).to.include('SingleChildScrollView(scrollDirection: Axis.vertical');
+            expect(areaFlutter).not.to.include('ListView.builder');
 
             process.env.FASTUI_TEMPLATE = 'reactjs';
             const reactRoot = join(root, 'src', 'blueprints', 'modules');
@@ -179,22 +190,247 @@ describe('Specs', function () {
             const reactFeed = join(reactRoot, 'feed.yml');
             const reactScrolling = join(reactRoot, 'scrolling.yml');
             const reactStatic = join(reactRoot, 'static_loop.yml');
-            await writeFile(reactFeed, 'component: {}');
+            const reactArea = join(reactRoot, 'scroll_area.yml');
+            await writeFile(reactFeed, 'component:\n  modifier:\n    frame:\n      base:\n        styles:\n          width: 400\n');
             await writeFile(reactScrolling, 'loop: {}');
             await writeFile(reactStatic, 'loop: {}');
+            await writeFile(reactArea, 'component: {}');
             await composeLoop({path: reactScrolling, projectPath: root, data: {
                 modifier: {feed: './feed.yml', props: {scroll: 'horizontal'}, states: {data: []}, frame: {base: 'row.start'}}
             }});
             await composeLoop({path: reactStatic, projectPath: root, data: {
                 modifier: {feed: './feed.yml', states: {data: []}, frame: {base: 'row.start'}}
             }});
+            await composeComponent({path: reactArea, projectPath: root, data: {
+                base: 'container', modifier: {props: {scroll: 'vertical'}, frame: {base: 'column.start'}, extend: './feed.yml'}
+            }});
             const scrollingReact = await readFile(join(root, 'src', 'modules', 'scrolling.jsx'), 'utf8');
             const staticReact = await readFile(join(root, 'src', 'modules', 'static_loop.jsx'), 'utf8');
+            const areaReact = await readFile(join(root, 'src', 'modules', 'scroll_area.jsx'), 'utf8');
             expect(scrollingReact).to.include('overrideStates={}');
-            expect(scrollingReact).to.include("overflowX: 'auto'");
+            expect(scrollingReact).to.include("overflowX:'auto'");
+            expect(scrollingReact).to.include('minWidth:0');
+            expect(scrollingReact).not.to.include('ref={listRef}');
+            expect(scrollingReact).not.to.include('visibleItems.map');
+            expect(scrollingReact).to.include('data?.map((item,index)');
+            expect(scrollingReact).not.to.include('<div></div>');
             expect(scrollingReact).not.to.include('scroll=');
             expect(staticReact).not.to.include('overflowX');
             expect(staticReact).not.to.include('overflowY');
+            expect(staticReact).not.to.include('style={style}');
+            expect(staticReact).not.to.include('const style = React.useMemo');
+            expect(areaReact).to.include('overflowY');
+            expect(areaReact).to.include('"flex":1');
+            expect(areaReact).to.include('"minHeight":0');
+            expect(areaReact).not.to.include('ref={listRef}');
+        });
+
+        it('emits gap from frame.baseStyles.spaceValue for both React and Flutter', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const reactRoot = join(root, 'src', 'blueprints', 'modules');
+            await mkdir(reactRoot, {recursive: true});
+            const childPath = join(reactRoot, 'gap_child.yml');
+            const parentPath = join(reactRoot, 'gap_parent.yml');
+            await writeFile(childPath, 'component: {}');
+            await writeFile(parentPath, 'component: {}');
+            await composeComponent({path: childPath, projectPath: root, data: {base: 'container', modifier: {}}});
+            await composeComponent({path: parentPath, projectPath: root, data: {
+                base: 'container',
+                modifier: {
+                    extend: ['./gap_child.yml'],
+                    frame: {base: {type: 'column.start', styles: {spaceValue: 16, width: '100%'}}, id: 'gap-frame'}
+                }
+            }});
+            const reactGenerated = await readFile(join(root, 'src', 'modules', 'gap_parent.jsx'), 'utf8');
+            expect(reactGenerated).to.include('"gap":16');
+            expect(reactGenerated).not.to.include('spaceValue');
+
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
+            const flutterChild = join(flutterRoot, 'gap_child.yml');
+            const flutterChild2 = join(flutterRoot, 'gap_child2.yml');
+            const flutterParent = join(flutterRoot, 'gap_parent.yml');
+            await writeFile(flutterChild, 'component: {}');
+            await writeFile(flutterChild2, 'component: {}');
+            await writeFile(flutterParent, 'component: {}');
+            await composeComponent({path: flutterChild, projectPath: root, data: {base: 'container', modifier: {}}});
+            await composeComponent({path: flutterChild2, projectPath: root, data: {base: 'container', modifier: {}}});
+            await composeComponent({path: flutterParent, projectPath: root, data: {
+                base: 'container',
+                modifier: {
+                    extend: ['./gap_child.yml', './gap_child2.yml'],
+                    frame: {base: {type: 'column.start', styles: {spaceValue: 16, width: '100%'}}, id: 'gap-frame'}
+                }
+            }});
+            const flutterGenerated = await readFile(join(root, 'lib', 'modules', 'gap_parent.dart'), 'utf8');
+            expect(flutterGenerated).to.include('SizedBox(height: 16)');
+            expect(flutterGenerated).not.to.include('spaceValue');
+        });
+
+        it('keeps frame styles in modifier.frame.base.styles and omits modifier.styles for frame composers', async function () {
+            const specPath = join(root, 'frame_composer.yml');
+            await createFrameComponent({
+                filename: specPath,
+                child: {
+                    name: 'Hero',
+                    children: [{name: 'Title'}],
+                    mainFrame: {
+                        base: 'column.start',
+                        id: 'hero_frame',
+                        styles: {paddingTop: 12, backgroundColor: '#FFFFFF'}
+                    },
+                    styles: {color: 'red'}
+                },
+                routeLookup: {}
+            });
+            const spec = await specToJSON(specPath);
+            expect(spec.component.modifier.styles).to.equal(undefined);
+            expect(spec.component.modifier.frame.base.type).to.equal('column.start');
+            expect(spec.component.modifier.frame.base.styles).to.deep.include({paddingTop: 12, backgroundColor: '#FFFFFF'});
+        });
+
+        it('omits empty current and next wrappers in generated React and Flutter output', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const reactRoot = join(root, 'src', 'blueprints', 'modules');
+            await mkdir(reactRoot, {recursive: true});
+            const reactChildPath = join(reactRoot, 'frame_child.yml');
+            const reactParentPath = join(reactRoot, 'frame_parent.yml');
+            await writeFile(reactChildPath, 'component: {}');
+            await writeFile(reactParentPath, 'component: {}');
+            await composeComponent({path: reactChildPath, projectPath: root, data: {base: 'text', modifier: {props: {children: 'Hello'}}}});
+            await composeComponent({path: reactParentPath, projectPath: root, data: {
+                base: 'container',
+                modifier: {
+                    extend: ['./frame_child.yml'],
+                    props: {id: 'parent_id'},
+                    frame: {base: {type: 'column.start', styles: {paddingTop: 8}}, id: 'parent_frame', current: {}, next: {}}
+                }
+            }});
+            const reactGenerated = await readFile(join(root, 'src', 'modules', 'frame_parent.jsx'), 'utf8');
+            expect(reactGenerated).to.include("id={'parent_frame'}");
+            expect(reactGenerated).to.include('"paddingTop":8');
+            expect(reactGenerated).not.to.include("_next_0");
+            expect(reactGenerated).not.to.include('style={style}');
+
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
+            const flutterChildPath = join(flutterRoot, 'frame_child.yml');
+            const flutterParentPath = join(flutterRoot, 'frame_parent.yml');
+            await writeFile(flutterChildPath, 'component: {}');
+            await writeFile(flutterParentPath, 'component: {}');
+            await composeComponent({path: flutterChildPath, projectPath: root, data: {base: 'text', modifier: {props: {children: 'Hello'}}}});
+            await composeComponent({path: flutterParentPath, projectPath: root, data: {
+                base: 'container',
+                modifier: {
+                    extend: ['./frame_child.yml'],
+                    props: {id: 'parent_id'},
+                    frame: {base: {type: 'column.start', styles: {paddingTop: 8}}, id: 'parent_frame', current: {}, next: {}}
+                }
+            }});
+            const flutterGenerated = await readFile(join(root, 'lib', 'modules', 'frame_parent.dart'), 'utf8');
+            expect(flutterGenerated).to.include('EdgeInsets.fromLTRB(0, 8, 0, 0)');
+            expect(flutterGenerated).not.to.include('_buildWithOverride({})');
+            expect(flutterGenerated).to.include('FrameChild(loopIndex: widget.loopIndex, loopElement: widget.loopElement)');
+        });
+
+        it('serializes Figma text with translation key plus raw fallback text', async function () {
+            const specPath = join(root, 'translated_text_spec.yml');
+            await createTextComponent(specPath, {name: 'ShopNow', characters: 'Shop now'});
+            const spec = await specToJSON(specPath);
+            expect(spec.component.modifier.props.children).to.equal("logics.t('shop_now', \"Shop now\")");
+        });
+
+        it('renders logics.t children through generated services for React and Flutter', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const reactRoot = join(root, 'src', 'blueprints', 'modules');
+            await mkdir(reactRoot, {recursive: true});
+            const reactPath = join(reactRoot, 'translated_text.yml');
+            await writeFile(reactPath, 'component: {}');
+            await composeComponent({path: reactPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {props: {children: "logics.t('shop_now', 'Shop now')"}}
+            }});
+            const reactGenerated = await readFile(join(root, 'src', 'modules', 'translated_text.jsx'), 'utf8');
+            const reactService = await readFile(join(root, 'src', 'services', 'translated_text.mjs'), 'utf8');
+            expect(reactGenerated).to.include("import {t} from '../services/translated_text.mjs';");
+            expect(reactGenerated).to.include("{t({component,args:['shop_now', 'Shop now']})}");
+            expect(reactService).to.include("import {fastUITranslations} from '../translations/generated.mjs';");
+            expect(reactService).to.include('export function t(data)');
+            expect(reactService).to.include('return fastUITranslations.t(key, fallback);');
+
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
+            const flutterPath = join(flutterRoot, 'translated_text.yml');
+            await writeFile(flutterPath, 'component: {}');
+            await composeComponent({path: flutterPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {props: {children: "logics.t('shop_now', 'Shop now')"}}
+            }});
+            const flutterGenerated = await readFile(join(root, 'lib', 'modules', 'translated_text.dart'), 'utf8');
+            const flutterService = await readFile(join(root, 'lib', 'services', 'translated_text.dart'), 'utf8');
+            const flutterRuntime = await readFile(join(root, 'lib', 'fastui_runtime.dart'), 'utf8');
+            expect(flutterGenerated).to.include("import '../services/translated_text.dart';");
+            expect(flutterGenerated).to.include("Text(t(_componentContext(context, ['shop_now', 'Shop now'])).toString()");
+            expect(flutterGenerated).to.include("'args': argument == null ? <dynamic>[] : argument is List ? List<dynamic>.from(argument) : <dynamic>[argument]");
+            expect(flutterService).to.include("import '../fastui_runtime.dart';");
+            expect(flutterService).to.include("import '../translations/generated.dart';");
+            expect(flutterService).to.include('dynamic t(Map<String, dynamic> data)');
+            expect(flutterService).to.include('final normalized = args.length == 1 && args.first is List ? List<dynamic>.from(args.first as List) : args;');
+            expect(flutterService).to.include('FastUITranslations.instance.t(key, fallback: fallback)');
+            expect(flutterRuntime).to.include('static String humanizeKey(String key)');
+            expect(flutterRuntime).to.include('?? fallback');
+            expect(flutterRuntime).to.include('?? humanizeKey(key)');
+        });
+
+        it('Figma translator resolves scroll direction from overflowDirection only (scroll is intentional)', async function () {
+            expect(repeatScrollDirection({overflowDirection: 'VERTICAL_SCROLLING'})).to.equal('vertical');
+            expect(repeatScrollDirection({overflowDirection: 'HORIZONTAL_SCROLLING'})).to.equal('horizontal');
+            expect(repeatScrollDirection({overflowDirection: 'HORIZONTAL_AND_VERTICAL_SCROLLING'})).to.equal('both');
+            expect(repeatScrollDirection({mainFrame: {overflowDirection: 'HORIZONTAL_SCROLLING'}})).to.equal('horizontal');
+            expect(repeatScrollDirection({layoutMode: 'VERTICAL'})).to.equal(undefined);
+            expect(repeatScrollDirection({layoutMode: 'HORIZONTAL'})).to.equal(undefined);
+            expect(repeatScrollDirection({})).to.equal(undefined);
+            expect(repeatScrollDirection(undefined)).to.equal(undefined);
+
+            const document = {children: [{
+                id: 'page', name: 'scroll_page', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
+                children: [{
+                    id: 'list', name: 'Items_repeat', type: 'FRAME', layoutMode: 'VERTICAL',
+                    primaryAxisAlignItems: 'MIN', layoutSizingVertical: 'FILL',
+                    children: [{id: 'item', name: 'Item_row', type: 'FRAME', layoutMode: 'HORIZONTAL', children: []}]
+                }]
+            }]};
+            const srcPath = join(root, 'lib', 'blueprints');
+            const children = await getPagesAndTraverseChildren({document, srcPath});
+            await walkFrameChildren({children, srcPath});
+            const listSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'ilist_Items_repeat.yml'), 'utf8');
+            expect(listSpec).not.to.include('scroll:');
+
+            const documentWithExplicit = {children: [{
+                id: 'page2', name: 'scroll_page2', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
+                children: [{
+                    id: 'list2', name: 'Feed_repeat', type: 'FRAME', layoutMode: 'VERTICAL',
+                    overflowDirection: 'HORIZONTAL_SCROLLING',
+                    children: [{id: 'item2', name: 'Row_item', type: 'FRAME', layoutMode: 'HORIZONTAL', children: []}]
+                }]
+            }]};
+            const children2 = await getPagesAndTraverseChildren({document: documentWithExplicit, srcPath});
+            await walkFrameChildren({children: children2, srcPath});
+            const scrollSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'ilist2_Feed_repeat.yml'), 'utf8');
+            expect(scrollSpec).to.include('scroll: horizontal');
+
+            const documentWithScrollableArea = {children: [{
+                id: 'page3', name: 'scroll_page3', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
+                children: [{
+                    id: 'body', name: 'Body_container', type: 'FRAME', layoutMode: 'VERTICAL',
+                    overflowDirection: 'VERTICAL_SCROLLING',
+                    children: [{id: 'child3', name: 'Content_text', type: 'TEXT', characters: 'Hi', visible: true, style: {}}]
+                }]
+            }]};
+            const children3 = await getPagesAndTraverseChildren({document: documentWithScrollableArea, srcPath});
+            await walkFrameChildren({children: children3, srcPath});
+            const areaSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'ibody_Body_container.yml'), 'utf8');
+            expect(areaSpec).to.include('scroll: vertical');
         });
 
         it('initializes a Flutter project and selects lib/blueprints', async function () {
@@ -227,6 +463,61 @@ describe('Specs', function () {
             const results = await generateCodeFromSpecs({projectPath: root});
             expect(results.some(result => result.specPath.endsWith('default_root.yml'))).to.equal(true);
             await stat(join(root, 'lib', 'modules', 'default_root.dart'));
+        });
+
+        it('build path creates missing root React store support files', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const reactRoot = join(root, 'src', 'blueprints', 'modules');
+            await mkdir(reactRoot, {recursive: true});
+            const specPath = join(reactRoot, 'build_support.yml');
+            await writeFile(specPath, 'component:\n  base: container\n  modifier: {}\n');
+            const results = await generateCodeFromSpecs({projectPath: root});
+            expect(results.some(result => result.specPath.endsWith('build_support.yml'))).to.equal(true);
+            expect(await readFile(join(root, 'src', 'stores', 'observable_store.mjs'), 'utf8')).to.include('export const appState = createObservableStore()');
+            expect(await readFile(join(root, 'src', 'stores', 'use_observable.mjs'), 'utf8')).to.include('useSyncExternalStore');
+        });
+
+        it('build path emits generated translation files for the default locale and Flutter relative imports', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const reactRoot = join(root, 'src', 'blueprints', 'modules');
+            await mkdir(reactRoot, {recursive: true});
+            await writeFile(join(reactRoot, 'translated_build.yml'), `component:
+  base: text
+  modifier:
+    props:
+      children: "logics.t('waist_collection', 'WAIST COLLECTION')"
+`);
+            await generateCodeFromSpecs({projectPath: root});
+            const reactTranslations = await readFile(join(root, 'src', 'translations', 'generated.mjs'), 'utf8');
+            const reactService = await readFile(join(root, 'src', 'services', 'translated_build.mjs'), 'utf8');
+            expect(reactTranslations).to.include('const generatedTranslations = {');
+            expect(reactTranslations).to.include('"default"');
+            expect(reactTranslations).to.include('"waist_collection": "WAIST COLLECTION"');
+            expect(reactTranslations).to.include("locale: 'default'");
+            expect(reactTranslations).to.include("store.load('default', generatedTranslations.default ?? {});");
+            expect(reactTranslations).to.include('replace(/\\s+/g,');
+            expect(reactTranslations).to.include('replace(/\\b\\w/g,');
+            expect(reactService).to.include("import {fastUITranslations} from '../translations/generated.mjs';");
+
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
+            await mkdir(flutterRoot, {recursive: true});
+            await writeFile(join(flutterRoot, 'translated_build.yml'), `component:
+  base: text
+  modifier:
+    props:
+      children: "logics.t('in_stores')"
+`);
+            await generateCodeFromSpecs({projectPath: root});
+            const flutterTranslations = await readFile(join(root, 'lib', 'translations', 'generated.dart'), 'utf8');
+            const flutterService = await readFile(join(root, 'lib', 'services', 'translated_build.dart'), 'utf8');
+            expect(flutterTranslations).to.include('fastUITranslationsDefault');
+            expect(flutterTranslations).to.include("load('default', fastUITranslationsDefault)");
+            expect(flutterTranslations).to.include('"in_stores": "In Stores"');
+            expect(flutterService).to.include("import '../fastui_runtime.dart';");
+            expect(flutterService).to.include("import '../translations/generated.dart';");
+            expect(flutterService).to.include('installFastUITranslations();');
+            process.env.FASTUI_TEMPLATE = 'reactjs';
         });
 
         it('initializes a ReactJS project and selects src/blueprints', async function () {
@@ -341,6 +632,15 @@ describe('Specs', function () {
             process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
+        it('creates missing React observable store support files when generating routing only', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            await ensureAppRouteFileExist({template: 'reactjs', initialId: 'home', pages: [{id: 'home', name: 'home_page', module: 'home'}]});
+            expect(await readFile(join(root, 'src', 'stores', 'observable_store.mjs'), 'utf8')).to.include('export const appState = createObservableStore()');
+            expect(await readFile(join(root, 'src', 'stores', 'use_observable.mjs'), 'utf8')).to.include('useSyncExternalStore');
+            expect(await readFile(join(root, 'src', 'routing.mjs'), 'utf8')).to.include("import {appState} from './stores/observable_store.mjs';");
+            process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
         it('rejects the removed React Native target', async function () {
             try {
                 await initializeProject({template: 'reactnative'});
@@ -388,6 +688,28 @@ describe('Specs', function () {
             expect(cached.version).to.equal(1);
             expect(refreshed.version).to.equal(2);
             expect(downloads).to.equal(0);
+        });
+
+        it('includes Retry-After details for Figma 429 responses', async function () {
+            try {
+                await fetchFigmaFile({
+                    token: 'token', figFile: 'file', fresh: true,
+                    fetcher: async () => {
+                        const error = new Error('Too Many Requests');
+                        error.response = {
+                            status: 429,
+                            data: {message: 'Too Many Requests'},
+                            headers: {'retry-after': '229687'}
+                        };
+                        throw error;
+                    }
+                });
+                expect.fail('expected fetchFigmaFile to throw');
+            } catch (error) {
+                expect(error.message).to.include('HTTP 429');
+                expect(error.message).to.include('retry after 2d 15h 48m 7s');
+                expect(error.message).to.include('Too Many Requests');
+            }
         });
 
         it('combines Figma canvases so shared components can live on a separate design page', function () {
@@ -682,7 +1004,7 @@ describe('Specs', function () {
             expect(end.indexOf('<ChildA')).to.be.lessThan(end.indexOf('<ChildB'));
             expect(end.indexOf('<ChildB')).to.be.lessThan(end.indexOf('ParentMarker'));
             expect(stack).to.include('"display":"grid"');
-            expect(stack).to.include('"flex":1');
+            expect(stack).not.to.include('"flex":1');
             expect(stack).to.include("style={{gridArea:'1 / 1'}}");
             process.env.FASTUI_TEMPLATE = 'flutter';
         });

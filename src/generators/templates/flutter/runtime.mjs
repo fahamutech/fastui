@@ -598,6 +598,54 @@ class FastUIStyleHelper {
   }
 }
 
+/// Global translations store for FastUI.
+///
+/// Usage in generated service stubs:
+///   dynamic t(Map<String, dynamic> data) =>
+///       FastUITranslations.instance.t(data['args']?[0] as String? ?? '');
+///
+/// Populate translations at app start (e.g. in main.dart):
+///   FastUITranslations.instance.load('en', {'hello': 'Hello', ...});
+///   FastUITranslations.instance.load('sw', {'hello': 'Habari', ...});
+///   FastUITranslations.instance.setLocale('en'); // default language
+class FastUITranslations {
+  FastUITranslations._();
+  static final FastUITranslations instance = FastUITranslations._();
+
+  String _locale = 'en';
+  final Map<String, Map<String, String>> _translations = {};
+
+  /// Load or merge a translations map for [locale].
+  void load(String locale, Map<String, String> entries) {
+    _translations[locale] = {...(_translations[locale] ?? {}), ...entries};
+  }
+
+  /// Switch the active language. All subsequent calls to [t] use this locale.
+  void setLocale(String locale) {
+    _locale = locale;
+  }
+
+  String get locale => _locale;
+
+  static String humanizeKey(String key) {
+    final value = key.replaceAll(RegExp(r'[_-]+'), ' ').trim();
+    if (value.isEmpty) return key;
+    return value
+        .split(RegExp(r'\s+'))
+        .map((part) => part.isEmpty ? part : part[0].toUpperCase() + part.substring(1))
+        .join(' ');
+  }
+
+  /// Resolve [key] in the current locale, falling back to 'en', then [fallback],
+  /// then a humanized version of [key].
+  String t(String key, {String? fallback}) {
+    return _translations[_locale]?[key]
+        ?? _translations['en']?[key]
+        ?? fallback
+        ?? humanizeKey(key);
+  }
+}
+
 class FastUIImage extends StatelessWidget {
   const FastUIImage({super.key, required this.source, this.width, this.height, this.fit});
   final String source;

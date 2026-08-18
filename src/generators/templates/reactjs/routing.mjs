@@ -3,9 +3,9 @@
  * the user-owned `routing_guard.mjs` stub, and the generated `AppRoute.jsx`
  * that lazily mounts every page/dialog/sheet surface FastUI discovered.
  */
-import {ensureFileExist} from '../../../shared/fs.mjs';
+import {ensureFileExist, ensurePathExist} from '../../../shared/fs.mjs';
 import {readFile, writeFile} from 'node:fs/promises';
-import {join, resolve} from 'node:path';
+import {dirname, join, resolve} from 'node:path';
 import {getFileName} from '../../naming.mjs';
 import {routeFromSurfaceName} from '../../../shared/routing.mjs';
 
@@ -217,10 +217,53 @@ export function AppRoute() {
  * @param initialId {string}
  * @return {Promise<void>}
  */
+async function writeIfMissing(path, content) {
+    try {
+        await readFile(path, 'utf8');
+        return;
+    } catch (_) {
+    }
+    await ensurePathExist(dirname(path));
+    await writeFile(path, content);
+}
+
+async function ensureReactStateSupportFiles() {
+    await writeIfMissing(resolve('src', 'stores', 'observable_store.mjs'), `import {BehaviorSubject} from 'rxjs';
+
+export function createObservableStore(initialState = {}) {
+  const subject = new BehaviorSubject(Object.freeze({...initialState}));
+  return {
+    state$: subject.asObservable(),
+    get value() { return subject.value; },
+    set(patch) { subject.next(Object.freeze({...subject.value, ...patch})); },
+    update(reducer) { subject.next(Object.freeze(reducer(subject.value))); },
+    subscribe(observer) { return subject.subscribe(observer); },
+    dispose() { subject.complete(); },
+  };
+}
+
+export const appState = createObservableStore();
+`);
+    await writeIfMissing(resolve('src', 'stores', 'use_observable.mjs'), `import {useSyncExternalStore} from 'react';
+
+export function useObservable(store, selector = value => value) {
+  return useSyncExternalStore(
+    listener => {
+      const subscription = store.subscribe(listener);
+      return () => subscription.unsubscribe();
+    },
+    () => selector(store.value),
+    () => selector(store.value),
+  );
+}
+`);
+}
+
 export async function ensureReactAppRouteFile({pages, initialId}) {
     const nextComponentFilePath = resolve(join('src', 'AppRoute.jsx'));
     const nextStateFilePath = resolve(join('src', 'routing.mjs'));
     const nextGuardFilePath = resolve(join('src', 'routing_guard.mjs'));
+    await ensureReactStateSupportFiles();
     await ensureFileExist(nextGuardFilePath);
     let currentGuard = '';
     try { currentGuard = await readFile(nextGuardFilePath, 'utf8'); } catch (_) {}

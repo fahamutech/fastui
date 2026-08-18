@@ -13,6 +13,7 @@ import {
     getRight,
     getStates,
     getStyles,
+    parseLogicReference,
 } from '../../modifier.mjs';
 import {analyzeBehavior} from '../../behavior.mjs';
 import {flutterRuntimeSource} from './runtime.mjs';
@@ -66,6 +67,13 @@ function dartLiteral(value) {
     return dartString(value);
 }
 
+function flutterLogicCallExpression(value, contextRef = 'context') {
+    const logic = parseLogicReference(value);
+    if (!logic?.isCall) return null;
+    const args = `${logic.argsSource ?? ''}`.trim() === '' ? 'const []' : `[${logic.argsSource}]`;
+    return `${logic.name}(_componentContext(${contextRef}, ${args}))`;
+}
+
 function valueExpression(value) {
     const text = `${value ?? ''}`.trim();
     if (/^asset:\/\/figma\//i.test(text)) {
@@ -98,8 +106,9 @@ function collectInputs(data = {}) {
 function collectLogicNames(data = {}) {
     const found = new Set();
     const visit = value => {
-        if (typeof value === 'string' && /^(?:logics|services)\./i.test(value.trim())) {
-            found.add(dartIdentifier(value.trim().replace(/^(?:logics|services)\./i, '').replace(/\(\)$/g, '')));
+        const logic = parseLogicReference(value);
+        if (logic) {
+            found.add(dartIdentifier(logic.name));
         } else if (value && typeof value === 'object') {
             Object.values(value).forEach(visit);
         }
@@ -327,7 +336,8 @@ function containerExpression(styles = {}, child = 'null', {loosenChildAxis = nul
 
 function textExpression(data) {
     const styles = getStyles(data);
-    const children = data?.modifier?.props?.children ?? '';
+    const children = getChildren(data);
+    const rawChildren = data?.modifier?.props?.children ?? '';
     const style = [];
     const color = colorExpression(styles.color);
     if (color) style.push(`color: ${color}`);
@@ -343,9 +353,17 @@ function textExpression(data) {
         style.push(`height: ${Number(styles.lineHeightPx) / Number(styles.fontSize)}`);
     }
     const textStyle = style.length ? `, style: TextStyle(${style.join(', ')})` : '';
-    const expression = valueExpression(children);
-    const nullable = typeof children === 'string' && /^(states|inputs)\./i.test(children.trim());
-    const alignment = {start: 'start', left: 'left', center: 'center', end: 'end', right: 'right'}[`${styles.textAlign ?? ''}`.toLowerCase()];
+    const expression = children?.type === 'logic'
+        ? flutterLogicCallExpression(children?.value)
+        : valueExpression(rawChildren);
+    const nullable = children?.type === 'state' || children?.type === 'input';
+    const alignment = {
+        start: 'start',
+        left: 'left',
+        center: 'center',
+        end: 'end',
+        right: 'right'
+    }[`${styles.textAlign ?? ''}`.toLowerCase()];
     return `Text(${nullable ? `(${expression} ?? '')` : expression}.toString()${alignment ? `, textAlign: TextAlign.${alignment}` : ''}${textStyle})`;
 }
 
@@ -411,6 +429,10 @@ function applyInteractions(data, body) {
         : body;
 }
 
+function hasMeaningfulStyles(styles = {}) {
+    return Object.entries(styles).some(([, value]) => value !== undefined && value !== null);
+}
+
 function inputExpression(data) {
     const props = data?.modifier?.props ?? {};
     const styles = getStyles(data);
@@ -451,22 +473,28 @@ function widgetIdExpression(data, isStateClass = false) {
     return `${overridePropsRef}['id'] ?? ${valueExpression(props.id)}`;
 }
 
+function componentHasPlaceholderOwnView(data) {
+    const base = `${data?.base ?? 'container'}`.toLowerCase();
+    const children = getChildren(data);
+    const props = getProps(data);
+    const ownProps = Object.fromEntries(Object.entries(props).filter(([key, value]) => value !== undefined && value !== null && !['id', 'onClick', 'children', 'control', 'scroll'].includes(key)));
+    return (base === 'container' || base === 'div')
+        && !hasMeaningfulStyles(getStyles(data))
+        && !`${children?.value ?? ''}`.trim()
+        && Object.keys(ownProps).length === 0;
+}
+
 function componentBody(data) {
     const base = `${data?.base ?? 'container'}`.toLowerCase();
     if (base === 'text') {
-        // Use _buildWithOverride so that box-level view styles (background, width, height)
-        // are applied AND runtime overrideStyles from a parent spec are merged — mirroring
-        // the React pattern where text is rendered inside a styled <div> wrapper that also
-        // accepts override props.
         const styles = getStyles(data);
         const baseStyleLiteral = dartLiteral(styles);
         return `_buildWithOverride(${baseStyleLiteral}, child: ${textExpression(data)})`;
     }
     if (base === 'image') return imageExpression(data);
     if (base === 'input' || (base === 'container' && data?.modifier?.props?.control === 'input')) return inputExpression(data);
+    if (componentHasPlaceholderOwnView(data)) return 'const SizedBox.shrink()';
 
-    // Container base — build _buildWithOverride call, optionally passing a child widget
-    // when the spec's `props.children` holds a static text value.
     const styles = getStyles(data);
     const baseStyleLiteral = dartLiteral(styles);
     const children = getChildren(data);
@@ -477,6 +505,8 @@ function componentBody(data) {
             childExpr = `Text((${stateIdentifier(children.value)} ?? '').toString())`;
         } else if (children.type === 'input') {
             childExpr = `Text((widget.${dartIdentifier(children.value)} ?? '').toString())`;
+        } else if (children.type === 'logic') {
+            childExpr = `Text((${flutterLogicCallExpression(children.value)}).toString())`;
         } else {
             childExpr = `Text(${dartString(children.value)})`;
         }
@@ -487,7 +517,13 @@ function componentBody(data) {
 }
 
 function mainAxis(value) {
-    const map = {center: 'center', 'flex-end': 'end', 'space-between': 'spaceBetween', 'space-around': 'spaceAround', 'space-evenly': 'spaceEvenly'};
+    const map = {
+        center: 'center',
+        'flex-end': 'end',
+        'space-between': 'spaceBetween',
+        'space-around': 'spaceAround',
+        'space-evenly': 'spaceEvenly'
+    };
     return `MainAxisAlignment.${map[value] ?? 'start'}`;
 }
 
@@ -520,37 +556,140 @@ function isFlexibleFrame(styles = {}, isRow) {
  * @param extendRefs {{className:string}[]} ordered extend widget references
  * @return {string}
  */
-function composeFrame(frame, ownContentExpr, extendRefs = []) {
+const LAYOUT_ONLY_KEYS = new Set(['spaceValue', 'justifyContent', 'alignItems', 'flexDirection', 'flex', 'fallbackWidth', 'fallbackHeight', 'childDirection']);
+
+function stripLayoutKeys(styles) {
+    return Object.fromEntries(Object.entries(styles).filter(([k]) => !LAYOUT_ONLY_KEYS.has(k)));
+}
+
+function ownExpressionIsEmpty(value) {
+    return `${value ?? ''}`.trim() === 'const SizedBox.shrink()';
+}
+
+function applyScrollableArea(scroll, child) {
+    if (scroll === 'both') {
+        return `SingleChildScrollView(scrollDirection: Axis.horizontal, child: SingleChildScrollView(scrollDirection: Axis.vertical, child: ${child}))`;
+    }
+    if (scroll === 'horizontal') {
+        return `SingleChildScrollView(scrollDirection: Axis.horizontal, child: ${child})`;
+    }
+    if (scroll === 'vertical') {
+        return `SingleChildScrollView(scrollDirection: Axis.vertical, child: ${child})`;
+    }
+    return child;
+}
+
+function composeFrame(data, frame, ownContentExpr, extendRefs = [], applyScroll = true) {
     const current = frame?.current ?? {};
     const base = frame?.base;
     const baseStyles = frame?.baseStyles ?? {};
     const isRow = `${base ?? ''}`.toLowerCase().startsWith('row');
     const next = frame?.next ?? {};
-    const currentFlexible = isFlexibleFrame(current, isRow);
-    const nextFlexible = isFlexibleFrame(next, isRow);
+    const hasCurrentWrapper = hasMeaningfulStyles(current);
+    const hasNextWrapper = hasMeaningfulStyles(next);
+    const currentFlexible = hasCurrentWrapper && isFlexibleFrame(current, isRow);
+    const nextFlexible = hasNextWrapper && isFlexibleFrame(next, isRow);
     const loosenChildAxis = isRow ? 'horizontal' : 'vertical';
-    const currentWidget = containerExpression(current, alignedContent(current, isRow, ownContentExpr), {loosenChildAxis: currentFlexible ? loosenChildAxis : null});
-    if (extendRefs.length === 0) return currentWidget;
+    const currentWidget = hasCurrentWrapper
+        ? containerExpression(current, alignedContent(current, isRow, ownContentExpr), {loosenChildAxis: currentFlexible ? loosenChildAxis : null})
+        : ownContentExpr;
+    const ownHasContent = hasCurrentWrapper || !ownExpressionIsEmpty(ownContentExpr);
+    const nextWidgets = extendRefs.map(ref => {
+        const child = widgetInvocation(ref);
+        return hasNextWrapper
+            ? containerExpression(next, child, {loosenChildAxis: nextFlexible ? loosenChildAxis : null})
+            : child;
+    });
 
-    const nextWidgets = extendRefs.map(ref => containerExpression(next, widgetInvocation(ref), {loosenChildAxis: nextFlexible ? loosenChildAxis : null}));
+    const hasBaseWrapper = Boolean(base)
+        || hasMeaningfulStyles(baseStyles)
+        || extendRefs.length > 0
+        || hasCurrentWrapper;
+    if (!hasBaseWrapper) return currentWidget;
+
+    const baseContainerStyles = stripLayoutKeys(baseStyles);
+    // console.log(baseStyles)
+    // console.log(baseContainerStyles)
+    const fillWidth = fillsAxis(baseStyles.width, 'width');
+    const fillHeight = fillsAxis(baseStyles.height, 'height');
+    const fallbackWidth = Number.isFinite(Number(baseStyles.fallbackWidth)) ? Number(baseStyles.fallbackWidth) : 0;
+    const fallbackHeight = Number.isFinite(Number(baseStyles.fallbackHeight)) ? Number(baseStyles.fallbackHeight) : 0;
+
+    const scroll = applyScroll ? data?.modifier?.props?.scroll : undefined;
 
     if (`${base ?? ''}`.toLowerCase().includes('.stack')) {
-        const stack = `Stack(children: [${[currentWidget, ...nextWidgets].join(', ')}])`;
-        return Object.keys(baseStyles).length > 0 ? containerExpression(baseStyles, stack) : stack;
+        const stackChildren = ownHasContent ? [currentWidget, ...nextWidgets] : nextWidgets;
+        const stack = `Stack(children: [${stackChildren.join(', ')}])`;
+        const wrapped = Object.keys(baseContainerStyles).length > 0 ? containerExpression(baseContainerStyles, stack) : stack;
+        return applyScrollableArea(scroll, wrapped);
     }
 
     const isEnd = `${base ?? ''}`.toLowerCase().includes('.end');
     const bounded = isRow ? 'constraints.hasBoundedWidth' : 'constraints.hasBoundedHeight';
-    const currentItem = currentFlexible ? `if (${bounded}) Expanded(child: ${currentWidget}) else ${currentWidget}` : currentWidget;
+    const currentItem = ownHasContent
+        ? (currentFlexible ? `if (${bounded}) Expanded(child: ${currentWidget}) else ${currentWidget}` : currentWidget)
+        : null;
     const nextItems = nextWidgets.map(widget => nextFlexible ? `if (${bounded}) Expanded(child: ${widget}) else ${widget}` : widget);
-    const orderedBase = isEnd ? [...nextItems, currentItem] : [currentItem, ...nextItems];
-    const gap = Number(current.spaceValue ?? 0);
+    const orderedBase = isEnd
+        ? [...nextItems, ...(currentItem ? [currentItem] : [])]
+        : [...(currentItem ? [currentItem] : []), ...nextItems];
+
+    if (orderedBase.length === 0) {
+        const wrapped = Object.keys(baseContainerStyles).length > 0 ? containerExpression(baseContainerStyles) : 'const SizedBox.shrink()';
+        return applyScrollableArea(scroll, wrapped);
+    }
+
+    const gap = Number(baseStyles.spaceValue);
     const spacer = gap > 0 ? `SizedBox(${isRow ? `width: ${gap}` : `height: ${gap}`})` : null;
     const ordered = spacer
         ? orderedBase.flatMap((item, index) => index === 0 ? [item] : [spacer, item])
         : orderedBase;
-    const rowCol = `LayoutBuilder(builder: (context, constraints) => ${isRow ? 'Row' : 'Column'}(mainAxisSize: ${bounded} ? MainAxisSize.max : MainAxisSize.min, mainAxisAlignment: ${mainAxis(current.justifyContent)}, crossAxisAlignment: ${crossAxis(current.alignItems)}, children: [${ordered.join(', ')}]))`;
-    return Object.keys(baseStyles).length > 0 ? containerExpression(baseStyles, rowCol) : rowCol;
+
+    const justifyContent = baseStyles.justifyContent;
+    const alignItems = baseStyles.alignItems;
+    // const {width: _w, height: _h, ...decorationStyles} = baseContainerStyles;
+    const hasBaseContainerStyles = Object.keys(baseContainerStyles).length > 0;
+    const buildRowCol = (boundedExpr) => {
+        const ms = boundedExpr ?? bounded;
+        return `${isRow ? 'Row' : 'Column'}(mainAxisSize: ${ms} ? MainAxisSize.max : MainAxisSize.min, mainAxisAlignment: ${mainAxis(justifyContent)}, crossAxisAlignment: ${crossAxis(alignItems)}, children: [${ordered.join(', ')}])`;
+    };
+
+    let rowCol;
+    if (fillWidth || fillHeight) {
+        const sizes = [
+            fillWidth ? `width: constraints.hasBoundedWidth ? constraints.maxWidth : constraints.minWidth > ${fallbackWidth} ? constraints.minWidth : ${fallbackWidth}` : '',
+            fillHeight ? `height: constraints.hasBoundedHeight ? constraints.maxHeight : constraints.minHeight > ${fallbackHeight} ? constraints.minHeight : ${fallbackHeight}` : '',
+            `child: ${buildRowCol(isRow ? 'constraints.hasBoundedWidth' : 'constraints.hasBoundedHeight')}`,
+        ].filter(Boolean).join(', ');
+        rowCol = `LayoutBuilder(builder: (context, constraints) => SizedBox(${sizes}))`;
+    } else {
+        rowCol = `LayoutBuilder(builder: (context, constraints) => ${buildRowCol()})`;
+    }
+
+    if (hasBaseContainerStyles) {
+        const contArgs = [];
+        const decorArgs = [];
+        const width = baseContainerStyles?.width ?? null;
+        const height = baseContainerStyles?.height ?? null;
+        // console.log(width, height);
+        if(width && Boolean(Number(width)))contArgs.push(`width: ${width}`);
+        if(height && Boolean(Number(height)))contArgs.push(`height: ${height}`);
+        const padding = edgeInsets(baseContainerStyles, 'padding');
+        const margin = edgeInsets(baseContainerStyles, 'margin');
+        if (padding) decorArgs.push(`padding: ${padding}`);
+        if (margin) decorArgs.push(`margin: ${margin}`);
+        const decoList = [];
+        const color = colorExpression(baseContainerStyles.backgroundColor ?? baseContainerStyles.background);
+        if (color) decoList.push(`color: ${color}`);
+        const radius = borderRadius(baseContainerStyles);
+        if (radius) decoList.push(`borderRadius: ${radius}`);
+        if (decoList.length) decorArgs.push(`decoration: BoxDecoration(${decoList.join(', ')})`);
+        if(contArgs.length>0){decorArgs.push([contArgs.join(','),`child: ${rowCol}`]);}
+        else {decorArgs.push(`child: ${rowCol}`);}
+        // console.log(decorArgs);
+        return applyScrollableArea(scroll, `Container(${decorArgs.join(', ')})`);
+    }
+    return applyScrollableArea(scroll, rowCol);
 }
 
 async function serviceImportAndStubs(data, specPath) {
@@ -626,7 +765,7 @@ function contextMembers(data, inputs) {
         `${dartString(`set${firstUpperCase(key)}`)}: (dynamic value) => _set${firstUpperCase(stateIdentifier(key))}(value)`
     ]);
     const inputEntries = inputs.filter(input => input !== 'view').map(input => `${dartString(input)}: widget.${input}`);
-    return `Map<String, dynamic> _componentContext(BuildContext context, [dynamic argument]) => {\n    'context': context,\n    'states': {${stateEntries.join(', ')}},\n    'inputs': {${inputEntries.join(', ')}},\n    'args': argument == null ? <dynamic>[] : <dynamic>[argument],\n  };`;
+    return `Map<String, dynamic> _componentContext(BuildContext context, [dynamic argument]) => {\n    'context': context,\n    'states': {${stateEntries.join(', ')}},\n    'inputs': {${inputEntries.join(', ')}},\n    'args': argument == null ? <dynamic>[] : argument is List ? List<dynamic>.from(argument) : <dynamic>[argument],\n  };`;
 }
 
 function effectsInit(data) {
@@ -682,10 +821,12 @@ import '${relativeImport(outputPath, structure.storeModelsPath)}';`
         ? Object.entries(getStates(data)).map(([key, value]) =>
             // Must use widget.overrideStates inside a StatefulWidget's State class.
             `${stateIdentifier(key)} = (widget.overrideStates[${dartString(key)}] ?? ${valueExpression(value)}) as dynamic;`
-          ).join('\n    ')
+        ).join('\n    ')
         : stateInitializers(data);
     const effects = effectsInit(data);
-    const composedContent = composeFrame(getFrame(data), buildExpression(refs), refs.extendList);
+    const ownContent = buildExpression(refs);
+    const composedFrame = composeFrame(data, getFrame(data), ownContent, refs.extendList, !refs.feed);
+    const composedContent = ownExpressionIsEmpty(ownContent) ? applyInteractions(data, composedFrame) : composedFrame;
     const usesOverrideContainer = composedContent.includes('_buildWithOverride(');
     const usesMeta = getProps(data).id !== undefined && getProps(data).id !== null && getProps(data).id !== '';
     // Import the runtime for style helpers, identity/meta helpers, images, or navigation.
@@ -694,10 +835,12 @@ import '${relativeImport(outputPath, structure.storeModelsPath)}';`
     const storeComponentName = structure.componentName;
     const overrideHelperStateful = usesOverrideContainer ? `\n\n  ${buildWithOverrideMethod(true)}` : '';
     const overrideHelperStateless = usesOverrideContainer ? `\n\n  ${buildWithOverrideMethod(false)}` : '';
-    const metaHelperStateful = `\n\n  ${buildMetaMethod(data, true)}`;
-    const metaHelperStateless = `\n\n  ${buildMetaMethod(data, false)}`;
-    const stateful = `class ${name} extends StatefulWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n\n  @override\n  State<${name}> createState() => _${name}State();\n}\n\nclass _${name}State extends State<${name}> {\n  ${stateFields}\n  ${storeMembers}\n\n  @override\n  void initState() {\n    super.initState();\n    ${hasState ? `_storeId = '${storeComponentName}:\${identityHashCode(this)}';` : ''}\n    ${stateInit}\n    ${hasState ? '_publishState();' : ''}\n    ${effects}\n  }\n\n  ${hasState ? `@override\n  void dispose() {\n    moduleStore.remove<${stateModelName(specPath)}>(_storeId);\n    super.dispose();\n  }` : ''}\n\n  ${contextSource}${overrideHelperStateful}${metaHelperStateful}\n\n  @override\n  Widget build(BuildContext context) {\n    return _applyMeta(${composedContent});\n  }\n}`;
-    const stateless = `class ${name} extends StatelessWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n  ${name} get widget => this;\n\n  ${contextSource}${overrideHelperStateless}${metaHelperStateless}\n\n  @override\n  Widget build(BuildContext context) {\n    return _applyMeta(${composedContent});\n  }\n}`;
+    const metaHelperStateful = usesMeta ? `\n\n  ${buildMetaMethod(data, true)}` : '';
+    const metaHelperStateless = usesMeta ? `\n\n  ${buildMetaMethod(data, false)}` : '';
+    const buildReturnStateful = usesMeta ? `_applyMeta(${composedContent})` : composedContent;
+    const buildReturnStateless = usesMeta ? `_applyMeta(${composedContent})` : composedContent;
+    const stateful = `class ${name} extends StatefulWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n\n  @override\n  State<${name}> createState() => _${name}State();\n}\n\nclass _${name}State extends State<${name}> {\n  ${stateFields}\n  ${storeMembers}\n\n  @override\n  void initState() {\n    super.initState();\n    ${hasState ? `_storeId = '${storeComponentName}:\${identityHashCode(this)}';` : ''}\n    ${stateInit}\n    ${hasState ? '_publishState();' : ''}\n    ${effects}\n  }\n\n  ${hasState ? `@override\n  void dispose() {\n    moduleStore.remove<${stateModelName(specPath)}>(_storeId);\n    super.dispose();\n  }` : ''}\n\n  ${contextSource}${overrideHelperStateful}${metaHelperStateful}\n\n  @override\n  Widget build(BuildContext context) {\n    return ${buildReturnStateful};\n  }\n}`;
+    const stateless = `class ${name} extends StatelessWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n  ${name} get widget => this;\n\n  ${contextSource}${overrideHelperStateless}${metaHelperStateless}\n\n  @override\n  Widget build(BuildContext context) {\n    return ${buildReturnStateless};\n  }\n}`;
     const blurImport = JSON.stringify(data).includes('backdropFilter') ? "import 'dart:ui' as ui;" : '';
     const content = `import 'package:flutter/material.dart';\n${blurImport}\n${runtimeImport}\n${imports}\n${storeImport}\n${serviceImport}\n\n${behavior.requiresFlutterStatefulWidget ? stateful : stateless}\n`;
     await ensurePathExist(dirname(outputPath));
@@ -724,7 +867,25 @@ async function composeFlutterSpecBaseWrapper({data, specPath}) {
     const inputs = collectInputs(data);
     const constructorFields = inputs.map(input => `this.${input}`).join(', ');
     const fieldDeclarations = inputs.map(input => `final dynamic ${input};`).join('\n  ');
-    const content = `import 'package:flutter/material.dart';\nimport '${baseImportPath}';\n\nclass ${name} extends StatelessWidget {\n  const ${name}({super.key, ${constructorFields}});\n\n  ${fieldDeclarations}\n\n  @override\n  Widget build(BuildContext context) {\n    return ${baseClass}(\n      loopIndex: loopIndex,\n      loopElement: loopElement,\n      overrideStyles: ${overrideStyles},\n      overrideProps: ${overrideProps},\n      overrideStates: ${overrideStates},\n    );\n  }\n}\n`;
+    const content = `import 'package:flutter/material.dart';
+    import '${baseImportPath}';
+    
+    class ${name} extends StatelessWidget {
+      const ${name}({super.key, ${constructorFields}});
+        
+      ${fieldDeclarations}
+          
+      @override
+        Widget build(BuildContext context) {
+            return ${baseClass}(
+                  loopIndex: loopIndex,
+                  loopElement: loopElement,
+                  overrideStyles: ${overrideStyles},
+                  overrideProps: ${overrideProps},
+                  overrideStates: ${overrideStates},
+            );
+      }
+    }`;
     await ensurePathExist(dirname(outputPath));
     await writeFile(outputPath, content);
 }
@@ -747,6 +908,7 @@ export async function composeFlutterCondition({data, path: specPath}) {
         data,
         specPath,
         buildExpression: refs => {
+            if (!refs.left && !refs.right && !hasMeaningfulStyles(getStyles(data))) return 'const SizedBox.shrink()';
             const left = widgetInvocation(refs.left);
             const right = widgetInvocation(refs.right);
             const branch = refs.right ? `(${stateIdentifier('condition')} == true ? ${right} : ${left})` : left;
@@ -762,20 +924,28 @@ export async function composeFlutterLoop({data, path: specPath}) {
         data,
         specPath,
         buildExpression: refs => {
+            if (!refs.feed && !hasMeaningfulStyles(getStyles(data))) return 'const SizedBox.shrink()';
             const feed = refs.feed
                 ? `${refs.feed.className}(loopIndex: index, loopElement: item)`
                 : 'const SizedBox.shrink()';
             const items = `List<dynamic>.from(${stateIdentifier('data')} ?? const [])`;
-            const column = `Column(mainAxisSize: MainAxisSize.min, children: ${items}.asMap().entries.map((entry) { final index = entry.key; final item = entry.value; return ${feed}; }).toList())`;
-            const row = `Row(mainAxisSize: MainAxisSize.min, children: ${items}.asMap().entries.map((entry) { final index = entry.key; final item = entry.value; return ${feed}; }).toList())`;
-            const direction = data?.modifier?.props?.scroll;
-            const list = direction === 'vertical'
-                ? `ListView.builder(scrollDirection: Axis.vertical, shrinkWrap: true, primary: false, itemCount: ${items}.length, itemBuilder: (context, index) { final item = ${items}[index]; return ${feed}; })`
-                : direction === 'horizontal'
-                    ? `SingleChildScrollView(scrollDirection: Axis.horizontal, child: ${row})`
-                : direction === 'both'
-                    ? `SingleChildScrollView(scrollDirection: Axis.horizontal, child: SingleChildScrollView(scrollDirection: Axis.vertical, child: ${column}))`
-                    : column;
+            const frame = getFrame(data);
+            // Derive axis from frame.base so the list direction matches the layout.
+            const frameBase = `${frame?.base ?? ''}`.toLowerCase();
+            const isRow = frameBase.startsWith('row');
+            const scroll = data?.modifier?.props?.scroll;
+            const fallbackHeight = Number(frame?.baseStyles?.fallbackHeight ?? getStyles(data)?.fallbackHeight ?? getStyles(data)?.height ?? 240) || 240;
+            const horizontalList = `LayoutBuilder(builder: (context, constraints) { final double listHeight = constraints.hasBoundedHeight ? constraints.maxHeight.toDouble() : ${Number(fallbackHeight).toFixed(1)}; return SizedBox(height: listHeight, child: ListView.builder(scrollDirection: Axis.horizontal, shrinkWrap: true, primary: false, itemCount: ${items}.length, itemBuilder: (context, index) { final item = ${items}[index]; return ${feed}; })); })`;
+            const verticalList = `ListView.builder(scrollDirection: Axis.vertical, shrinkWrap: true, primary: false, itemCount: ${items}.length, itemBuilder: (context, index) { final item = ${items}[index]; return ${feed}; })`;
+            const list = scroll === 'vertical'
+                ? verticalList
+                : scroll === 'horizontal'
+                    ? horizontalList
+                    : scroll === 'both'
+                        ? `SingleChildScrollView(scrollDirection: Axis.horizontal, child: ${verticalList})`
+                        : isRow
+                            ? horizontalList
+                            : verticalList;
             return applyInteractions(data, containerExpression(getStyles(data), list));
         }
     });
