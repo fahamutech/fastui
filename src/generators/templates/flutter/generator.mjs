@@ -2173,6 +2173,79 @@ function declaredFlex(
         : 0;
 }
 
+function fixedAxisValue(
+    data = {},
+    axis
+) {
+    const frame =
+        getFrame(data);
+
+    const frameStyles =
+        frame?.baseStyles ??
+        {};
+
+    const ownStyles =
+        getStyles(data);
+
+    const raw =
+        Object.prototype.hasOwnProperty.call(
+            frameStyles,
+            axis
+        )
+            ? frameStyles[axis]
+            : ownStyles[axis];
+
+    if (
+        raw === undefined ||
+        raw === null
+    ) {
+        return null;
+    }
+
+    if (
+        fillsAxis(
+            raw,
+            axis
+        )
+    ) {
+        return null;
+    }
+
+    if (
+        Number.isFinite(
+            Number(raw)
+        )
+    ) {
+        return Number(raw);
+    }
+
+    const normalized =
+        `${raw}`
+            .trim()
+            .toLowerCase();
+
+    if (
+        normalized.endsWith(
+            'px'
+        )
+    ) {
+        const value =
+            Number(
+                normalized.slice(
+                    0,
+                    -2
+                )
+            );
+
+        return Number.isFinite(value)
+            ? value
+            : null;
+    }
+
+    return null;
+}
+
+
 function layoutMetadataMembers(
     data = {},
     inheritedClassName = null
@@ -2189,6 +2262,18 @@ function layoutMetadataMembers(
 
     const ownStyles =
         getStyles(data);
+
+    const fixedWidth =
+        fixedAxisValue(
+            data,
+            'width'
+        );
+
+    const fixedHeight =
+        fixedAxisValue(
+            data,
+            'height'
+        );
 
     const hasOwnScroll =
         Object.prototype.hasOwnProperty.call(
@@ -2268,10 +2353,26 @@ function layoutMetadataMembers(
                 ? `${inheritedClassName}.fastUIFlex`
                 : '0';
 
+    const fixedWidthExpr =
+        fixedWidth !== null
+            ? `${fixedWidth}`
+            : inheritedClassName
+                ? `${inheritedClassName}.fastUIFixedWidth`
+                : 'null';
+
+    const fixedHeightExpr =
+        fixedHeight !== null
+            ? `${fixedHeight}`
+            : inheritedClassName
+                ? `${inheritedClassName}.fastUIFixedHeight`
+                : 'null';
+
     return [
         `static const String fastUIScroll = ${scrollExpr};`,
         `static const String fastUIWidthMode = ${widthModeExpr};`,
         `static const String fastUIHeightMode = ${heightModeExpr};`,
+        `static const double? fastUIFixedWidth = ${fixedWidthExpr};`,
+        `static const double? fastUIFixedHeight = ${fixedHeightExpr};`,
         `static const int fastUIFlex = ${flexExpr};`,
     ].join('\n  ');
 }
@@ -4083,6 +4184,12 @@ function loopExpression(
     const feedClass =
         refs.feed.className;
 
+    const loopFixedHeight =
+        fixedAxisValue(
+            data,
+            'height'
+        );
+
     const gapValue =
         Number(
             frameStyles.spaceValue
@@ -4244,17 +4351,24 @@ function loopExpression(
             'both'
         ) {
             /*
-             * Important:
+             * Horizontal loops should stay lazy for large datasets.
              *
-             * Do NOT invent a fallback height.
+             * ListView requires a bounded cross-axis height. Resolve it in this
+             * order:
              *
-             * A horizontal ListView requires a bounded cross-axis height.
-             * If Flutter supplies one, ListView is safe and virtualized.
+             *  1. explicit fixed height on the loop itself;
+             *  2. fixed height exported by the feed component;
+             *  3. a bounded height supplied by the parent.
              *
-             * If height is unbounded (very common inside a vertically scrolling
-             * page), use SingleChildScrollView + Row. The Row then derives its
-             * natural height from its feed widgets.
+             * Only when none of those exist do we fall back to an eager
+             * SingleChildScrollView + Row, because Flutter cannot create a
+             * horizontal viewport without a finite height.
              */
+
+            const explicitLoopHeight =
+                loopFixedHeight !== null
+                    ? `${loopFixedHeight}`
+                    : 'null';
 
             repeatedContent =
                 `LayoutBuilder(
@@ -4265,32 +4379,75 @@ function loopExpression(
     final loopItems =
         ${items};
 
+    const double? explicitLoopHeight =
+        ${explicitLoopHeight};
+
+    final double? feedHeight =
+        ${feedClass}.fastUIFixedHeight;
+
+    final double? preferredHeight =
+        explicitLoopHeight
+        ??
+        feedHeight;
+
+    final double? resolvedHeight =
+        constraints.hasBoundedHeight
+            ? (
+                preferredHeight == null
+                ||
+                preferredHeight > constraints.maxHeight
+                    ? constraints.maxHeight
+                    : preferredHeight
+              )
+            : preferredHeight;
+
     if (
-      constraints.hasBoundedWidth
+      resolvedHeight != null
       &&
-      constraints.hasBoundedHeight
+      resolvedHeight.isFinite
+      &&
+      resolvedHeight > 0
     ) {
-      return ListView.separated(
-        scrollDirection:
-            Axis.horizontal,
+      return SizedBox(
+        height:
+            resolvedHeight,
 
-        primary:
-            false,
+        child:
+            ListView.separated(
+          scrollDirection:
+              Axis.horizontal,
 
-        itemCount:
-            loopItems.length,
+          primary:
+              false,
 
-        separatorBuilder:
-            (context, index) =>
-                const SizedBox(
+          itemCount:
+              loopItems.length,
+
+          separatorBuilder:
+              (context, index) =>
+                  const SizedBox(
                     width: ${gap}
-                ),
+                  ),
 
-        itemBuilder:
-            (context, index) =>
-                ${feedForIndex('index')},
+          itemBuilder:
+              (context, index) =>
+                  ${feedForIndex('index')},
+        ),
       );
     }
+
+    assert(() {
+      if (loopItems.length > 50) {
+        debugPrint(
+          'FastUI warning: horizontal loop ${feedClass} has '
+          '\${loopItems.length} items but no measurable height. '
+          'Falling back to eager rendering. Give the loop or feed '
+          'a fixed height so FastUI can use lazy ListView rendering.',
+        );
+      }
+
+      return true;
+    }());
 
     return SingleChildScrollView(
       scrollDirection:
