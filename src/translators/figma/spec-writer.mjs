@@ -15,7 +15,13 @@
 import * as yaml from 'js-yaml';
 import {writeFile} from 'node:fs/promises';
 import {sanitizeFullColon} from '../../shared/fn.mjs';
-import {getContainerLikeStyles, getImageRef, getSizeStyles, repeatScrollDirection} from './layout.mjs';
+import {
+    componentScrollDirection,
+    getContainerLikeStyles,
+    getImageRef,
+    getSizeStyles,
+    loopScrollDirection
+} from './layout.mjs';
 import {getColor} from './color.mjs';
 import {getBaseType, sanitizedNameForLoopElement} from './naming.mjs';
 import {interactionBehavior} from './route.mjs';
@@ -174,7 +180,7 @@ export async function createFrameComponent({filename, child, routeLookup}) {
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
                     onClick: behavior.onClick ?? logicsFn,
-                    scroll: repeatScrollDirection(child),
+                    scroll: componentScrollDirection(child),
                 },
                 states: Object.keys(behavior.states).length > 0 ? behavior.states : undefined,
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
@@ -206,7 +212,7 @@ export async function createInstanceComponent({filename, child, srcPath, sharedC
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
                     onClick: behavior.onClick,
-                    scroll: repeatScrollDirection(child),
+                    scroll: componentScrollDirection(child),
                 },
                 states: Object.keys(behavior.states).length > 0 ? behavior.states : undefined,
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
@@ -238,7 +244,7 @@ export async function createConditionComponent({filename, child, routeLookup}) {
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
                     onClick: behavior.onClick,
-                    scroll: repeatScrollDirection(child),
+                    scroll: componentScrollDirection(child),
                 },
                 left: leftName ? `./${leftName}.yml` : undefined,
                 right: rightName ? `./${rightName}.yml` : undefined,
@@ -260,6 +266,7 @@ export async function createLoopComponent({filename, child}) {
     // Loop nodes get an onInit effect that calls a logics function so the
     // generator auto-creates a stub for loading the list data.
     const loopFn = `logics.${logicsFnName(child)}`;
+    console.log(loopScrollDirection(child))
     const yamlData = yaml.dump({
         loop: {
             modifier: {
@@ -267,7 +274,7 @@ export async function createLoopComponent({filename, child}) {
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
                 props: {
                     id: sanitizeFullColon(`${child?.name}`),
-                    scroll: repeatScrollDirection(child),
+                    scroll: loopScrollDirection(child),
                 },
                 effects: {onInit: {body: loopFn}},
                 feed: last ? `./${last?.name}.yml` : undefined,

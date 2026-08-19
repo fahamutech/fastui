@@ -43,6 +43,25 @@ export function isRepeatType(value) {
 /**
  * Returns the intended scroll direction for a loop node.
  *
+ * Scroll is specified **intentional** for a loop to avoid rely on f
+ * `frame.base` direction
+ */
+export function loopScrollDirection(node) {
+    const overflowDirection = node?.overflowDirection ?? node?.mainFrame?.overflowDirection;
+    const base = node?.mainFrame?.base??node.mainFrame?.base?.type??node.layoutMode;
+    if (overflowDirection === 'HORIZONTAL_AND_VERTICAL_SCROLLING') return 'both';
+    if (overflowDirection === 'HORIZONTAL_SCROLLING') return 'horizontal';
+    if (overflowDirection === 'VERTICAL_SCROLLING') return 'vertical';
+    if (base.toLowerCase().startsWith('row'))return 'horizontal';
+    if (base.toLowerCase().startsWith('column'))return 'vertical';
+    if (base==='HORIZONTAL') return 'horizontal';
+    if (base==='VERTICAL') return 'vertical';
+    return undefined;
+}
+
+/**
+ * Returns the intended scroll direction for a component node.
+ *
  * Scroll is **intentional** — it must be explicitly configured by the designer
  * in Figma. Never infer scroll from `layoutMode`: the layout axis controls how
  * children are arranged, not whether the container scrolls. A designer who
@@ -52,7 +71,7 @@ export function isRepeatType(value) {
  * Returns `undefined` when no explicit scroll direction is set, which causes
  * the generated loop to render as a static list matching `frame.base`.
  */
-export function repeatScrollDirection(node) {
+export function componentScrollDirection(node) {
     const overflowDirection = node?.overflowDirection ?? node?.mainFrame?.overflowDirection;
     if (overflowDirection === 'HORIZONTAL_AND_VERTICAL_SCROLLING') return 'both';
     if (overflowDirection === 'HORIZONTAL_SCROLLING') return 'horizontal';
