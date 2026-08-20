@@ -47,6 +47,13 @@ export function normalizeSpecDocument(document = {}) {
 
 export function prepareBehavior(kind, data) {
     const output = normalizeComposition(data);
+    if (kind === 'loop' && Array.isArray(output?.modifier?.states?.data) && output.modifier.states.data.length > 0) {
+        output.modifier.metadata = {
+            ...output.modifier.metadata,
+            loopInitialData: output.modifier.metadata?.loopInitialData ?? structuredClone(output.modifier.states.data),
+        };
+        output.modifier.states.data = [];
+    }
     const stateTargets = new Set();
     const collectStateTargets = value => {
         if (Array.isArray(value)) return value.forEach(collectStateTargets);

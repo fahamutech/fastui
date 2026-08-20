@@ -1,6 +1,6 @@
 # Figma → Spec Translation
 
-The command `fastui specs automate` fetches a Figma file and translates every frame and component into a YAML spec file. This document describes the complete pipeline, the naming conventions designers must follow, and the mapping from Figma concepts to spec primitives.
+The command `fastui specs automate` reads a keyed cached Figma document and translates every frame and component into YAML specs. Add `--fresh` when the document and resources must be downloaded from Figma. Without `--fresh`, automation never contacts Figma and safely skips when no cache exists. This document describes the complete pipeline, naming conventions, data discovery, and target mappings.
 
 ---
 
@@ -10,8 +10,8 @@ The command `fastui specs automate` fetches a Figma file and translates every fr
 fastui specs automate reactjs --fresh
          │
          ├─ 1. fetchFigmaFile()          client.mjs
-         │       Figma REST API → raw JSON document
-         │       Cached at .fastui/figma-cache.json unless --fresh
+         │       Cache-only: .fastui/figma/<FIGMA_FILE>.json
+         │       --fresh: Figma REST API → verified keyed cache
          │
          ├─ 2. translateFigmaToSpecs()   figma-to-spec.mjs
          │       ├─ discover + reconcile resources   resources.mjs
@@ -67,6 +67,20 @@ Visible text: Joshua
 ```
 
 The short form `$name` is also accepted. State keys must be Dart-safe identifiers. The marker is removed from generated filenames and IDs. Loop-element text remains bound to loop data and takes precedence over this marker.
+
+### Repeated-row data discovery
+
+For a `_loop` or `_repeat` frame, every visible repeated child contributes a complete design-time row:
+
+- `_key` is the repeated child node ID.
+- Every nested `TEXT` layer contributes its visible characters as a string.
+- Every nested `_image` rectangle contributes its resolved deterministic asset reference.
+- Every nested vector contributes its SVG asset reference.
+- Binding keys use the same normalized names consumed by `inputs.loopElement.<field>`.
+
+Only the first repeated child remains as the generated feed template, but all repeated children contribute initial service data. The loop spec keeps `states.data: []`; sample rows are stored as generation metadata and copied only into a newly created `*_init` service stub. Flutter stubs use `context.notifier.setData(...)`. React stubs use `context.store.setData(context.instanceId, ...)`. Editing the service replaces the sample permanently because service files are never overwritten.
+
+Loop text and image components read only their row fields. Text has no Figma-literal fallback. Asset values remain `asset://figma/...` in neutral specs and Flutter services; React service seeds use `/images/figma/...`.
 
 **Examples:**
 
@@ -145,6 +159,8 @@ Each `FRAME`, `COMPONENT`, or `INSTANCE` node gets a `mainFrame` annotation desc
 | `clipsContent: true` | `frame.current.overflow: hidden` |
 | `layoutSizingHorizontal: FILL` | `frame.current.flex: 1` (on parent's horizontal axis) |
 | `layoutSizingVertical: FILL` | `frame.current.flex: 1` (on parent's vertical axis) |
+
+Container-like Figma styles retain uniform or mixed corner radii, per-side stroke widths, paint colors, layer opacity, drop shadows, layer blur, background blur, background images, positioning, clipping, and constraints needed by the target generators. Flutter emits typed `BoxDecoration`, `Border`, `ClipRRect`, `Opacity`, `ConstrainedBox`, `ImageFiltered`, and `BackdropFilter` structures. Rounded images are clipped rather than merely painted over a rounded background.
 
 **Page-level frames** always use `.stack` base (`column.start.stack` or `row.start.stack`) and get explicit `width: 100vw` and `height: 100vh`.
 
@@ -254,6 +270,8 @@ Resources and ownership metadata are stored under:
 ```
 
 Images and vectors are copied to `public/images/figma/` for React or `assets/images/figma/` for Flutter. Downloads are atomic, MIME-checked, SHA-256 tracked, retried for transient Figma/server failures, and limited to four concurrent transfers. Unresolved resources produce warnings and retain deterministic `asset://figma/...` spec references.
+
+Loop data discovery uses the reconciled asset name. If a resource is unresolved, the deterministic reference is still inserted into the row model so a later reconciliation can repair the file without changing the data contract.
 
 ### Font sources and target registration
 

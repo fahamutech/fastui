@@ -50,61 +50,18 @@ Translation bindings use `useFastUITranslation(key, args)`. Locale and catalog u
 
 Output: `.dart` file at `lib/modules/<module>/<spec_name>.dart`
 
-### Component
-
-The same `ihero_card.yml` above generates:
+Flutter uses immutable generated models, `AutoDisposeFamilyNotifier` implementations, and public Riverpod family providers. A stateful component watches only the fields it consumes:
 
 ```dart
-import 'package:flutter/material.dart';
-import '../stores/home/store.dart';
-import './icard_image.dart';
-import './icard_content.dart';
-
-class HeroCard extends StatefulWidget {
-  final Map<String, dynamic> inputs;
-  const HeroCard({Key? key, this.inputs = const {}}) : super(key: key);
-
-  @override
-  State<HeroCard> createState() => _HeroCardState();
-}
-
-class _HeroCardState extends State<HeroCard> {
-  Map<String, dynamic> states = {'isHovered': false};
-
-  void setStateValue(Map<String, dynamic> patch) {
-    // Flutter components watch generated Riverpod providers. Services and
-    // actions update the corresponding generated notifier.
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => Navigator.pushNamed(context, '/detail'),
-      child: Container(
-        width: double.infinity,
-        height: 280,
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFFFFF),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        clipBehavior: Clip.hardEdge,
-        child: Column(
-          children: [
-            SizedBox(
-              width: double.infinity,
-              child: CardImage(inputs: widget.inputs, states: states, setState: setStateValue),
-            ),
-            SizedBox(
-              width: double.infinity,
-              child: CardContent(inputs: widget.inputs, states: states, setState: setStateValue),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+final data = ref.watch(
+  productListProvider(_providerInstance).select((state) => state.data),
+);
+final notifier = ref.read(productListProvider(_providerInstance).notifier);
 ```
+
+There are no generated business-data `setState()` calls, `ChangeNotifier` stores, widget-owned state mirrors, or state publication bridges. Providers own the data. Widgets are `StatelessWidget`, `ConsumerWidget`, or `ConsumerStatefulWidget` according to the exact features they consume.
+
+Static Flutter styles are translated directly to typed widgets and properties. The generator covers typography, dimensions, padding/margin, backgrounds, images and positioning, uniform and per-corner radii, uniform and per-side borders, shadows, opacity, constraints, clipping, object fit, layer blur, and backdrop blur. Images with a radius receive an actual `ClipRRect`; the radius is not merely painted behind the image. Runtime `FastUIStyleHelper.buildBox` is reserved for hand-authored service-computed style maps.
 
 ---
 
@@ -128,13 +85,8 @@ FastUI **creates the file and stubs missing functions** but **never overwrites e
 ```js
 // src/services/home/ihero_card.mjs
 
-/** @param {{component: {states: object, inputs: object}, args: unknown[]}} data */
-export function computeCardStyle(data) {
-  // TODO: Implement the service.
-}
-
-/** @param {{component: {states: object, inputs: object}, args: unknown[]}} data */
-export function fetchCardData(data) {
+/** @param {import('../../fastui_runtime.mjs').FastUIComponentContext} context */
+export function computeCardStyle(context) {
   // TODO: Implement the service.
 }
 ```
@@ -144,8 +96,10 @@ export function fetchCardData(data) {
 ```dart
 // lib/services/home/i_hero_card.dart
 
-/// Receives the component state, inputs, and invocation arguments.
-dynamic computeCardStyle(Map<String, dynamic> data) {
+/// Receives Riverpod state, notifier, inputs, and invocation arguments.
+FutureOr<void> loadCard(
+  FastUIComponentContext<FastUICardStateModel, FastUICardNotifier> context,
+) {
   // TODO: Implement the service.
 }
 ```
@@ -164,6 +118,18 @@ context.inputs
 context.args
 context.setState('field', value)
 ```
+
+`setState` is a compatibility-neutral context operation, not Flutter's widget `setState`. It dispatches to the generated named setter. New generated initialization stubs make that setter explicit:
+
+```js
+context.store.setData(context.instanceId, rows); // React
+```
+
+```dart
+context.notifier.setData(rows); // Flutter
+```
+
+For loops, design-time rows appear only in a newly created `*_init` stub. The generated store default remains empty. Existing service implementations are never rewritten, so replacing the sample with repository/API data permanently removes the design seed from runtime behavior.
 
 ---
 
@@ -186,6 +152,8 @@ export const heroCardStore = createFastUIComponentStore({
 });
 ```
 
+The public API includes `get`, `subscribe`, `update`, `setField`, and one generated method per field. `FastUIComponentContext.setState('isHovered', value)` resolves and calls `setIsHovered`; it does not bypass the model through `setField`.
+
 **`src/stores/<module>/models.generated.mjs`** — regenerated on every build:
 
 ```js
@@ -206,7 +174,11 @@ class FastUIHeroCardNotifier extends AutoDisposeFamilyNotifier<
     FastUIProviderInstance<FastUIHeroCardStateModel>> {
   @override
   FastUIHeroCardStateModel build(FastUIProviderInstance<FastUIHeroCardStateModel> argument) =>
-      argument.initialState;
+      fastUIHeroCardInitialState(argument.initialOverrides);
+
+  void setIsHovered(bool? value) => state = state.copyWith(isHovered: value);
+
+  void setField(String key, dynamic value) { … }
 }
 
 final heroCardProvider = NotifierProvider.autoDispose.family<…>(…);
@@ -220,6 +192,8 @@ class FastUIHeroCardStateModel {
   final bool? isHovered;
 }
 ```
+
+Loop model documentation exposes every discovered row field—including image/vector fields—so a service can see the required data shape before replacing the generated sample.
 
 ---
 
@@ -280,6 +254,8 @@ class FastUINavigation {
 ---
 
 ## Generated manifest
+
+Generated runtime, modules, models, providers/stores, and translation catalogs are disposable and overwritten on every build. There is no legacy compatibility or migration layer. Files under `src/services/**` and `lib/services/**` are user-owned: FastUI creates missing files and appends missing hooks, but never replaces an existing function body. Stale deletion is restricted to paths recorded as generated ownership in the manifest.
 
 `.fastui/generated-manifest.json` tracks every generated file path.
 

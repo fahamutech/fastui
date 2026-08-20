@@ -195,8 +195,13 @@ function dartValue(value) {
 function reactModelsSource(group) {
     return `${group.map(item => {
         const name = `${item.componentName}StateModel`;
-        const fields = Object.entries(item.states).map(([key, value]) => ` * @property {${jsDocType(value)}} ${identifier(key)}`).join('\n');
-        return `/**\n * @readonly\n * @typedef {Object} ${name}\n${fields}\n */`;
+        const sample = item.data?.modifier?.metadata?.loopInitialData?.[0];
+        const itemName = `${item.componentName}DataItem`;
+        const itemModel = sample && typeof sample === 'object'
+            ? `/**\n * Expected item accepted by ${item.componentName}'s data setter.\n * @readonly\n * @typedef {Object} ${itemName}\n${Object.entries(sample).map(([key, value]) => ` * @property {${jsDocType(value)}} ${identifier(key)}`).join('\n')}\n */\n\n`
+            : '';
+        const fields = Object.entries(item.states).map(([key, value]) => ` * @property {${key === 'data' && sample ? `${itemName}[]` : jsDocType(value)}} ${identifier(key)}`).join('\n');
+        return `${itemModel}/**\n * @readonly\n * @typedef {Object} ${name}\n${fields}\n */`;
     }).join('\n\n')}\n`;
 }
 
@@ -222,7 +227,11 @@ function reactStoreSource(group, storePath) {
         const setters = Object.keys(item.states)
             .map(key => {
                 const field = identifier(key);
-                return `    set${field[0].toUpperCase()}${field.slice(1)}: (state, value) => ({...state, ${JSON.stringify(key)}: value}),`;
+                const sample = key === 'data' ? item.data?.modifier?.metadata?.loopInitialData?.[0] : undefined;
+                const valueType = sample && typeof sample === 'object'
+                    ? `Array<{${Object.entries(sample).map(([sampleKey, value]) => `${identifier(sampleKey)}: ${jsDocType(value)}`).join(', ')}}>`
+                    : jsDocType(item.states[key]);
+                return `    /** @param {Readonly<Record<string, unknown>>} state @param {${valueType}} value */\n    set${field[0].toUpperCase()}${field.slice(1)}: (state, value) => ({...state, ${JSON.stringify(key)}: value}),`;
             })
             .join('\n');
         return `export const ${storeName} = createFastUIComponentStore({
@@ -276,7 +285,11 @@ function flutterStoreSource(group, storePath) {
         }).join('\n');
         const setters = Object.entries(item.states).map(([key, value]) => {
             const field = identifier(key);
-            return `  void set${field[0].toUpperCase()}${field.slice(1)}(${dartType(value)} value) => state = state.copyWith(${field}: value);`;
+            const sample = key === 'data' ? item.data?.modifier?.metadata?.loopInitialData?.[0] : undefined;
+            const expected = sample && typeof sample === 'object'
+                ? `  /// Each data item exposes: ${Object.keys(sample).join(', ')}.\n`
+                : '';
+            return `${expected}  void set${field[0].toUpperCase()}${field.slice(1)}(${dartType(value)} value) => state = state.copyWith(${field}: value);`;
         }).join('\n');
         const cases = Object.entries(item.states).map(([key, value]) => {
             const field = identifier(key);

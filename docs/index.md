@@ -81,7 +81,7 @@ FIGMA_FILE=<file key from the Figma URL>
 fastui specs automate reactjs --fresh
 ```
 
-This fetches your Figma file, translates every frame/component to YAML specs, writes the routing file, and then generates source code.
+This reads the keyed local Figma cache, translates every frame/component to YAML specs, reconciles resources, writes routing, and generates source code. Use `--fresh` for the first download or an explicit refresh; ordinary runs are cache-only and cannot fail because of a Figma rate limit.
 
 ---
 

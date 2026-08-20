@@ -8,7 +8,7 @@ import {getColor} from './color.mjs';
  */
 export function getBackgroundBlurEffect(child) {
     const effect = itOrEmptyList(child?.effects).find(x => x?.type === 'BACKGROUND_BLUR');
-    return effect?.visible ? `blur(${effect?.radius ?? 0}px)` : undefined;
+    return effect && effect.visible !== false ? `blur(${effect?.radius ?? 0}px)` : undefined;
 }
 
 /**
@@ -24,8 +24,8 @@ export function getDropShadowEffect(child) {
     const y = effect?.offset?.y ?? 0;
     const radius = effect?.radius ?? 0;
     const spread = effect?.spread ?? 0;
-    const color = getColor([{type: 'SOLID', color: {...child?.color ?? {}}}]);
-    return effect?.visible
+    const color = getColor([{type: 'SOLID', color: {...effect?.color ?? {}}}]);
+    return effect && effect.visible !== false
         ? `${inner} ${x}px ${y}px ${radius}px ${spread}px ${color}`.trim()
         : undefined;
 }
@@ -37,5 +37,5 @@ export function getDropShadowEffect(child) {
  */
 export function getLayerBlurEffect(child) {
     const effect = itOrEmptyList(child?.effects).find(x => x?.type === 'LAYER_BLUR');
-    return effect?.visible ? `blur(${effect?.radius ?? 0}px)` : undefined;
+    return effect && effect.visible !== false ? `blur(${effect?.radius ?? 0}px)` : undefined;
 }

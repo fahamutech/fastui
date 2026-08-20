@@ -122,7 +122,7 @@ styles:
 styles: logics.computeCardStyle
 ```
 
-All standard CSS properties in camelCase are valid. See the schema's `$defs.css` section for the enumerated list. Common properties:
+Styles use a target-neutral CSS-like vocabulary. React emits compatible CSS properties. Flutter translates the supported semantic subset to typed widgets and properties during generation; it does not ship static style maps to the runtime. Common properties:
 
 | Property | Type | Example |
 |---|---|---|
@@ -138,7 +138,12 @@ All standard CSS properties in camelCase are valid. See the schema's `$defs.css`
 | `margin` | string / number | `'0 auto'` |
 | `fontSize` | number | `16` |
 | `fontWeight` | string / number | `'600'`, `600` |
-| `borderRadius` | string / number | `8`, `'50%'` |
+| `borderRadius` | string / number | `8`, `'8px'`, `'8px 4px'` |
+| `borderTopLeftRadius` etc. | string / number | `8` |
+| `borderWidth`, `borderTopWidth` etc. | string / number | `1`, `'2px'` |
+| `borderColor`, `borderTopColor` etc. | color string | `'#cccccc'` |
+| `boxShadow` | string | `'0 2px 8px rgba(0,0,0,.2)'` |
+| `filter` / `backdropFilter` | string | `'blur(8px)'` |
 | `border` | string | `'1px solid #ccc'` |
 | `overflow` | string | `'hidden'`, `'auto'` |
 | `objectFit` | string | `'cover'`, `'contain'` |
@@ -147,6 +152,10 @@ All standard CSS properties in camelCase are valid. See the schema's `$defs.css`
 | `position` | string | `'absolute'`, `'relative'` |
 | `top` / `left` / `right` / `bottom` | string / number | `0`, `'16px'` |
 | `zIndex` | number | `10` |
+
+Flutter also maps `fontFamily`, `fontWeight`, `fontStyle`, `fontSize`, `letterSpacing`, usable line height, text alignment/decoration, dimensions, edge insets, backgrounds, background images/positioning, borders, shadows, opacity, min/max constraints, overflow clipping, image object fit, and blur effects. A rounded image is clipped with `ClipRRect`, so its pixels respect the radius. Service-computed style maps use the generated runtime helper and follow the same box-model semantics.
+
+For cross-target border output, prefer expanded `borderWidth`/`borderColor` or per-side fields over the CSS `border` shorthand. Flutter edge inset values must be numeric or pixel-based; browser-only values such as `margin: auto` remain React-specific.
 
 ---
 
@@ -174,7 +183,7 @@ Platform-neutral attributes passed to the rendered primitive.
 | `states.<name>` | Local reactive state key |
 | `inputs.<name>` | Passed-in input (loop element, parent input) |
 | `inputs.loopElement.<field>` | A field on the current loop item |
-| `inputs.loopElement.<field>??<fallback>` | Field with a fallback literal |
+| `inputs.loopElement.<field>??<fallback>` | Optional hand-authored field fallback. Figma automation does not emit text fallbacks for loop fields. |
 | `components.<name>` | A sub-component reference |
 
 ---
@@ -197,7 +206,7 @@ states:
 State values are referenced in props or children as `'states.<name>'`.  
 State changes happen via `state.set` actions on event props.
 
-Flutter state is generated as an immutable Riverpod model plus an auto-disposed family notifier. YAML values seed the provider; generated services receive `FastUIComponentContext` and update the same provider with `context.setState(key, value)`.
+Flutter state is generated as an immutable Riverpod model plus an auto-disposed family notifier. React generates an immutable RxJS-backed component store. Both expose named setters for every state field. New generated services call those methods directly; existing services may call `context.setState(key, value)`, which dispatches through the matching generated named setter.
 
 Localized text uses an explicit binding and reacts to locale changes without becoming component state:
 
@@ -267,7 +276,7 @@ metadata:
 
 ## `condition`
 
-Renders `modifier.left` when `modifier.states.condition` is truthy, `modifier.right` otherwise.
+Renders `modifier.right` when `modifier.states.condition` is `true`, and `modifier.left` otherwise.
 
 ```yaml
 condition:
@@ -298,16 +307,13 @@ props:
     value: true
 ```
 
-### Expected output (React)
+### Conceptual output (React)
 
 ```jsx
-function AuthGate({ states, setState, inputs }) {
-  return (
-    <div id="auth-gate" style={{ width: '100%' }}>
-      {states.condition ? <LoggedIn … /> : <LoggedOut … />}
-    </div>
-  );
-}
+const condition = useFastUISelector(authGateStore, resolvedInstanceId, state => state.condition);
+return condition === true
+  ? <LoggedOut instanceId={`${resolvedInstanceId}/right/logged_out`} />
+  : <LoggedIn instanceId={`${resolvedInstanceId}/left/logged_in`} />;
 ```
 
 ---
@@ -320,7 +326,7 @@ Renders `modifier.feed` once per item in `modifier.states.data`.
 loop:
   modifier:
     states:
-      data: []           # REQUIRED — initial array
+      data: []             # runtime store always starts empty
     feed: ./list_item.yml  # REQUIRED — item template
     props:
       id: product-list
@@ -363,8 +369,44 @@ component:
   base: text
   modifier:
     props:
-      children: "inputs.loopElement.title??'No title'"
+      children: inputs.loopElement.title
 ```
+
+### Loop data model and initialization
+
+Automated Figma loops derive one row model from the repeated design children. Text values remain strings. `_image` rectangles and vectors become named asset fields:
+
+```yaml
+loop:
+  modifier:
+    metadata:
+      loopInitialData:
+        - _key: '223:101'
+          title: Waist chain
+          price: '12.50'
+          image: asset://figma/product-photo.jpg
+```
+
+This metadata is generation input, not store state. A newly created service receives the sample through the generated setter:
+
+```dart
+context.notifier.setData(<dynamic>[
+  <String, dynamic>{
+    '_key': '223:101',
+    'title': 'Waist chain',
+    'price': '12.50',
+    'image': 'asset://figma/product-photo.jpg',
+  },
+]);
+```
+
+```js
+context.store.setData(context.instanceId, [
+  {_key: '223:101', title: 'Waist chain', price: '12.50', image: '/images/figma/product-photo.jpg'},
+]);
+```
+
+Implement the service by replacing that design seed with repository/API data. Service files are user-owned and are never overwritten on regeneration.
 
 ### `scroll` values
 
@@ -375,22 +417,18 @@ component:
 | `both` | Scroll in both axes |
 | `none` | No scrolling — fixed size |
 
-### Expected output (React)
+### Conceptual output (React)
 
 ```jsx
-function ProductList({ states, setState, inputs }) {
-  return (
-    <div id="product-list" style={{ width: '100%', flex: 1, overflowY: 'auto' }}>
-      {states.data.map((loopElement, loopIndex) => (
-        <ListItem key={loopElement._key ?? loopIndex}
-          inputs={{ loopElement, loopIndex }}
-          states={states}
-          setState={setState}
-        />
-      ))}
-    </div>
-  );
-}
+const data = useFastUISelector(productListStore, resolvedInstanceId, state => state.data);
+return data.map((loopElement, loopIndex) => (
+  <ListItem
+    key={loopElement._key ?? loopElement.id ?? loopElement.key ?? loopIndex}
+    loopElement={loopElement}
+    loopIndex={loopIndex}
+    instanceId={`${resolvedInstanceId}/${loopElement._key ?? loopIndex}`}
+  />
+));
 ```
 
 ---

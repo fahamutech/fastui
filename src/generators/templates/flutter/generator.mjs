@@ -28,6 +28,15 @@ const dartIdentifier = value => `${value ?? ''}`
 
 const stateIdentifier = value => `state.${dartIdentifier(value)}`;
 
+const dartStateType = value => {
+    if (Array.isArray(value)) return 'core.List<dynamic>?';
+    if (value && typeof value === 'object') return 'Map<String, dynamic>?';
+    if (typeof value === 'boolean') return 'bool?';
+    if (typeof value === 'number') return Number.isInteger(value) ? 'int?' : 'double?';
+    if (typeof value === 'string' && !/^(?:inputs|states)\./i.test(value)) return 'String?';
+    return 'dynamic';
+};
+
 const providerIdentifier = specPath => {
     const name = specStructure(specPath, 'flutter').componentName;
     return `${name[0].toLowerCase()}${name.slice(1)}Provider`;
@@ -142,16 +151,16 @@ function valueExpression(value) {
             .trim();
 
         const fallback = text.includes('??')
-            ? valueExpression(
+            ? ` ?? ${valueExpression(
                 text
                     .split('??')
                     .slice(1)
                     .join('??')
                     .trim()
-            )
-            : 'null';
+            )}`
+            : '';
 
-        return `(widget.loopElement is Map ? widget.loopElement[${dartString(key)}] : null) ?? ${fallback}`;
+        return `(widget.loopElement is Map ? widget.loopElement[${dartString(key)}] : null)${fallback}`;
     }
 
     if (/^inputs\./i.test(text)) {
@@ -316,15 +325,16 @@ function colorExpression(value) {
         return `Color.fromRGBO(${red}, ${green}, ${blue}, ${opacity})`;
     }
 
-    const hex = value.match(
-        /^#([0-9a-f]{6}|[0-9a-f]{8})$/i
-    );
+    const hex = value.match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
 
     if (hex) {
-        const raw =
-            hex[1].length === 6
-                ? `FF${hex[1]}`
-                : hex[1];
+        const expanded = hex[1].length <= 4
+            ? [...hex[1]].map(char => `${char}${char}`).join('')
+            : hex[1];
+        // CSS uses #RRGGBBAA while Flutter's integer literal is 0xAARRGGBB.
+        const raw = expanded.length === 6
+            ? `FF${expanded}`
+            : `${expanded.slice(6)}${expanded.slice(0, 6)}`;
 
         return `Color(0x${raw.toUpperCase()})`;
     }
@@ -615,28 +625,23 @@ function edgeInsets(
 }
 
 function borderRadius(styles) {
-    if (
-        Number.isFinite(
-            Number(
-                styles.borderRadius
-            )
-        )
-    ) {
-        return `BorderRadius.circular(${Number(styles.borderRadius)})`;
+    const shorthand = `${styles.borderRadius ?? ''}`.trim().split(/\s+/).filter(Boolean).map(parsePxValue);
+    if (shorthand.length === 1 && Number.isFinite(shorthand[0])) {
+        return `BorderRadius.circular(${shorthand[0]})`;
     }
 
     const values = [
-        styles.borderTopLeftRadius,
-        styles.borderTopRightRadius,
-        styles.borderBottomRightRadius,
-        styles.borderBottomLeftRadius
+        styles.borderTopLeftRadius ?? shorthand[0],
+        styles.borderTopRightRadius ?? shorthand[1] ?? shorthand[0],
+        styles.borderBottomRightRadius ?? shorthand[2] ?? shorthand[0],
+        styles.borderBottomLeftRadius ?? shorthand[3] ?? shorthand[1] ?? shorthand[0]
     ];
 
     if (
         !values.some(
             value =>
                 Number.isFinite(
-                    Number(value)
+                    parsePxValue(value)
                 )
         )
     ) {
@@ -644,11 +649,32 @@ function borderRadius(styles) {
     }
 
     return `BorderRadius.only(
-        topLeft: Radius.circular(${Number(values[0] ?? 0)}),
-        topRight: Radius.circular(${Number(values[1] ?? 0)}),
-        bottomRight: Radius.circular(${Number(values[2] ?? 0)}),
-        bottomLeft: Radius.circular(${Number(values[3] ?? 0)})
+        topLeft: Radius.circular(${parsePxValue(values[0]) || 0}),
+        topRight: Radius.circular(${parsePxValue(values[1]) || 0}),
+        bottomRight: Radius.circular(${parsePxValue(values[2]) || 0}),
+        bottomLeft: Radius.circular(${parsePxValue(values[3]) || 0})
     )`;
+}
+
+function borderExpression(styles) {
+    const side = name => {
+        const width = parsePxValue(styles[`border${name}Width`] ?? styles.borderWidth);
+        const color = colorExpression(styles[`border${name}Color`] ?? styles.borderColor);
+        return Number.isFinite(width) && width > 0 && color
+            ? `BorderSide(color: ${color}, width: ${width})`
+            : 'BorderSide.none';
+    };
+    const top = side('Top');
+    const right = side('Right');
+    const bottom = side('Bottom');
+    const left = side('Left');
+    if ([top, right, bottom, left].every(value => value === 'BorderSide.none')) return null;
+    if (top === right && top === bottom && top === left) {
+        const width = parsePxValue(styles.borderTopWidth ?? styles.borderWidth);
+        const color = colorExpression(styles.borderTopColor ?? styles.borderColor);
+        return `Border.all(color: ${color}, width: ${width})`;
+    }
+    return `Border(top: ${top}, right: ${right}, bottom: ${bottom}, left: ${left})`;
 }
 
 function backgroundImage(styles) {
@@ -687,7 +713,16 @@ function backgroundImage(styles) {
             ? 'contain'
             : 'cover';
 
-    return `DecorationImage(image: ${provider}, fit: BoxFit.${fit})`;
+    const alignment = {
+        center: 'center', top: 'topCenter', bottom: 'bottomCenter',
+        left: 'centerLeft', right: 'centerRight',
+        'top left': 'topLeft', 'left top': 'topLeft',
+        'top right': 'topRight', 'right top': 'topRight',
+        'bottom left': 'bottomLeft', 'left bottom': 'bottomLeft',
+        'bottom right': 'bottomRight', 'right bottom': 'bottomRight',
+    }[`${styles.backgroundPosition ?? 'center'}`.trim().toLowerCase()] ?? 'center';
+
+    return `DecorationImage(image: ${provider}, fit: BoxFit.${fit}, alignment: Alignment.${alignment})`;
 }
 
 function backdropBlur(styles) {
@@ -724,6 +759,21 @@ function applyBackdropBlur(
               ),
               child: ${child}
             )
+          )`;
+}
+
+function layerBlur(styles) {
+    const match = `${styles.filter ?? ''}`.match(/blur\(\s*([\d.]+)px\s*\)/i);
+    return match && Number.isFinite(Number(match[1])) ? Number(match[1]) : null;
+}
+
+function applyLayerBlur(styles, child) {
+    const radius = layerBlur(styles);
+    return radius === null
+        ? child
+        : `ImageFiltered(
+            imageFilter: ui.ImageFilter.blur(sigmaX: ${radius}, sigmaY: ${radius}),
+            child: ${child}
           )`;
 }
 
@@ -1006,29 +1056,8 @@ function containerExpression(
         );
     }
 
-    const borderColor =
-        colorExpression(
-            styles.borderColor
-        );
-
-    const borderWidth =
-        Number(
-            styles.borderTopWidth ??
-            styles.borderWidth ??
-            0
-        );
-
-    if (
-        borderColor &&
-        borderWidth > 0
-    ) {
-        decoration.push(
-            `border: Border.all(
-                color: ${borderColor},
-                width: ${borderWidth}
-            )`
-        );
-    }
+    const border = borderExpression(styles);
+    if (border) decoration.push(`border: ${border}`);
 
     if (decoration.length) {
         args.push(
@@ -1099,11 +1128,11 @@ function containerExpression(
             )`
         );
 
-    const styledContainer = applyOpacityWrap(
-        styles,
-        applyOverflowClip(
-            styles,
-            applyConstraintBox(styles, container)
+    const styledContainer = applyOpacityWrap(styles,
+        applyLayerBlur(styles,
+            applyOverflowClip(styles,
+                applyConstraintBox(styles, container)
+            )
         )
     );
 
@@ -1171,6 +1200,31 @@ function containerExpression(
 // PRIMITIVE EXPRESSIONS
 // -----------------------------------------------------------------------------
 
+function textStyleProperties(styles = {}) {
+    const properties = [];
+    const color = colorExpression(styles.color);
+    if (color) properties.push(`color: ${color}`);
+    const fontSize = parsePxValue(styles.fontSize);
+    if (Number.isFinite(fontSize)) properties.push(`fontSize: ${fontSize}`);
+    const rawWeight = Number(styles.fontWeight);
+    if (Number.isFinite(rawWeight)) {
+        const weight = Math.max(100, Math.min(900, Math.round(rawWeight / 100) * 100));
+        properties.push(`fontWeight: FontWeight.w${weight}`);
+    }
+    if (styles.fontFamily) properties.push(`fontFamily: ${dartString(styles.fontFamily)}`);
+    if (`${styles.fontStyle}`.toLowerCase() === 'italic') properties.push('fontStyle: FontStyle.italic');
+    const letterSpacing = parsePxValue(styles.letterSpacing);
+    if (Number.isFinite(letterSpacing)) properties.push(`letterSpacing: ${letterSpacing}`);
+    const lineHeight = parsePxValue(styles.lineHeightPx ?? styles.lineHeight);
+    if (Number.isFinite(lineHeight) && Number.isFinite(fontSize) && fontSize > 0) {
+        properties.push(`height: ${lineHeight / fontSize}`);
+    }
+    const decoration = `${styles.textDecoration ?? ''}`.toLowerCase();
+    if (decoration.includes('underline')) properties.push('decoration: TextDecoration.underline');
+    else if (decoration.includes('line-through')) properties.push('decoration: TextDecoration.lineThrough');
+    return properties;
+}
+
 function textExpression(data) {
     const styles =
         getStyles(data);
@@ -1180,107 +1234,7 @@ function textExpression(data) {
 
     const rawChildren = data?.modifier?.props?.children ?? '';
 
-    const style = [];
-
-    const color =
-        colorExpression(
-            styles.color
-        );
-
-    if (color) {
-        style.push(
-            `color: ${color}`
-        );
-    }
-
-    if (
-        Number.isFinite(
-            Number(
-                styles.fontSize
-            )
-        )
-    ) {
-        style.push(
-            `fontSize: ${Number(styles.fontSize)}`
-        );
-    }
-
-    if (
-        Number.isFinite(
-            Number(
-                styles.fontWeight
-            )
-        )
-    ) {
-        const weight =
-            Math.max(
-                100,
-                Math.min(
-                    900,
-                    Math.round(
-                        Number(
-                            styles.fontWeight
-                        ) / 100
-                    ) * 100
-                )
-            );
-
-        style.push(
-            `fontWeight: FontWeight.w${weight}`
-        );
-    }
-
-    if (
-        styles.fontFamily
-    ) {
-        style.push(
-            `fontFamily: ${dartString(styles.fontFamily)}`
-        );
-    }
-
-    if (
-        `${styles.fontStyle}`
-            .toLowerCase() ===
-        'italic'
-    ) {
-        style.push(
-            'fontStyle: FontStyle.italic'
-        );
-    }
-
-    if (
-        Number.isFinite(
-            Number(
-                styles.letterSpacing
-            )
-        )
-    ) {
-        style.push(
-            `letterSpacing: ${Number(styles.letterSpacing)}`
-        );
-    }
-
-    if (
-        Number.isFinite(
-            Number(
-                styles.lineHeightPx
-            )
-        ) &&
-        Number(
-            styles.fontSize
-        ) > 0
-    ) {
-        style.push(
-            `height: ${
-                Number(
-                    styles.lineHeightPx
-                ) /
-                Number(
-                    styles.fontSize
-                )
-            }`
-        );
-    }
+    const style = textStyleProperties(styles);
 
     const textStyle =
         style.length
@@ -1703,16 +1657,7 @@ function inputExpression(data) {
             )
         );
 
-    const inputRadius =
-        Number.isFinite(
-            Number(
-                styles.borderRadius
-            )
-        )
-            ? Number(
-                styles.borderRadius
-            )
-            : 0;
+    const inputRadius = borderRadius(styles) ?? 'BorderRadius.zero';
 
     if (
         inputBorderColor &&
@@ -1721,9 +1666,7 @@ function inputExpression(data) {
         const border =
             `OutlineInputBorder(
                 borderRadius:
-                    BorderRadius.circular(
-                        ${inputRadius}
-                    ),
+                    ${inputRadius},
                 borderSide:
                     BorderSide(
                         color: ${inputBorderColor},
@@ -1749,6 +1692,11 @@ function inputExpression(data) {
         );
     }
 
+    if (!inputBorderColor && borderRadius(styles)) {
+        const border = `OutlineInputBorder(borderRadius: ${inputRadius}, borderSide: BorderSide.none)`;
+        decoration.push(`border: ${border}`, `enabledBorder: ${border}`, `focusedBorder: ${border}`);
+    }
+
     if (decoration.length) {
         args.push(
             `decoration: InputDecoration(
@@ -1767,6 +1715,15 @@ function inputExpression(data) {
         );
     }
 
+    const inputTextStyle = textStyleProperties(styles);
+    if (inputTextStyle.length) args.push(`style: TextStyle(${inputTextStyle.join(', ')})`);
+    const textAlign = {start: 'start', left: 'left', center: 'center', end: 'end', right: 'right'}[`${styles.textAlign ?? ''}`.toLowerCase()];
+    if (textAlign) args.push(`textAlign: TextAlign.${textAlign}`);
+    if (props.readOnly === true) args.push('readOnly: true');
+    if (props.enabled === false || props.disabled === true) args.push('enabled: false');
+    if (Number.isFinite(Number(props.maxLines))) args.push(`maxLines: ${Number(props.maxLines)}`);
+    if (Number.isFinite(Number(props.minLines))) args.push(`minLines: ${Number(props.minLines)}`);
+
     if (/^(?:logics|services)\./i.test(`${props.onSubmit ?? ''}`)) {
         args.push(`onFieldSubmitted: (value) => ${logicCall(props.onSubmit, 'value')}`);
     }
@@ -1776,28 +1733,15 @@ function inputExpression(data) {
             ${args.join(', ')}
         )`;
 
-    const width =
-        dimensionExpression(
-            styles.width,
-            'width'
-        );
-
-    const height =
-        dimensionExpression(
-            styles.height,
-            'height'
-        );
-
-    return (
-        width ||
-        height
-    )
-        ? `SizedBox(
-            ${width ? `width: ${width},` : ''}
-            ${height ? `height: ${height},` : ''}
-            child: ${field}
-          )`
-        : field;
+    const outerStyles = {...styles};
+    for (const key of Object.keys(outerStyles)) {
+        if (key === 'padding' || key.startsWith('padding') || key === 'background' || key === 'backgroundColor' || key.startsWith('border')) {
+            delete outerStyles[key];
+        }
+    }
+    // Radius remains useful for a matching shadow shape.
+    if (styles.borderRadius !== undefined) outerStyles.borderRadius = styles.borderRadius;
+    return containerExpression(outerStyles, field);
 }
 
 
@@ -1895,7 +1839,19 @@ function componentBody(data) {
     if (
         base === 'image'
     ) {
-        return imageExpression(data);
+        const styles = getStyles(data);
+        const image = imageExpression(data);
+        if (typeof styles === 'string') {
+            return `FastUIStyleHelper.buildBox(
+              ${flutterLogicCallExpression(styles)},
+              child: ${image}
+            )`;
+        }
+        const radius = borderRadius(styles);
+        const clippedImage = radius
+            ? `ClipRRect(borderRadius: ${radius}, child: ${image})`
+            : image;
+        return containerExpression(styles, clippedImage);
     }
 
     if (
@@ -2383,8 +2339,8 @@ function layoutMetadataMembers(
         `static const String fastUIScroll = ${scrollExpr};`,
         `static const String fastUIWidthMode = ${widthModeExpr};`,
         `static const String fastUIHeightMode = ${heightModeExpr};`,
-        `static const double? fastUIFixedWidth = ${fixedWidthExpr};`,
-        `static const double? fastUIFixedHeight = ${fixedHeightExpr};`,
+        `static const fastUIFixedWidth = ${fixedWidthExpr};`,
+        `static const fastUIFixedHeight = ${fixedHeightExpr};`,
         `static const int fastUIFlex = ${flexExpr};`,
     ].join('\n  ');
 }
@@ -2944,115 +2900,8 @@ function composeFrame(
             )`;
     }
 
-    if (
-        hasBaseContainerStyles
-    ) {
-        const contArgs = [];
-        const decorArgs = [];
-
-        const width =
-            transformSize(
-                baseContainerStyles?.width ??
-                null
-            );
-
-        const height =
-            transformSize(
-                baseContainerStyles?.height ??
-                null
-            );
-
-        if (width) {
-            contArgs.push(
-                `width: ${width}`
-            );
-        }
-
-        if (height) {
-            contArgs.push(
-                `height: ${height}`
-            );
-        }
-
-        const padding =
-            edgeInsets(
-                baseContainerStyles,
-                'padding'
-            );
-
-        const margin =
-            edgeInsets(
-                baseContainerStyles,
-                'margin'
-            );
-
-        if (padding) {
-            decorArgs.push(
-                `padding: ${padding}`
-            );
-        }
-
-        if (margin) {
-            decorArgs.push(
-                `margin: ${margin}`
-            );
-        }
-
-        const decoList = [];
-
-        const color =
-            colorExpression(
-                baseContainerStyles.backgroundColor ??
-                baseContainerStyles.background
-            );
-
-        if (color) {
-            decoList.push(
-                `color: ${color}`
-            );
-        }
-
-        const radius =
-            borderRadius(
-                baseContainerStyles
-            );
-
-        if (radius) {
-            decoList.push(
-                `borderRadius: ${radius}`
-            );
-        }
-
-        if (
-            decoList.length
-        ) {
-            decorArgs.push(
-                `decoration:
-                    BoxDecoration(
-                        ${decoList.join(', ')}
-                    )`
-            );
-        }
-
-        if (
-            contArgs.length > 0
-        ) {
-            decorArgs.push(
-                `${contArgs.join(', ')}`,
-                `child: ${rowCol}`
-            );
-        } else {
-            decorArgs.push(
-                `child: ${rowCol}`
-            );
-        }
-
-        return applyScrollableArea(
-            scroll,
-            `Container(
-                ${decorArgs.join(', ')}
-            )`
-        );
+    if (hasBaseContainerStyles) {
+        return applyScrollableArea(scroll, containerExpression(baseContainerStyles, rowCol));
     }
 
     return applyScrollableArea(
@@ -3099,6 +2948,12 @@ async function serviceImportAndStubs(
             flutterReturns: (() => {
                 const styleLogic = parseLogicReference(data?.modifier?.styles);
                 return styleLogic ? {[dartIdentifier(styleLogic.name)]: 'Map<String, dynamic>'} : {};
+            })(),
+
+            initialStateByFunction: (() => {
+                const sample = data?.modifier?.metadata?.loopInitialData;
+                const initName = parseLogicReference(data?.modifier?.effects?.onInit?.body)?.name;
+                return initName && Array.isArray(sample) ? {[initName]: {data: sample}} : {};
             })(),
 
             flutterContext: Object.keys(getStates(data)).length > 0 ? {
@@ -3249,12 +3104,16 @@ function contextMembers(
       inputs: <String, dynamic>{${inputEntries.join(', ')}},
       args: argument == null ? <dynamic>[] : argument is core.List ? core.List<dynamic>.from(argument) : <dynamic>[argument],
       componentId: widget.instanceId ?? ${dartString(specPath)},
-      setState: (key, value) => throw StateError('This component has no state'),
+      setters: const <String, void Function(dynamic)>{},
     );`;
     }
     const model = stateModelName(specPath);
     const notifier = notifierName(specPath);
     const provider = providerIdentifier(specPath);
+    const typedSetters = Object.entries(getStates(data)).map(([key, value]) => {
+        const field = dartIdentifier(key);
+        return `${dartString(key)}: (value) => notifier.set${field[0].toUpperCase()}${field.slice(1)}(value as ${dartStateType(value)})`;
+    }).join(', ');
     return `FastUIComponentContext<${model}, ${notifier}> _componentContext(
         BuildContext context,
         WidgetRef ref,
@@ -3270,7 +3129,7 @@ function contextMembers(
         inputs: <String, dynamic>{${inputEntries.join(', ')}},
         args: argument == null ? <dynamic>[] : argument is core.List ? core.List<dynamic>.from(argument) : <dynamic>[argument],
         componentId: instance.id,
-        setState: notifier.setField,
+        setters: <String, void Function(dynamic)>{${typedSetters}},
       );
     }`;
 }
@@ -3684,10 +3543,7 @@ class _${name}State
 }`;
 
     const blurImport =
-        JSON.stringify(data)
-            .includes(
-                'backdropFilter'
-            )
+        /(?:backdropFilter|WebkitBackdropFilter|"filter")/.test(JSON.stringify(data))
             ? "import 'dart:ui' as ui;"
             : '';
 

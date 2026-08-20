@@ -123,6 +123,7 @@ export function getContainerLikeStyles(child, backGroundImage) {
         borderTopRightRadius: child?.rectangleCornerRadii?.[1],
         borderBottomRightRadius: child?.rectangleCornerRadii?.[2],
         borderBottomLeftRadius: child?.rectangleCornerRadii?.[3],
+        opacity: child?.opacity,
         backgroundColor: getColor(child?.fills),
         backgroundSize: backGroundImage ? 'cover' : undefined,
         backgroundPosition: backGroundImage ? 'center' : undefined,

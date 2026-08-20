@@ -480,6 +480,66 @@ describe('Specs', function () {
             expect(widget).not.to.include('textAutoResize');
         });
 
+        it('maps Flutter image, frame, input, border, radius, and CSS color styles', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const moduleRoot = join(root, 'lib', 'blueprints', 'modules');
+            const imagePath = join(moduleRoot, 'rounded_image.yml');
+            const framePath = join(moduleRoot, 'styled_frame.yml');
+            const inputPath = join(moduleRoot, 'styled_input.yml');
+
+            await composeComponent({path: imagePath, projectPath: root, data: {
+                base: 'image', modifier: {
+                    styles: {
+                        width: 120, height: 80, objectFit: 'contain', borderRadius: '12px',
+                        borderTopWidth: 1, borderRightWidth: 2, borderBottomWidth: 3, borderLeftWidth: 4,
+                        borderColor: '#1234', boxShadow: '0 2 8 0 rgba(0,0,0,0.25)',
+                    },
+                    props: {src: 'asset://figma/photo.png'},
+                },
+            }});
+            await composeComponent({path: framePath, projectPath: root, data: {
+                base: 'container', modifier: {
+                    frame: {base: {type: 'column.start', styles: {
+                        borderTopLeftRadius: 2, borderTopRightRadius: 4,
+                        borderBottomRightRadius: 6, borderBottomLeftRadius: 8,
+                        borderWidth: 1, borderColor: '#112233', opacity: 0.75,
+                        minWidth: 40, overflow: 'hidden',
+                    }}},
+                },
+            }});
+            await composeComponent({path: inputPath, projectPath: root, data: {
+                base: 'input', modifier: {
+                    styles: {
+                        fontFamily: 'Inter', fontWeight: 700, fontSize: '16px', color: '#112233',
+                        textAlign: 'center', borderRadius: '8px 4px', backgroundColor: '#ffffff',
+                        margin: '4 8', width: 240,
+                    },
+                    props: {placeholder: 'Search', readOnly: true},
+                },
+            }});
+
+            const image = await readFile(join(root, 'lib', 'modules', 'rounded_image.dart'), 'utf8');
+            const frame = await readFile(join(root, 'lib', 'modules', 'styled_frame.dart'), 'utf8');
+            const input = await readFile(join(root, 'lib', 'modules', 'styled_input.dart'), 'utf8');
+            expect(image).to.include('ClipRRect(borderRadius: BorderRadius.circular(12)');
+            expect(image).to.include('fit: BoxFit.contain');
+            expect(image).to.include('Border(top: BorderSide(');
+            expect(image).to.include('Color(0x44112233)');
+            expect(image).to.include('boxShadow: <BoxShadow>[');
+            expect(frame).to.include('topLeft: Radius.circular(2)');
+            expect(frame).to.include('bottomLeft: Radius.circular(8)');
+            expect(frame).to.include('ConstrainedBox(');
+            expect(frame).to.include('ClipRRect(');
+            expect(frame).to.include('Opacity(');
+            expect(input).to.include("fontFamily: 'Inter'");
+            expect(input).to.include('fontWeight: FontWeight.w700');
+            expect(input).to.include('textAlign: TextAlign.center');
+            expect(input).to.include('topLeft: Radius.circular(8)');
+            expect(input).to.include('topRight: Radius.circular(4)');
+            expect(input).to.include('readOnly: true');
+            expect(input).to.include('margin: EdgeInsets.fromLTRB(8, 4, 8, 4)');
+        });
+
         it('retains service-computed Flutter styles without runtime override maps', async function () {
             process.env.FASTUI_TEMPLATE = 'flutter';
             const specPath = join(root, 'lib', 'blueprints', 'modules', 'dynamic_style.yml');
@@ -623,7 +683,18 @@ describe('Specs', function () {
                 children: [{
                     id: 'list', name: 'Items_repeat', type: 'FRAME', layoutMode: 'VERTICAL',
                     primaryAxisAlignItems: 'MIN', layoutSizingVertical: 'FILL',
-                    children: [{id: 'item', name: 'Item_row', type: 'FRAME', layoutMode: 'HORIZONTAL', children: []}]
+                    children: [
+                        {id: 'item', name: 'Item_row', type: 'FRAME', layoutMode: 'HORIZONTAL', children: [
+                            {id: 'title', name: 'Title_text', type: 'TEXT', characters: 'First item', visible: true, style: {}},
+                            {id: 'price', name: 'Price_text', type: 'TEXT', characters: '12.50', visible: true, style: {}},
+                            {id: 'photo', name: 'Photo_image', type: 'RECTANGLE', fills: [{type: 'IMAGE', imageRef: 'photo-ref'}]},
+                        ]},
+                        {id: 'item-2', name: 'Item_row', type: 'FRAME', layoutMode: 'HORIZONTAL', children: [
+                            {id: 'title-2', name: 'Title_text', type: 'TEXT', characters: 'Second item', visible: true, style: {}},
+                            {id: 'price-2', name: 'Price_text', type: 'TEXT', characters: '20.00', visible: true, style: {}},
+                            {id: 'photo-2', name: 'Photo_image', type: 'RECTANGLE', fills: [{type: 'IMAGE', imageRef: 'photo-ref-2'}]},
+                        ]},
+                    ]
                 }]
             }]};
             const srcPath = join(root, 'lib', 'blueprints');
@@ -631,6 +702,22 @@ describe('Specs', function () {
             await walkFrameChildren({children, srcPath});
             const listSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'ilist_Items_repeat.yml'), 'utf8');
             expect(listSpec).to.include('scroll: vertical');
+            const parsedLoop = yaml.load(listSpec).loop;
+            expect(parsedLoop.modifier.states.data).to.deep.equal([]);
+            expect(parsedLoop.modifier.metadata.loopInitialData).to.deep.equal([
+                {_key: 'item', title: 'First item', price: '12.50', photo: 'asset://figma/photo-ref.png'},
+                {_key: 'item-2', title: 'Second item', price: '20.00', photo: 'asset://figma/photo-ref-2.png'},
+            ]);
+            const titleSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'ititle_Title_text.yml'), 'utf8');
+            expect(titleSpec).to.include('children: inputs.loopElement.title');
+            expect(titleSpec).not.to.include('First item');
+
+            await generateCodeFromSpecs({root: srcPath, projectPath: root});
+            const loopService = await readFile(join(root, 'lib', 'services', 'presentation', 'pages', 'ilist_items_repeat.dart'), 'utf8');
+            expect(loopService).to.include("context.notifier.setData(<dynamic>[<String, dynamic>{\"_key\": \"item\", \"title\": \"First item\", \"price\": \"12.50\", \"photo\": \"asset://figma/photo-ref.png\"}");
+            const loopStore = await readFile(join(root, 'lib', 'stores', 'presentation', 'providers.generated.dart'), 'utf8');
+            expect(loopStore).to.match(/"data": <dynamic>\[\],/);
+            expect(loopStore).not.to.include('First item');
 
             const documentWithExplicit = {children: [{
                 id: 'page2', name: 'scroll_page2', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
@@ -657,6 +744,45 @@ describe('Specs', function () {
             await walkFrameChildren({children: children3, srcPath});
             const areaSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'ibody_Body_container.yml'), 'utf8');
             expect(areaSpec).to.include('scroll: vertical');
+        });
+
+        it('moves authored loop samples into typed service seeds for React', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const specRoot = join(root, 'src', 'blueprints', 'modules', 'shop');
+            await mkdir(specRoot, {recursive: true});
+            await writeFile(join(specRoot, 'row.yml'), 'component: {}\n');
+            await writeFile(join(specRoot, 'products.yml'), `loop:
+  modifier:
+    feed: ./row.yml
+    states:
+      data:
+        - _key: product-1
+          name: Coffee
+          price: '12.50'
+          photo: asset://figma/coffee.png
+    effects:
+      onInit:
+        body: logics.products_init
+`);
+
+            await generateCodeFromSpecs({root: join(root, 'src', 'blueprints'), projectPath: root});
+            const store = await readFile(join(root, 'src', 'stores', 'shop', 'stores.generated.mjs'), 'utf8');
+            const models = await readFile(join(root, 'src', 'stores', 'shop', 'models.generated.mjs'), 'utf8');
+            const servicePath = join(root, 'src', 'services', 'shop', 'products.mjs');
+            const service = await readFile(servicePath, 'utf8');
+
+            expect(store).to.match(/"data": \[\],/);
+            expect(store).not.to.include('Coffee');
+            expect(store).to.include('Array<{_key: string, name: string, price: string, photo: string}>');
+            expect(models).to.include('@typedef {Object} ProductsDataItem');
+            expect(models).to.include('@property {ProductsDataItem[]} data');
+            expect(service).to.include('context.store.setData(context.instanceId, [');
+            expect(service).to.include('"name": "Coffee"');
+            expect(service).to.include('"photo": "/images/figma/coffee.png"');
+
+            await writeFile(servicePath, 'export function products_init(context) { context.setState("data", []); }\n');
+            await generateCodeFromSpecs({root: join(root, 'src', 'blueprints'), projectPath: root});
+            expect(await readFile(servicePath, 'utf8')).to.equal('export function products_init(context) { context.setState("data", []); }\n');
         });
 
         it('initializes a Flutter project and selects lib/blueprints', async function () {
@@ -1089,6 +1215,7 @@ describe('Specs', function () {
             expect(reactStore).to.include('export const profileStore = createFastUIComponentStore');
             expect(reactStore).to.match(/"signedIn":\s*false/);
             expect(reactStore).to.include('setSignedIn: (state, value)');
+            expect(await readFile(join(root, 'src', 'fastui_runtime.mjs'), 'utf8')).to.include("const setterName = 'set' + String(key)");
             expect(reactModels).to.include('@typedef {Object} ProfileStateModel');
             expect(reactModels).to.include('@property {boolean} signedIn');
             expect(reactWidget).not.to.include('signedIn:false');
@@ -1115,6 +1242,8 @@ describe('Specs', function () {
             const flutterModels = await readFile(join(root, 'lib', 'stores', 'account', 'models.generated.dart'), 'utf8');
             expect(flutterWidget).to.include("import '../../services/account/profile.dart';");
             expect(flutterWidget).to.include('ref.watch(profileProvider(_providerInstance))');
+            expect(flutterWidget).to.include("'signedIn': (value) => notifier.setSignedIn(value as bool?)");
+            expect(flutterWidget).not.to.include('setState: notifier.setField');
             expect(flutterWidget).to.match(/FastUIProviderInstance<FastUIProfileStateModel>\(\s*id: widget\.instanceId \?\? 'account\/profile'/);
             expect(flutterStore).to.include('class FastUIProfileNotifier extends AutoDisposeFamilyNotifier');
             expect(flutterStore).to.include('final profileProvider = NotifierProvider.autoDispose.family');

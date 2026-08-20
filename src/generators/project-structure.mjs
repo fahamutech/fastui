@@ -96,11 +96,38 @@ function ensureImport(source, statement) {
     return source.includes(statement) ? source : `${statement}\n${source}`;
 }
 
+function dartServiceValue(value) {
+    if (value === null || value === undefined) return 'null';
+    if (typeof value === 'string') return JSON.stringify(value).replaceAll('$', '\\$');
+    if (typeof value === 'number' || typeof value === 'boolean') return `${value}`;
+    if (Array.isArray(value)) return `<dynamic>[${value.map(dartServiceValue).join(', ')}]`;
+    return `<String, dynamic>{${Object.entries(value).map(([key, entry]) => `${dartServiceValue(key)}: ${dartServiceValue(entry)}`).join(', ')}}`;
+}
+
+function generatedSetterName(key) {
+    const field = `${key}`.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^[^a-zA-Z_]/, '_$&');
+    return `set${field[0]?.toUpperCase() ?? ''}${field.slice(1)}`;
+}
+
+function normalizeReactServiceValue(value) {
+    return typeof value === 'string'
+        ? value.replace(/^asset:\/\/figma\//, '/images/figma/')
+        : Array.isArray(value)
+            ? value.map(normalizeReactServiceValue)
+            : value && typeof value === 'object'
+                ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, normalizeReactServiceValue(entry)]))
+                : value;
+}
+
+function reactServiceValue(value) {
+    return JSON.stringify(normalizeReactServiceValue(value), null, 2).replaceAll('\n', '\n  ');
+}
+
 /**
  * Services are user-owned. Existing files and functions are never rewritten,
  * Existing bodies are never rewritten; only missing imports and hooks are appended.
  */
-export async function ensureServiceFile({servicePath, functions, template, flutterContext, flutterReturns = {}}) {
+export async function ensureServiceFile({servicePath, functions, template, flutterContext, flutterReturns = {}, initialStateByFunction = {}}) {
     await mkdir(dirname(servicePath), {recursive: true});
     if (!(await exists(servicePath))) {
         await writeFile(servicePath, '');
@@ -131,9 +158,16 @@ export async function ensureServiceFile({servicePath, functions, template, flutt
                 source = ensureImport(source, `import '${relativeImport(servicePath, flutterContext.modelsPath)}';`);
                 source = ensureImport(source, `import '${relativeImport(servicePath, flutterContext.providersPath)}';`);
             }
+            const initialState = initialStateByFunction[functionName];
+            const reactSeed = initialState
+                ? Object.entries(initialState).map(([key, value]) => `  context.store.${generatedSetterName(key)}(context.instanceId, ${reactServiceValue(value)});`).join('\n')
+                : '';
+            const flutterSeed = initialState
+                ? Object.entries(initialState).map(([key, value]) => `  context.notifier.${generatedSetterName(key)}(${dartServiceValue(value)});`).join('\n')
+                : '';
             additions.push(template === 'flutter'
-                ? `/// Receives the Riverpod-backed component state, inputs, and invocation arguments.\n${flutterReturn} ${functionName}(${flutterContext ? `FastUIComponentContext<${flutterContext.model}, ${flutterContext.notifier}>` : 'dynamic'} context) {\n  // TODO: Implement the service.\n  ${flutterReturn.startsWith('Map<') ? 'return const <String, dynamic>{};' : ''}\n}`
-                : `/** @param {import('${relativeImport(servicePath, resolve(translationRootFromServicePath(servicePath), 'fastui_runtime.mjs'))}').FastUIComponentContext} context */\nexport function ${functionName}(context) {\n  // TODO: Implement the service.\n}`);
+                ? `/// Receives the Riverpod-backed component state, inputs, and invocation arguments.\n${flutterReturn} ${functionName}(${flutterContext ? `FastUIComponentContext<${flutterContext.model}, ${flutterContext.notifier}>` : 'dynamic'} context) {\n  ${flutterSeed ? `// Replace this design-time seed with service data when implementing this hook.\n${flutterSeed}` : (flutterReturn.startsWith('Map<') ? 'return const <String, dynamic>{};' : '// TODO: Implement the service.')}\n}`
+                : `/** @param {import('${relativeImport(servicePath, resolve(translationRootFromServicePath(servicePath), 'fastui_runtime.mjs'))}').FastUIComponentContext} context */\nexport function ${functionName}(context) {\n${reactSeed ? `  // Replace this design-time seed with service data when implementing this hook.\n${reactSeed}` : '  // TODO: Implement the service.'}\n}`);
         }
     }
     if (additions.length) {

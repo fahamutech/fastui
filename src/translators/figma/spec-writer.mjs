@@ -84,7 +84,7 @@ export async function createTextComponent(filename, child) {
         ? `${logicsFnName({...child, name: stateText.descriptiveName})}_init`
         : undefined;
     const childrenProp = isLoopEl
-        ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??${JSON.stringify(raw)}`
+        ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}`
         : stateText
             ? `states.${stateText.key}`
             : {translation: {key: translationKey(raw), fallback: raw}};
@@ -100,6 +100,7 @@ export async function createTextComponent(filename, child) {
                     letterSpacing: figmaStyle.letterSpacing,
                     lineHeightPx: figmaStyle.lineHeightPx,
                     ...getSizeStyles(child),
+                    opacity: child?.opacity,
                     color: getColor(child?.fills),
                     fontStyle: figmaStyle.italic || `${figmaStyle.fontStyle ?? ''}`.toUpperCase() === 'ITALIC'
                         ? 'italic'
@@ -285,14 +286,21 @@ export async function createConditionComponent({filename, child, routeLookup}) {
 export async function createLoopComponent({filename, child}) {
     child = structuredClone(child);
     const last = child?.children?.[0];
+    const initialData = child.childrenData ?? [];
     // Loop nodes get an onInit effect that calls a logics function so the
     // generator auto-creates a stub for loading the list data.
     const loopFn = `logics.${logicsFnName(child)}_init`;
     const yamlData = yaml.dump({
         loop: {
             modifier: {
-                states: {data: child.childrenData ?? []},
-                metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
+                // Runtime data is initialized by the generated service stub.
+                // Keeping the store seed empty prevents design samples from
+                // becoming a second source of truth.
+                states: {data: []},
+                metadata: {
+                    surface: child?.surfacePresentation,
+                    loopInitialData: initialData.length > 0 ? initialData : undefined,
+                },
                 props: {
                     id: sanitizeFullColon(`${child?.name}`),
                     scroll: loopScrollDirection(child),

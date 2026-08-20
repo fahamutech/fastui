@@ -92,8 +92,8 @@ fastui specs automate flutter --fresh
 
 1. Ensures blueprint folder exists.
 2. Loads `.env` from the project root.
-3. Reads `FIGMA_TOKEN` and `FIGMA_FILE` from environment.
-4. Fetches the Figma document (cached unless `--fresh`).
+3. Reads `FIGMA_FILE`; reads `FIGMA_TOKEN` only for `--fresh` network access.
+4. Reads the keyed local Figma document cache, or downloads it only with `--fresh`.
 5. Translates all frames/components to YAML specs.
 6. Writes routing file (`AppRoute.jsx` or `app_route.dart`).
 
@@ -101,7 +101,7 @@ fastui specs automate flutter --fresh
 
 | Variable | Description |
 |---|---|
-| `FIGMA_TOKEN` | Figma personal access token. Generate at figma.com → Account → Personal access tokens. |
+| `FIGMA_TOKEN` | Figma personal access token. Required only with `--fresh`. |
 | `FIGMA_FILE` | Figma file key. Visible in the URL: `figma.com/design/<FILE_KEY>/…` |
 
 `.env` file example:
@@ -113,8 +113,9 @@ FIGMA_FILE=AbCdEfGhIjKlMnOpQrStUv
 
 **`--fresh` flag:**
 
-Without `--fresh`, the translator uses the cached Figma document from `.fastui/figma-cache.json`.  
-With `--fresh`, it re-downloads the document and re-downloads all image fills and vector assets.
+Without `--fresh`, automation is strictly cache-only. It reads `.fastui/figma/<FIGMA_FILE>.json` and never contacts Figma. If that cache does not exist, the command warns, leaves existing specs/routing unchanged, and exits successfully. This prevents an ordinary regeneration from failing because of Figma rate limits.
+
+With `--fresh`, automation downloads and validates the document, fonts, image fills, and vector assets. This is the only mode that requires `FIGMA_TOKEN`; HTTP 429 and other download failures remain actionable errors while the last verified resource cache is preserved where possible.
 
 ---
 

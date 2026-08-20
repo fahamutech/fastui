@@ -77,6 +77,7 @@ Behaviour-augmented document
     │  implicit state keys added for every state.set target
     │  condition default: false
     │  loop default data: []
+    │  authored/Figma loop samples → metadata.loopInitialData
     │
     ▼  component.mjs / condition.mjs / loop.mjs
     │    → templates/reactjs/generator.mjs  OR
@@ -112,7 +113,7 @@ Normalizes any spec document into the single shape the generators expect.
 |---|---|
 | `normalizeSpecDocument(doc)` | Returns `{kind, data}` for the current `component`, `condition`, or `loop` roots |
 | `normalizeComposition(data)` | Normalizes `extend` → `string[]` and `frame` → `{base,id,current,next}` |
-| `prepareBehavior(kind, data)` | Adds implicit state keys for `state.set` targets; adds `condition:false` and `data:[]` defaults |
+| `prepareBehavior(kind, data)` | Adds implicit state keys, adds `condition:false`, and moves non-empty loop samples out of store state into service-seed metadata while keeping `data:[]` as the runtime store default |
 
 ---
 
@@ -205,4 +206,17 @@ The stores use RxJS internally. Generated components subscribe through selector-
 NotifierProvider.autoDispose.family<Notifier, State, FastUIProviderInstance<State>>
 ```
 
-Each generated component instance watches an immutable Riverpod state model. Generated notifiers expose typed setters plus `setField`, and service contexts mutate that same provider. Stable instance IDs isolate siblings while allowing explicit sharing.
+Each generated component instance watches an immutable Riverpod state model. Generated notifiers expose typed setters such as `setData` and `setCondition`, plus `setField` for low-level public access. Generated service seeds call typed notifier methods directly. `FastUIComponentContext.setState(key, value)` remains available for existing service code, but dispatches through a generated typed-setter table rather than calling `setField`. Stable instance IDs isolate siblings while allowing explicit sharing.
+
+### Loop data ownership
+
+Loop stores always begin with `data: []`. Design rows are scaffolding, not application state:
+
+1. Figma automation inventories every repeated row.
+2. Text fields are stored as strings under their loop binding keys.
+3. `_image` rectangles and vectors are resolved to deterministic `asset://figma/...` values.
+4. The full row shape is retained as `modifier.metadata.loopInitialData` for code generation.
+5. Only a newly created `*_init` service stub receives the sample rows.
+6. Once a developer edits that service, regeneration preserves it byte-for-byte.
+
+React service seeds call `context.store.setData(context.instanceId, rows)`. Flutter service seeds call `context.notifier.setData(rows)`. Generated UI never embeds the design samples and loop-element fields have no text fallback literals.

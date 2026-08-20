@@ -497,7 +497,12 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
     const servicePath = await ensureServiceFile({
         servicePath: structure.servicePath,
         functions: exports,
-        template: 'reactjs'
+        template: 'reactjs',
+        initialStateByFunction: (() => {
+            const sample = data?.modifier?.metadata?.loopInitialData;
+            const initName = parseLogicReference(data?.modifier?.effects?.onInit?.body)?.name;
+            return initName && Array.isArray(sample) ? {[initName]: {data: sample}} : {};
+        })(),
     });
     const outputPath = pathResolve(getSrcPathFromBlueprintPath(unParsedPath));
     return `import {${exports.join(',')}} from '${relativeImport(outputPath, servicePath)}';`;

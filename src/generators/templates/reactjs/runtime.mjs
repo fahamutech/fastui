@@ -128,7 +128,11 @@ export class FastUIComponentContext {
   }
   get state() { return this.store?.get(this.instanceId) ?? Object.freeze({}); }
   setState(key, value) {
-    if (this.store?.has(this.instanceId)) this.store.setField(this.instanceId, key, value);
+    if (!this.store?.has(this.instanceId)) return;
+    const setterName = 'set' + String(key).replace(/[^a-zA-Z0-9_]/g, '_').replace(/^./, char => char.toUpperCase());
+    const setter = this.store?.[setterName];
+    if (typeof setter !== 'function') throw new TypeError(this.componentId + ': no generated setter for "' + key + '"');
+    setter.call(this.store, this.instanceId, value);
   }
   update(reducer) {
     if (this.store?.has(this.instanceId)) this.store.update(this.instanceId, reducer);

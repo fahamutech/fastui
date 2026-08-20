@@ -14,7 +14,7 @@ import {join, resolve} from 'node:path';
 import {ensureFileExist, ensurePathExist} from '../../shared/fs.mjs';
 import {maybeRandomName, sanitizeFullColon} from '../../shared/fn.mjs';
 import {routeFromSurfaceName} from '../../shared/routing.mjs';
-import {getBaseType, generatedNodeName, moduleFromName, stripModuleSuffix, textStateBinding} from './naming.mjs';
+import {getBaseType, generatedNodeName, moduleFromName, sanitizedNameForLoopElement, stripModuleSuffix, textStateBinding, vectorResourceName} from './naming.mjs';
 import {getContainerLikeStyles, getSize, isRepeatType, transformLayoutAxisAlign, transformLayoutWrap, getImageRef} from './layout.mjs';
 import {getBackgroundBlurEffect, getDropShadowEffect, getLayerBlurEffect} from './effects.mjs';
 import {getColor} from './color.mjs';
@@ -32,6 +32,30 @@ import {
 } from './spec-writer.mjs';
 
 const DEFAULT_PAGE_MODULE = 'presentation/pages';
+
+async function loopRowData(node, {token, figFile, srcPath}) {
+    const row = {_key: node?.id ?? randomUUID().toString()};
+    const visit = async child => {
+        const key = sanitizedNameForLoopElement(child);
+        if (child?.type === 'TEXT') {
+            if (key) row[key] = `${child?.characters ?? ''}`;
+        }
+        const imageRef = child?.type === 'VECTOR'
+            ? vectorResourceName(child)
+            : getBaseType(child) === 'image'
+                ? getImageRef(child?.fills)
+                : undefined;
+        if (key && imageRef) {
+            row[key] = await getFigmaImagePath({
+                token, figFile, srcPath, imageRef, child,
+                format: child?.type === 'VECTOR' ? 'svg' : undefined,
+            }) ?? '';
+        }
+        await Promise.all((child?.children ?? []).map(visit));
+    };
+    await visit(node);
+    return row;
+}
 
 let routeLookup = {};
 let sharedComponentMap = {};
@@ -61,7 +85,9 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
             });
             const isLoop = isRepeatType(getBaseType(child));
             if (isLoop) {
-                child.childrenData = child?.children?.map(x => ({_key: x?.id ?? randomUUID().toString()}));
+                child.childrenData = await Promise.all(
+                    (child?.children ?? []).map(row => loopRowData(row, {token, figFile, srcPath}))
+                );
                 child.children = [child?.children?.[0]];
             }
             // Flex participation on the parent's own axis: this child only

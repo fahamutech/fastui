@@ -1,5 +1,6 @@
 export function flutterRuntimeSource() {
     return `import 'dart:async';
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -31,8 +32,8 @@ class FastUIComponentContext<S, N> {
     required this.inputs,
     required this.args,
     required this.componentId,
-    required void Function(String, dynamic) setState,
-  }) : _setState = setState;
+    required Map<String, void Function(dynamic)> setters,
+  }) : _setters = setters;
 
   final BuildContext context;
   final WidgetRef ref;
@@ -41,9 +42,13 @@ class FastUIComponentContext<S, N> {
   final Map<String, dynamic> inputs;
   final List<dynamic> args;
   final String componentId;
-  final void Function(String, dynamic) _setState;
+  final Map<String, void Function(dynamic)> _setters;
 
-  void setState(String key, dynamic value) => _setState(key, value);
+  void setState(String key, dynamic value) {
+    final setter = _setters[key];
+    if (setter == null) throw ArgumentError.value(key, 'key', 'No generated FastUI setter');
+    setter(value);
+  }
   T read<T>(ProviderListenable<T> provider) => ref.read(provider);
 }
 
@@ -404,7 +409,7 @@ class FastUIStyleHelper {
   );
 
   /// Parses a CSS length value that may carry a 'px' suffix.
-  static double? parseLen(dynamic v) {
+  static double? _parseLen(dynamic v) {
     if (v is num) return v.toDouble();
     if (v is String) {
       return double.tryParse(v.replaceAll(RegExp(r'[a-zA-Z%]+\$'), ''));
@@ -414,20 +419,25 @@ class FastUIStyleHelper {
 
   /// Parses a CSS color string: hex #RRGGBB / #RRGGBBAA, rgba(), or a named
   /// CSS color keyword.
-  static Color? parseColor(dynamic raw) {
+  static Color? _parseColor(dynamic raw) {
     if (raw is! String) return null;
     final v = raw.trim();
-    if (v.startsWith('#') && v.length >= 7) {
-      final hex = v.length == 7 ? 'FF\${v.substring(1)}' : v.substring(1);
+    if (RegExp(r'^#[0-9a-f]{3,8}\$', caseSensitive: false).hasMatch(v)) {
+      var css = v.substring(1);
+      if (css.length == 3 || css.length == 4) {
+        css = css.split('').map((char) => '\$char\$char').join();
+      }
+      final hex = css.length == 6 ? 'FF\$css' : '\${css.substring(6)}\${css.substring(0, 6)}';
       try { return Color(int.parse(hex, radix: 16)); } catch (_) { return null; }
     }
     final m = RegExp(
-      r'^rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?\\)\$',
+      r'^rgba?\\(\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)(?:\\s*,\\s*([\\d.]+))?\\s*\\)\$',
       caseSensitive: false,
     ).firstMatch(v);
     if (m != null) {
       final a = m[4] != null ? (double.tryParse(m[4]!) ?? 1.0).clamp(0.0, 1.0) : 1.0;
-      return Color.fromRGBO(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!), a);
+      int channel(String value) => (double.tryParse(value) ?? 0).round().clamp(0, 255);
+      return Color.fromRGBO(channel(m[1]!), channel(m[2]!), channel(m[3]!), a);
     }
     const named = <String, int>{
       'red': 0xFFFF0000, 'blue': 0xFF0000FF, 'green': 0xFF008000, 'lime': 0xFF00FF00,
@@ -452,22 +462,31 @@ class FastUIStyleHelper {
     final s = Map<String, dynamic>.from(styles);
 
     // Color
-    final color = parseColor(s['backgroundColor'] ?? s['background']);
+    final color = _parseColor(s['backgroundColor'] ?? s['background']);
 
     // Dimensions
-    final w = parseLen(s['width']);
-    final h = parseLen(s['height']);
+    final w = _parseLen(s['width']);
+    final h = _parseLen(s['height']);
 
     // Border radius
-    final rVal = parseLen(s['borderRadius']);
-    final radius = rVal != null ? BorderRadius.circular(rVal) : _parseCornerRadius(s);
+    final radius = _parseBorderRadius(s);
 
     // Border
-    final borderClr = parseColor(s['borderColor']);
-    final borderW = parseLen(s['borderWidth'] ?? s['borderTopWidth']) ?? 0.0;
-    final border = (borderClr != null && borderW > 0)
-        ? Border.all(color: borderClr, width: borderW)
-        : null;
+    BorderSide borderSide(String side) {
+      final borderClr = _parseColor(s['border\${side}Color'] ?? s['borderColor']);
+      final borderW = _parseLen(s['border\${side}Width'] ?? s['borderWidth']) ?? 0.0;
+      return borderClr != null && borderW > 0
+          ? BorderSide(color: borderClr, width: borderW)
+          : BorderSide.none;
+    }
+    final topBorder = borderSide('Top');
+    final rightBorder = borderSide('Right');
+    final bottomBorder = borderSide('Bottom');
+    final leftBorder = borderSide('Left');
+    final border = topBorder == BorderSide.none && rightBorder == BorderSide.none &&
+            bottomBorder == BorderSide.none && leftBorder == BorderSide.none
+        ? null
+        : Border(top: topBorder, right: rightBorder, bottom: bottomBorder, left: leftBorder);
 
     // Padding / Margin
     final pad = _parseEdgeInsets(s, 'padding');
@@ -477,7 +496,7 @@ class FastUIStyleHelper {
     final shadows = _parseBoxShadow(s['boxShadow']);
 
     // Background image
-    final bgImg = _parseDecorationImage(s['backgroundImage'], s['backgroundSize']);
+    final bgImg = _parseDecorationImage(s['backgroundImage'], s['backgroundSize'], s['backgroundPosition']);
 
     final hasDecoration = color != null || radius != null || border != null ||
         (shadows?.isNotEmpty ?? false) || bgImg != null;
@@ -500,10 +519,10 @@ class FastUIStyleHelper {
     );
 
     // Min/Max constraints
-    final minW = parseLen(s['minWidth']);
-    final maxW = parseLen(s['maxWidth']);
-    final minH = parseLen(s['minHeight']);
-    final maxH = parseLen(s['maxHeight']);
+    final minW = _parseLen(s['minWidth']);
+    final maxW = _parseLen(s['maxWidth']);
+    final minH = _parseLen(s['minHeight']);
+    final maxH = _parseLen(s['maxHeight']);
     if (minW != null || maxW != null || minH != null || maxH != null) {
       result = ConstrainedBox(
         constraints: BoxConstraints(
@@ -525,20 +544,57 @@ class FastUIStyleHelper {
     }
 
     // Opacity
-    final opacityVal = parseLen(s['opacity']);
+    final opacityVal = _parseLen(s['opacity']);
     if (opacityVal != null && opacityVal < 1.0) {
       result = Opacity(opacity: opacityVal.clamp(0.0, 1.0), child: result);
+    }
+
+    final layerBlur = _parseBlur(s['filter']);
+    if (layerBlur != null) {
+      result = ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(sigmaX: layerBlur, sigmaY: layerBlur),
+        child: result,
+      );
+    }
+
+    final backdropBlur = _parseBlur(s['backdropFilter'] ?? s['WebkitBackdropFilter']);
+    if (backdropBlur != null) {
+      result = ClipRect(
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: backdropBlur, sigmaY: backdropBlur),
+          child: result,
+        ),
+      );
     }
 
     return result;
   }
 
   /// Parses per-corner border-radius when no uniform shorthand is set.
+  static BorderRadius? _parseBorderRadius(Map<String, dynamic> s) {
+    final raw = s['borderRadius']?.toString().trim() ?? '';
+    final values = raw.isEmpty
+        ? <double>[]
+        : raw.split(RegExp(r'\\s+')).map(_parseLen).whereType<double>().toList();
+    if (values.length == 1) return BorderRadius.circular(values.first);
+    if (values.length >= 2) {
+      final tl = values[0];
+      final tr = values[1];
+      final br = values.length >= 3 ? values[2] : values[0];
+      final bl = values.length >= 4 ? values[3] : values[1];
+      return BorderRadius.only(
+        topLeft: Radius.circular(tl), topRight: Radius.circular(tr),
+        bottomRight: Radius.circular(br), bottomLeft: Radius.circular(bl),
+      );
+    }
+    return _parseCornerRadius(s);
+  }
+
   static BorderRadius? _parseCornerRadius(Map<String, dynamic> s) {
-    final tl = parseLen(s['borderTopLeftRadius']);
-    final tr = parseLen(s['borderTopRightRadius']);
-    final br = parseLen(s['borderBottomRightRadius']);
-    final bl = parseLen(s['borderBottomLeftRadius']);
+    final tl = _parseLen(s['borderTopLeftRadius']);
+    final tr = _parseLen(s['borderTopRightRadius']);
+    final br = _parseLen(s['borderBottomRightRadius']);
+    final bl = _parseLen(s['borderBottomLeftRadius']);
     if (tl == null && tr == null && br == null && bl == null) return null;
     return BorderRadius.only(
       topLeft: Radius.circular(tl ?? 0),
@@ -554,7 +610,7 @@ class FastUIStyleHelper {
     final raw = (s[prefix]?.toString() ?? '').trim();
     final parts = raw.isEmpty
         ? <double>[]
-        : raw.split(RegExp(r'\\s+')).map((v) => parseLen(v) ?? 0.0).toList();
+        : raw.split(RegExp(r'\\s+')).map((v) => _parseLen(v) ?? 0.0).toList();
     double shT = 0, shR = 0, shB = 0, shL = 0;
     if (parts.length == 1) {
       shT = shR = shB = shL = parts[0];
@@ -565,10 +621,10 @@ class FastUIStyleHelper {
     } else if (parts.length >= 4) {
       shT = parts[0]; shR = parts[1]; shB = parts[2]; shL = parts[3];
     }
-    final t = parseLen(s['\${prefix}Top']) ?? shT;
-    final r = parseLen(s['\${prefix}Right']) ?? shR;
-    final b = parseLen(s['\${prefix}Bottom']) ?? shB;
-    final l = parseLen(s['\${prefix}Left']) ?? shL;
+    final t = _parseLen(s['\${prefix}Top']) ?? shT;
+    final r = _parseLen(s['\${prefix}Right']) ?? shR;
+    final b = _parseLen(s['\${prefix}Bottom']) ?? shB;
+    final l = _parseLen(s['\${prefix}Left']) ?? shL;
     if (t == 0 && r == 0 && b == 0 && l == 0) return null;
     return EdgeInsets.fromLTRB(l, t, r, b);
   }
@@ -580,13 +636,13 @@ class FastUIStyleHelper {
     if (v.isEmpty || v == 'none') return null;
     final colorPat = RegExp(r'rgba?\\([^)]+\\)|#[0-9a-f]{3,8}', caseSensitive: false);
     final colorMatch = colorPat.firstMatch(v);
-    final shadowColor = colorMatch != null ? parseColor(colorMatch.group(0)) : null;
+    final shadowColor = colorMatch != null ? _parseColor(colorMatch.group(0)) : null;
     final cleaned = v
         .replaceAll(RegExp(r'rgba?\\([^)]+\\)', caseSensitive: false), '')
         .replaceAll(RegExp(r'#[0-9a-f]{3,8}', caseSensitive: false), '');
     final nums = cleaned
         .split(RegExp(r'[\\s,]+'))
-        .map((e) => parseLen(e.trim()))
+        .map((e) => _parseLen(e.trim()))
         .whereType<double>()
         .toList();
     if (nums.length < 2) return null;
@@ -601,7 +657,27 @@ class FastUIStyleHelper {
   }
 
   /// Parses a CSS background-image URL into a [DecorationImage].
-  static DecorationImage? _parseDecorationImage(dynamic bgImage, dynamic bgSize) {
+  static double? _parseBlur(dynamic raw) {
+    final match = RegExp(r'blur\(\s*([\d.]+)px\s*\)', caseSensitive: false)
+        .firstMatch(raw?.toString() ?? '');
+    return match == null ? null : double.tryParse(match.group(1)!);
+  }
+
+  static Alignment _parseBackgroundAlignment(dynamic raw) {
+    return switch ((raw ?? 'center').toString().trim().toLowerCase()) {
+      'top' => Alignment.topCenter,
+      'bottom' => Alignment.bottomCenter,
+      'left' => Alignment.centerLeft,
+      'right' => Alignment.centerRight,
+      'top left' || 'left top' => Alignment.topLeft,
+      'top right' || 'right top' => Alignment.topRight,
+      'bottom left' || 'left bottom' => Alignment.bottomLeft,
+      'bottom right' || 'right bottom' => Alignment.bottomRight,
+      _ => Alignment.center,
+    };
+  }
+
+  static DecorationImage? _parseDecorationImage(dynamic bgImage, dynamic bgSize, dynamic bgPosition) {
     if (bgImage == null) return null;
     final m = RegExp(r'url\\(([^)]*)\\)', caseSensitive: false)
         .firstMatch(bgImage.toString());
@@ -616,7 +692,7 @@ class FastUIStyleHelper {
         RegExp(r'^https?://', caseSensitive: false).hasMatch(src)
             ? NetworkImage(src) as ImageProvider<Object>
             : AssetImage(src.replaceFirst(RegExp(r'^/'), '')) as ImageProvider<Object>;
-    return DecorationImage(image: provider, fit: fit);
+    return DecorationImage(image: provider, fit: fit, alignment: _parseBackgroundAlignment(bgPosition));
   }
 
   static Widget applyMeta(Widget child, {dynamic id}) {
