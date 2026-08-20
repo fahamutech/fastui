@@ -5,9 +5,10 @@
  */
 import {ensureFileExist, ensurePathExist} from '../../../shared/fs.mjs';
 import {readFile, writeFile} from 'node:fs/promises';
-import {dirname, join, resolve} from 'node:path';
+import {join, resolve} from 'node:path';
 import {getFileName} from '../../naming.mjs';
 import {routeFromSurfaceName} from '../../../shared/routing.mjs';
+import {reactRuntimeSource} from './runtime.mjs';
 
 export const reactGuardSource = `/**
  * User-owned navigation policy. Return allow, cancel, or redirect.
@@ -25,7 +26,7 @@ export function normalizeRoutes(pages = []) {
 export function reactRoutingSource() {
     return `import {BehaviorSubject, Subject} from 'rxjs';
 import {beforeNavigate} from './routing_guard.mjs';
-import {appState} from './stores/observable_store.mjs';
+import {appState} from './fastui_runtime.mjs';
 
 const currentRoute = new BehaviorSubject(undefined);
 const routeEvents = new Subject();
@@ -37,13 +38,6 @@ function normalizeRoute(route, fallbackType = 'page') {
 }
 
 async function guardNavigation(intent) {
-  // Compatibility for existing callback-style user guards.
-  if (beforeNavigate.length >= 2) {
-    return new Promise(resolve => beforeNavigate(
-      {prev: intent.previous, next: intent.next},
-      route => resolve(route ? {decision: 'allow', route} : {decision: 'cancel'}),
-    ));
-  }
   const result = await beforeNavigate(intent);
   if (result === false || result?.decision === 'cancel') return {decision: 'cancel'};
   if (typeof result === 'string') return {decision: 'redirect', route: normalizeRoute(result)};
@@ -211,64 +205,21 @@ export function AppRoute() {
 
 /**
  * Writes/refreshes the generated React AppRoute, routing store, and the
- * user-owned navigation guard (only replacing the guard when it's still the
- * untouched default or a recognized legacy default).
+ * user-owned navigation guard, creating the current guard contract when absent.
  * @param pages {{name: string, module: string}[]}
  * @param initialId {string}
  * @return {Promise<void>}
  */
-async function writeIfMissing(path, content) {
-    try {
-        await readFile(path, 'utf8');
-        return;
-    } catch (_) {
-    }
-    await ensurePathExist(dirname(path));
-    await writeFile(path, content);
-}
-
-async function ensureReactStateSupportFiles() {
-    await writeIfMissing(resolve('src', 'stores', 'observable_store.mjs'), `import {BehaviorSubject} from 'rxjs';
-
-export function createObservableStore(initialState = {}) {
-  const subject = new BehaviorSubject(Object.freeze({...initialState}));
-  return {
-    state$: subject.asObservable(),
-    get value() { return subject.value; },
-    set(patch) { subject.next(Object.freeze({...subject.value, ...patch})); },
-    update(reducer) { subject.next(Object.freeze(reducer(subject.value))); },
-    subscribe(observer) { return subject.subscribe(observer); },
-    dispose() { subject.complete(); },
-  };
-}
-
-export const appState = createObservableStore();
-`);
-    await writeIfMissing(resolve('src', 'stores', 'use_observable.mjs'), `import {useSyncExternalStore} from 'react';
-
-export function useObservable(store, selector = value => value) {
-  return useSyncExternalStore(
-    listener => {
-      const subscription = store.subscribe(listener);
-      return () => subscription.unsubscribe();
-    },
-    () => selector(store.value),
-    () => selector(store.value),
-  );
-}
-`);
-}
-
 export async function ensureReactAppRouteFile({pages, initialId}) {
     const nextComponentFilePath = resolve(join('src', 'AppRoute.jsx'));
     const nextStateFilePath = resolve(join('src', 'routing.mjs'));
     const nextGuardFilePath = resolve(join('src', 'routing_guard.mjs'));
-    await ensureReactStateSupportFiles();
+    await ensurePathExist(resolve('src'));
+    await writeFile(resolve('src', 'fastui_runtime.mjs'), reactRuntimeSource());
     await ensureFileExist(nextGuardFilePath);
     let currentGuard = '';
     try { currentGuard = await readFile(nextGuardFilePath, 'utf8'); } catch (_) {}
-    const legacyDefaultGuard = currentGuard.includes('callback(next);') && !currentGuard.includes("decision: 'allow'");
-    if (!currentGuard.includes('beforeNavigate') || legacyDefaultGuard) {
+    if (!currentGuard.includes('beforeNavigate')) {
         await writeFile(nextGuardFilePath, reactGuardSource);
     }
     await writeFile(nextStateFilePath, reactRoutingSource());

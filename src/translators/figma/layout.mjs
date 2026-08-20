@@ -43,21 +43,24 @@ export function isRepeatType(value) {
 /**
  * Returns the intended scroll direction for a loop node.
  *
- * Scroll is specified **intentional** for a loop to avoid rely on f
- * `frame.base` direction
+ * Prefer an explicitly authored scroll value or Figma overflow direction.
+ * Loops otherwise emit their layout axis so generated YAML always has the
+ * `props.scroll` required by loop renderers.
  */
 export function loopScrollDirection(node) {
+    const explicitScroll = node?.props?.scroll ?? node?.scroll;
+    if (['horizontal', 'vertical', 'both'].includes(explicitScroll)) return explicitScroll;
     const overflowDirection = node?.overflowDirection ?? node?.mainFrame?.overflowDirection;
-    const base = node?.mainFrame?.base??node.mainFrame?.base?.type??node.layoutMode;
     if (overflowDirection === 'HORIZONTAL_AND_VERTICAL_SCROLLING') return 'both';
     if (overflowDirection === 'HORIZONTAL_SCROLLING') return 'horizontal';
     if (overflowDirection === 'VERTICAL_SCROLLING') return 'vertical';
-    if (base.toLowerCase().startsWith('row'))return 'horizontal';
-    if (base.toLowerCase().startsWith('column'))return 'vertical';
-    if (base==='HORIZONTAL') return 'horizontal';
-    if (base==='VERTICAL') return 'vertical';
+    const frameBase = node?.mainFrame?.base;
+    const layout = `${frameBase?.type ?? frameBase ?? node?.layoutMode ?? ''}`.toLowerCase();
+    if (layout.startsWith('row') || layout === 'horizontal') return 'horizontal';
+    if (layout.startsWith('column') || layout === 'vertical') return 'vertical';
     return undefined;
 }
+
 
 /**
  * Returns the intended scroll direction for a component node.

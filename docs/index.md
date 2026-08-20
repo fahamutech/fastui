@@ -35,7 +35,7 @@ fastui init reactjs
 fastui init flutter
 ```
 
-`init` writes `fastui.config.json`, scaffolds `src/blueprints/` (React) or `lib/blueprints/` (Flutter), and drops boilerplate entry files.
+`init` writes `fastui.config.json`, scaffolds `src/blueprints/` (React) or `lib/blueprints/` (Flutter), creates the target font integration, and drops boilerplate entry files.
 
 ### 3. Write a spec
 
@@ -91,7 +91,7 @@ After `fastui init reactjs`:
 
 ```
 my-app/
-├── fastui.config.json          ← template + specVersion
+├── fastui.config.json          ← template, specVersion, and font sources
 ├── src/
 │   ├── blueprints/             ← YAML spec files (source of truth)
 │   │   └── modules/
@@ -103,15 +103,16 @@ my-app/
 │   ├── services/               ← user-owned logic stubs
 │   │   └── home/
 │   │       └── ihome_Home.mjs
-│   ├── stores/                 ← generated state stores (per module)
+│   ├── stores/                 ← generated component stores (per module)
 │   │   └── home/
-│   │       ├── store.mjs
+│   │       ├── stores.generated.mjs
 │   │       └── models.generated.mjs
 │   ├── AppRoute.jsx
 │   ├── App.jsx
 │   └── main.jsx
 └── public/
-    └── images/figma/           ← downloaded Figma image assets
+    ├── images/figma/           ← downloaded Figma image/vector assets
+    └── fonts/figma/            ← resolved fonts + generated CSS
 ```
 
 After `fastui init flutter`:
@@ -125,7 +126,9 @@ my-app/
 │   ├── services/               ← user-owned logic stubs
 │   ├── stores/                 ← generated state stores
 │   └── fastui_runtime.dart     ← navigation + surface runtime
-└── assets/images/figma/        ← downloaded Figma image assets
+└── assets/
+    ├── images/figma/           ← downloaded Figma image/vector assets
+    └── fonts/figma/            ← fonts registered in pubspec.yaml
 ```
 
 ---

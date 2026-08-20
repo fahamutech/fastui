@@ -8,7 +8,6 @@ import {
     compose,
     firstUpperCase,
     ifDoElse,
-    itOrEmptyList,
     justList,
     removeWhiteSpaces,
     snakeToCamel,
@@ -29,11 +28,13 @@ import {
 } from "../../modifier.mjs";
 import {dirname as pathDirname, relative as pathRelative, resolve as pathResolve, sep as pathSep} from 'node:path';
 import {readFile, writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import * as yaml from 'js-yaml';
 import {getTemplateSelected} from "../../../tooling/config.mjs";
 import {TEMPLATE_MAPPING} from "../mapping.mjs";
-import {containsLogicReference, containsNavigationAction} from '../../behavior.mjs';
-import {ensureServiceFile, relativeImport, specStructure} from '../../project-structure.mjs';
+import {containsLogicReference, containsNavigationAction, containsTranslationBinding} from '../../behavior.mjs';
+import {referencedInputKeys, referencedStateKeys} from '../../bindings.mjs';
+import {ensureServiceFile, identifier, relativeImport, specStructure} from '../../project-structure.mjs';
 import {getFileName, getFilenameFromBlueprintPath} from '../../naming.mjs';
 
 const template = getTemplateSelected();
@@ -46,7 +47,7 @@ const reactStyleAssets = styles => {
     const spaceValue = styles?.spaceValue;
     const normalized = Object.fromEntries(
         Object.entries(styles ?? {})
-            .filter(([key, value]) => value !== undefined && value !== null && !['fallbackWidth', 'fallbackHeight', 'spaceValue', 'childDirection'].includes(key))
+            .filter(([key, value]) => value !== undefined && value !== null && !['fallbackWidth', 'fallbackHeight', 'spaceValue'].includes(key))
             .map(([key, value]) => [key, reactAssetPath(value)])
     );
     normalized.boxSizing = 'border-box';
@@ -96,7 +97,8 @@ function extendImportSpecs(data) {
     return paths.map((path, index) => {
         const base = baseNames[index];
         const alias = counts.get(base) > 1 ? `${base}_${index}` : base;
-        return {path, base, alias};
+        const specId = `${path}`.replace(/^\.\//, '').replace(/\.ya?ml$/i, '');
+        return {path, base, alias, specId};
     });
 }
 
@@ -148,8 +150,8 @@ export function composeFrame(data, frame, ownView, extraProps = '') {
         ? `<div ${frameWrapperProps(frame?.id, extraProps)} style=${frameCurrentStyleString(frame)}>${ownView}</div>`
         : ownView;
     const nextStyle = `{${JSON.stringify(reactStyleAssets(frame?.next ?? {}))}}`;
-    const nextViews = extend.map(({alias}, index) => {
-        const child = `<${alias} loopIndex={loopIndex} loopElement={loopElement}/>`;
+    const nextViews = extend.map(({alias, specId}, index) => {
+        const child = `<${alias} loopIndex={loopIndex} loopElement={loopElement} instanceId={\`${'${resolvedInstanceId}'}\/${index}\/${specId}\`}/>`;
         return hasNextWrapper
             ? `<div id={'${frame?.id ?? ''}_next_${index}'} style=${nextStyle}>${child}</div>`
             : child;
@@ -208,7 +210,9 @@ export function getSrcPathFromBlueprintPath(unParsedPath) {
 export function getBase(data) {
     const base = data?.base ?? '';
     if (`${base}` === 'image') return 'img';
-    if (`${base}` === 'input' || (`${base}` === 'container' && data?.modifier?.props?.control === 'input')) return 'input';
+    if (`${base}` === 'input' || (`${base}` === 'container' && data?.modifier?.props?.control === 'input')) {
+        return data?.modifier?.props?.multiline === true || data?.modifier?.props?.type === 'multiline' ? 'textarea' : 'input';
+    }
     // Render as anchor element when href prop is present
     if (getProps(data).href) return 'a';
     return 'div';
@@ -225,7 +229,50 @@ function logicArgsArraySource(logic) {
 
 function reactLogicInvocation(value) {
     const logic = parseLogicReference(value);
-    return logic?.isCall ? `${logic.name}({component,args:${logicArgsArraySource(logic)}})` : null;
+    return logic?.isCall ? `${logic.name}(component.withArgs(${logicArgsArraySource(logic)}))` : null;
+}
+
+function translationVariable(binding) {
+    const key = `${binding?.key ?? 'text'}`.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 40);
+    const suffix = createHash('sha1').update(JSON.stringify({key: binding?.key, args: binding?.args ?? {}})).digest('hex').slice(0, 8);
+    return `fastUITranslation_${key || 'text'}_${suffix}`;
+}
+
+function reactTranslationArgs(binding) {
+    const args = binding?.args && typeof binding.args === 'object'
+        ? Object.entries(binding.args).map(([key, value]) => {
+            const expression = typeof value === 'string' && /^(?:states|inputs)\./i.test(value)
+                ? value.replace(/^(?:states|inputs)\./i, '')
+                : JSON.stringify(value);
+            return `${JSON.stringify(key)}:${expression}`;
+        })
+        : [];
+    return args.length ? `{${args.join(',')}}` : '{}';
+}
+
+function reactTranslationCall(binding) {
+    return translationVariable(binding);
+}
+
+function translationBindings(data) {
+    const bindings = new Map();
+    const visit = value => {
+        if (Array.isArray(value)) return value.forEach(visit);
+        if (!value || typeof value !== 'object') return;
+        if (value.translation && typeof value.translation === 'object') {
+            bindings.set(translationVariable(value.translation), value.translation);
+            return;
+        }
+        Object.values(value).forEach(visit);
+    };
+    visit(data);
+    return [...bindings.entries()];
+}
+
+function getTranslationStatements(data) {
+    return translationBindings(data)
+        .map(([name, binding]) => `const ${name}=useFastUITranslation(${JSON.stringify(binding.key ?? '')},${reactTranslationArgs(binding)});`)
+        .join('\n\t');
 }
 
 export function getPropsStatement(data) {
@@ -243,7 +290,7 @@ export function getPropsStatement(data) {
             const value = action.value === 'event.value'
                 ? `(${eventName}?.target?.value ?? ${eventName})`
                 : JSON.stringify(action.value);
-            return `set${firstUpperCase(action.target)}(${value})`;
+            return `componentStore.setField(resolvedInstanceId,${JSON.stringify(action.target)},${value},stateSeed)`;
         }
         return '';
     };
@@ -252,7 +299,9 @@ export function getPropsStatement(data) {
         const statements = actions.map(action => actionStatement(action, 'event')).filter(Boolean);
         return `(event)=>{${statements.map(statement => `${statement};`).join('')}}`;
     };
-    const getValue = ifDoElse(
+    const getValue = v => v?.translation && typeof v.translation === 'object'
+        ? reactTranslationCall(v.translation)
+        : ifDoElse(
         v => `${v}`.trim().toLowerCase().startsWith('states.'),
         v => `${v}`.trim().replace(/^(states.)/ig, '')
             .replace(/asset:\/\/figma\/([a-zA-Z0-9._-]+)/g, "'/images/figma/$1'"),
@@ -267,8 +316,8 @@ export function getPropsStatement(data) {
                     v => /^(?:logics|services)\./i.test(`${v}`.trim()),
                     ifDoElse(
                         x => `${x}`.trim().endsWith('()'),
-                        x => `${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args:[]})`,
-                        x => `(...args)=>${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args})`
+                        x => `${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}(component.withArgs([]))`,
+                        x => `(...args)=>${`${x}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}(component.withArgs(args))`
                     ),
                     ifDoElse(
                         t => `${t}`.startsWith("'_'+"),
@@ -279,19 +328,32 @@ export function getPropsStatement(data) {
                 )
             )
         )
-    );
+    )(v);
     return Object
         .keys(props)
-        .filter(k => props[k] !== undefined && props[k] !== null && k !== 'control')
+        .filter(k => props[k] !== undefined && props[k] !== null && !['control', 'multiline'].includes(k))
         .map(k => {
             const value = props[k];
+            if (k === 'type' && value === 'multiline') return '';
             if (/^on[A-Z]/.test(k) && value && typeof value === 'object') {
+                if (k === 'onSubmit') return `onKeyDown={(event)=>{if(event.key==='Enter'){${eventExpression(value).replace(/^\(event\)=>/, '')}}}}`;
                 return `${k}={${eventExpression(value)}}`;
             }
             // 'label' maps to aria-label for accessibility on arbitrary elements
             if (k === 'label') return `aria-label={${getValue(value)}}`;
+            if (k === 'onChange' && typeof value === 'string' && /^(?:logics|services)\./i.test(value) && `${props.value ?? ''}`.startsWith('states.')) {
+                const stateKey = `${props.value}`.replace(/^states\./i, '');
+                const serviceName = parseLogicReference(value)?.name;
+                return `onChange={(event)=>{const nextValue=event?.target?.value??event;componentStore.setField(resolvedInstanceId,${JSON.stringify(stateKey)},nextValue,stateSeed);${serviceName}(component.withArgs([nextValue,event]));}}`;
+            }
+            if (k === 'onSubmit' && typeof value === 'string' && /^(?:logics|services)\./i.test(value)) {
+                const serviceName = parseLogicReference(value)?.name;
+                return `onKeyDown={(event)=>{if(event.key==='Enter'){${serviceName}(component.withArgs([event.currentTarget?.value,event]));}}}`;
+            }
+            if (k === 'autofill') return `autoComplete={${getValue(value)}}`;
             return `${k}={${getValue(value)}}`;
         })
+        .filter(Boolean)
         .join('\n\t\t\t')
 }
 
@@ -323,22 +385,14 @@ function sanitizeEffectDependency(watch) {
  * */
 export function getStatesStatement(data, specPath) {
     const states = getStates(data);
-    if (template === 'reactjs' && specPath && Object.keys(states).length > 0) {
-        const componentName = specStructure(specPath, 'reactjs').componentName;
-        const initialState = Object.fromEntries(Object.entries(states).map(([key, value]) => [
-            key,
-            /^(inputs\.)/i.test(`${value}`.trim())
-                ? {__expression: `${value}`.replace(/^(inputs\.)/i, '')}
-                : value
-        ]));
-        const initialExpression = `{${Object.entries(initialState).map(([key, value]) =>
-            `${JSON.stringify(key)}:${value && typeof value === 'object' && '__expression' in value ? value.__expression : JSON.stringify(value)}`
-        ).join(',')}}`;
-        const declarations = Object.keys(states).flatMap(key => [
-            `const ${key}=componentState.${key};`,
-            `const set${firstUpperCase(key)}=React.useCallback((next)=>setComponentState((current)=>({${key}:typeof next==='function'?next(current.${key}):next})),[setComponentState]);`
-        ]);
-        return `const [componentState,setComponentState]=useModuleState(${JSON.stringify(componentName)},{...${initialExpression},...overrideStates});\n\t${declarations.join('\n\t')}`;
+    if (template === 'reactjs' && specPath && hasComponentStore(data)) {
+        const consumed = consumedStateKeys(data);
+        if (consumed.length === 0) {
+            return 'useFastUISelector(componentStore,resolvedInstanceId,()=>null,stateSeed);';
+        }
+        return consumed
+            .map(key => `const ${identifier(key)}=useFastUISelector(componentStore,resolvedInstanceId,state=>state[${JSON.stringify(key)}],stateSeed);`)
+            .join('\n\t');
     }
     const getStateIV = k => /^(inputs\.)/ig.test(`${states[k]}`.trim())
         ? `${states[k]}`.replace(/^(inputs.)/ig, '')
@@ -347,10 +401,11 @@ export function getStatesStatement(data, specPath) {
 }
 
 export function getModuleStoreImportStatement(data, specPath) {
-    if (template !== 'reactjs' || Object.keys(getStates(data)).length === 0) return '';
+    if (template !== 'reactjs' || (Object.keys(getStates(data)).length === 0 && Object.keys(getEffects(data)).length === 0)) return '';
     const outputPath = pathResolve(getSrcPathFromBlueprintPath(specPath));
-    const storePath = specStructure(specPath, 'reactjs').storePath;
-    return `import {useModuleState} from '${relativeImport(outputPath, storePath)}';`;
+    const structure = specStructure(specPath, 'reactjs');
+    const camel = `${structure.componentName[0] ?? ''}`.toLowerCase() + structure.componentName.slice(1);
+    return `import {${identifier(camel)}Store} from '${relativeImport(outputPath, structure.storePath)}';`;
 }
 
 /**
@@ -359,11 +414,20 @@ export function getModuleStoreImportStatement(data, specPath) {
  * */
 export function getEffectsStatement(data) {
     const effects = getEffects(data);
-    const getDependencies = k => sanitizeEffectDependency(effects[k]?.watch);
-    const getBody = k => /^(?:logics|services)\./i.test(`${effects[k]?.body}`.trim())
-        ? `${effects[k]?.body}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')
-        : effects[k]?.body ?? '{}';
-    return TEMPLATE_MAPPING.sideEffectsPresentation[template](effects, getBody, getDependencies);
+    return Object.keys(effects).map(key => {
+        const dependency = sanitizeEffectDependency(effects[key]?.watch);
+        const body = effects[key]?.body;
+        const service = /^(?:logics|services)\./i.test(`${body}`.trim())
+            ? `${body}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')
+            : null;
+        if (`${key}`.toLowerCase() === 'oninit' && service) {
+            return `React.useEffect(()=>{componentStore.initialize(resolvedInstanceId,()=>${service}(component.withArgs([])),stateSeed);},[componentStore,resolvedInstanceId]);`;
+        }
+        if (service) {
+            return `React.useEffect(()=>{void ${service}(component.withArgs([]));},[${dependency ?? ''}]);`;
+        }
+        return `React.useEffect(()=>{${body ?? ''}},[${dependency ?? ''}]);`;
+    }).join('\n\t');
 }
 
 /**
@@ -372,21 +436,11 @@ export function getEffectsStatement(data) {
  * @return {string}
  */
 export function getInputsStatement(data = {}) {
-    const filter = x => `${x}`.trim().toLowerCase().startsWith('inputs.');
-    const map = x => `${x}`.trim().replace(/^(inputs.)/ig, '');
-    const styleInputs = Object.values(getStyles(data)).filter(filter).map(map);
-    const propsInputs = Object.values(getProps(data)).filter(filter).map(map);
-    const statesInputs = Object.values(getStates(data)).filter(filter).map(map);
-    const effects = getEffects(data);
-    const effectsInputs = Object.keys(effects).reduce((a, b) => {
-        return [
-            ...a,
-            ...itOrEmptyList(effects[b]?.watch).filter(filter).map(map)
-        ]
-    }, []);
-    let inputs = propsInputs.concat(statesInputs, effectsInputs, styleInputs, ['loopElement', 'loopIndex']);
-    inputs = inputs.filter(x => !`${x}`.trim().startsWith('loopElement.'));
-    return TEMPLATE_MAPPING.inputsPresentation[template](inputs);
+    return TEMPLATE_MAPPING.inputsPresentation[template]([
+        ...referencedInputKeys(data),
+        'loopElement',
+        'loopIndex',
+    ]);
 }
 
 /**
@@ -401,38 +455,15 @@ export function getUseMemoDependencies(data) {
     ].join(',');
 }
 
-function getStateMapForLogicInput(states) {
-    return Object.keys(states).reduce((a, b) => {
-        return [
-            ...a,
-            `"${b}":${b}, "set${firstUpperCase(b)}": set${firstUpperCase(b)}`
-        ]
-    }, []).join(',');
-}
-
-function getInputsMapForLogicInput(data) {
-    return getInputsStatement(data)
-        .split(',')
-        .filter(x => x !== '')
-        .map(b => `"${b}":${b}`)
-        .join(',');
-}
-
 /**
  *
  * @param data {*}
  * @return {string}
  */
-export function getComponentMemoStatement(data) {
+export function getComponentMemoStatement(data, specPath) {
     if (!containsLogicReference(data) && Object.keys(getEffects(data)).length === 0) return '';
-    const useMemoDependencies = getUseMemoDependencies(data);
-    const statesMap = getStateMapForLogicInput(getStates(data));
-    const inputsMap = getInputsMapForLogicInput(data);
-    const effects = getEffects(data);
-    const ignoreComment = Object.keys(effects).length > 0
-        ? ''
-        : '// eslint-disable-next-line no-unused-vars\n';
-    return `${ignoreComment}const component = React.useMemo(()=>({states:{${statesMap}},inputs:{${inputsMap}}}),[${useMemoDependencies}]);`;
+    const componentId = specPath ? specStructure(specPath, 'reactjs').specId : 'component';
+    return `const component=React.useMemo(()=>createFastUIComponentContext({store:componentStore,componentId:${JSON.stringify(componentId)},instanceId:resolvedInstanceId,inputs}),[componentStore,resolvedInstanceId,${getInputsStatement(data)}]);`;
 }
 
 /**
@@ -465,7 +496,6 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
     const structure = specStructure(unParsedPath, 'reactjs');
     const servicePath = await ensureServiceFile({
         servicePath: structure.servicePath,
-        legacyPath: structure.legacyServicePath,
         functions: exports,
         template: 'reactjs'
     });
@@ -513,7 +543,7 @@ function getStyleMap(style) {
                 v => reactLogicInvocation(v),
                 ifDoElse(
                     v => /^(?:logics|services)\./i.test(`${v}`.trim()),
-                    v => `${`${v}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args: []})`,
+                    v => `${`${v}`.trim().replace(/^(?:logics|services)\.|\(\)/ig, '')}(component.withArgs([]))`,
                     v => `${JSON.stringify(typeof v === 'string' ? v.replace(/asset:\/\/figma\//g, '/images/figma/') : v ?? '')}`.trim()
                 )
             )
@@ -530,29 +560,69 @@ function getStyleMap(style) {
 
 export function getStyleStatement(data) {
     const style = getStyles(data);
-    const stateDep = Object.values(style)
-        .filter(x => `${x}`.trim().toLowerCase().startsWith('states.'))
-        .map(y => `${y}`.replaceAll('states.', '').trim())
-    const inputDep = Object.values(style)
-        .filter(x => `${x}`.trim().toLowerCase().startsWith('inputs.'))
-        .map(y => `${y}`.replaceAll('inputs.', '').trim())
-    const hasLogicDep = Object.values(style)
-        .filter(x => /^(?:logics|services)\./i.test(`${x}`.trim()))
-        .length > 0;
-    const dependencies = Array.from([
-        ...stateDep,
-        ...inputDep,
-        ...[hasLogicDep ? 'component' : undefined]
-    ].reduce((a, b) => a.add(b), new Set())).join(',');
     const getStyleStatement = ifDoElse(
         t => /^(?:logics|services)\./i.test(`${t}`.trim()),
-        t => `const style = React.useMemo(()=>${`${t}`.replace(/^(?:logics|services)\.|\(\)/ig, '')}({component,args:[]}),[component]);`,
-        t => `const style = React.useMemo(()=>(${getStyleMap(t)}),[${dependencies}]);`
+        t => `const style = ${`${t}`.replace(/^(?:logics|services)\.|\(\)/ig, '')}(component.withArgs([]));`,
+        t => `const style = ${getStyleMap(t)};`
     );
     return getStyleStatement(style);
 }
 
 // -- component -------------------------------------------------------------
+
+function componentStoreName(path) {
+    const name = specStructure(path, 'reactjs').componentName;
+    const camel = `${name[0] ?? ''}`.toLowerCase() + name.slice(1);
+    return `${identifier(camel)}Store`;
+}
+
+function hasComponentStore(data) {
+    return Object.keys(getStates(data)).length > 0 || Object.keys(getEffects(data)).length > 0;
+}
+
+function consumedStateKeys(data) {
+    const states = getStates(data);
+    const keys = new Set(referencedStateKeys(data).filter(key => Object.hasOwn(states, key)));
+    if (getRight(data) && Object.hasOwn(states, 'condition')) keys.add('condition');
+    if (getFeed(data) && Object.hasOwn(states, 'data')) keys.add('data');
+    return [...keys];
+}
+
+function inputNames(data) {
+    return getInputsStatement(data).split(',').map(value => value.trim()).filter(Boolean);
+}
+
+function reactComponentPrelude(data, path) {
+    const structure = specStructure(path, 'reactjs');
+    const storeful = hasComponentStore(data);
+    const needsContext = containsLogicReference(data) || Object.keys(getEffects(data)).length > 0;
+    const needsIdentity = storeful || needsContext || getExtendList(data).length > 0 || Boolean(getFeed(data)) || Boolean(getLeft(data)) || Boolean(getRight(data));
+    const inputs = inputNames(data);
+    const lines = [];
+    if (needsIdentity) lines.push(`const resolvedInstanceId=instanceId??${JSON.stringify(structure.specId)};`);
+    if (storeful || needsContext) lines.push(`const inputs={${inputs.join(',')}};`);
+    if (storeful) {
+        lines.push(`const componentStore=${componentStoreName(path)};`);
+        lines.push('const stateSeed={inputs,initialState};');
+    } else if (needsContext) {
+        lines.push('const componentStore=null;');
+    }
+    return lines.join('\n\t');
+}
+
+function reactRuntimeImportStatement(data, path, projectPath) {
+    const names = new Set();
+    if (hasComponentStore(data)) names.add('useFastUISelector');
+    if (containsLogicReference(data) || Object.keys(getEffects(data)).length > 0) names.add('createFastUIComponentContext');
+    if (['input', 'textarea'].includes(getBase(data))) names.add('useFastUIControlledInput');
+    if (!names.size) return '';
+    return `import {${[...names].join(',')}} from '${relativeImport(pathResolve(getSrcPathFromBlueprintPath(path)), pathResolve(projectPath, 'src', 'fastui_runtime.mjs'))}';`;
+}
+
+function reactFunctionProps(data) {
+    const inputs = getInputsStatement(data);
+    return `${inputs ? `${inputs},` : ''}instanceId,initialState={},initialProps={}`;
+}
 
 // This node's own leaf element; frame wrapping/composition happens in
 // composeFrame(), shared with condition and loop.
@@ -574,65 +644,38 @@ function componentOwnWrapperProps(data) {
         delete propsData.modifier.props.scroll;
     }
     const propsString = getPropsStatement(propsData);
-    return [propsString, '{...overrideProps}'].filter(Boolean).join('\n\t\t\t');
+    return [propsString, '{...initialProps}'].filter(Boolean).join('\n\t\t\t');
 }
 
 function componentOwnView(data) {
     const base = getBase(data);
     const propsString = getPropsStatement(data);
+    const styleProp = hasMeaningfulStyleEntries(getStyles(data)) ? 'style={style}' : '';
     const children = getChildren(data);
     const childContent = children?.type === 'state' || children?.type === 'input'
         ? `{${children?.value}}`
+        : children?.type === 'translation'
+            ? `{${reactTranslationCall(children.value)}}`
         : children?.type === 'logic'
             ? `{${reactLogicInvocation(children?.value)}}`
-            : `${children?.value}`;
+            : children?.value === undefined || children?.value === null || children?.value === ''
+                ? ''
+                : `{${JSON.stringify(children.value)}}`;
+    if (base === 'input' || base === 'textarea' || base === 'img') return `
+        <${base}
+            ${styleProp}
+            ${base === 'input' || base === 'textarea' ? 'ref={inputRef}' : ''}
+            ${propsString}
+            {...initialProps}
+        />
+    `;
     return `
         <${base}
-            style={style}
+            ${styleProp}
             ${propsString}
-            {...overrideProps}
+            {...initialProps}
         >${childContent}</${base}>
     `;
-}
-
-/**
- * Generates a thin wrapper component that imports the base component (from
- * `data.__specBaseRelative`) and re-renders it, forwarding local modifier
- * overrides as `overrideStyles`, `overrideProps`, and `overrideStates` props.
- * The base component is responsible for merging these with its own defaults.
- *
- * @param data {*} map of the specification (contains __specBaseRelative)
- * @param path {string} specification path
- * @return {Promise<void>}
- */
-export async function composeReactSpecBaseWrapper({data, path}) {
-    const baseRelative = data.__specBaseRelative;
-    const baseJsxPath = baseRelative.replace(/\.ya?ml$/i, '.jsx');
-    const baseName = getFileName(baseRelative);
-    const overrideStyles = JSON.stringify(reactStyleAssets(getStyles(data)));
-    const overrideProps = JSON.stringify(Object.fromEntries(
-        Object.entries(getProps(data)).filter(([, v]) => v !== undefined && v !== null)
-    ));
-    const overrideStates = JSON.stringify(getStates(data));
-    const inputsStatement = getInputsStatement(data);
-    const content = `
-import React from 'react';
-import {${baseName}} from '${baseJsxPath}';
-
-// eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}(${inputsStatement === '' ? '' : `{${inputsStatement}}`}){
-    return(<${baseName}
-        loopIndex={loopIndex}
-        loopElement={loopElement}
-        overrideStyles={${overrideStyles}}
-        overrideProps={${overrideProps}}
-        overrideStates={${overrideStates}}
-    />);
-}
-    `;
-    const srcPath = getSrcPathFromBlueprintPath(path);
-    await ensurePathExist(srcPath);
-    await writeFile(srcPath, removeWhiteSpaces(content));
 }
 
 /**
@@ -642,46 +685,52 @@ export function ${getFileName(path)}(${inputsStatement === '' ? '' : `{${inputsS
  * @return {Promise<void>}
  */
 export async function composeReactComponent({data, path, projectPath}) {
-    if (data.__specBase) {
-        return composeReactSpecBaseWrapper({data, path});
-    }
-
     const statesInString = getStatesStatement(data, path)
     const effectsString = getEffectsStatement(data);
 
     const logicsStatement = await getLogicsImportStatement(data, path, projectPath);
+    const translationStatement = containsTranslationBinding(data)
+        ? `import {useFastUITranslation} from '${relativeImport(pathResolve(getSrcPathFromBlueprintPath(path)), pathResolve(projectPath, 'src', 'translations', 'generated.mjs'))}';`
+        : '';
+    const runtimeStatement = reactRuntimeImportStatement(data, path, projectPath);
     const storeStatement = getModuleStoreImportStatement(data, path);
     const componentsImportStatement = getComponentsImportStatement(data);
     const actionImportStatement = getActionImportStatement(data, path);
-    const componentStatement = getComponentMemoStatement(data);
+    const componentStatement = getComponentMemoStatement(data, path);
 
-    const styleStatement = getStyleStatement(data);
+    const styleStatement = hasMeaningfulStyleEntries(getStyles(data)) ? getStyleStatement(data) : '';
     const frame = getFrame(data);
     const ownView = componentHasPlaceholderOwnView(data) ? '' : componentOwnView(data);
     const ownProps = componentHasPlaceholderOwnView(data) ? componentOwnWrapperProps(data) : '';
 
-    const styleStatementRenamed = styleStatement.replace(/\bconst style\b/, 'const _baseStyle');
-    const inputsDecl = getInputsStatement(data) === '' ? '' : `${getInputsStatement(data)},`;
+    const prelude = reactComponentPrelude(data, path);
+    const translationBindings = getTranslationStatements(data);
+    const inputValue = `${getProps(data).value ?? ''}`.startsWith('states.')
+        ? `${getProps(data).value}`.replace(/^states\./i, '')
+        : `${getProps(data).value ?? ''}`.startsWith('inputs.')
+            ? `${getProps(data).value}`.replace(/^inputs\./i, '')
+            : JSON.stringify(getProps(data).value ?? '');
+    const inputStatement = ['input', 'textarea'].includes(getBase(data)) ? `const inputRef=useFastUIControlledInput(${inputValue});` : '';
     const content = `
 import React from 'react';
 ${logicsStatement}
+${translationStatement}
+${runtimeStatement}
 ${storeStatement}
 ${componentsImportStatement}
 ${actionImportStatement}
 
 // eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overrideProps={},overrideStates={}}){
+export const ${getFileName(path)}=React.memo(function ${getFileName(path)}({${reactFunctionProps(data)}}){
+    ${prelude}
     ${statesInString}
-    
+    ${translationBindings}
     ${componentStatement}
-    
-    ${styleStatementRenamed}
-    const style = React.useMemo(()=>({..._baseStyle,...overrideStyles}),[_baseStyle,overrideStyles]);
-    
+    ${inputStatement}
+    ${styleStatement}
     ${effectsString}
-    
     return(${composeFrame(data, frame, ownView, ownProps)});
-}
+});
     `;
 
     const srcPath = getSrcPathFromBlueprintPath(path);
@@ -698,8 +747,9 @@ function conditionOwnView(data) {
     const left = getLeft(data);
     const right = getRight(data);
     const getComponentName = x => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
-    const leftComponent = left ? `<${getComponentName(left)} loopIndex={loopIndex} loopElement={loopElement}/>` : '<span/>';
-    const rightComponent = right ? `<${getComponentName(right)} loopIndex={loopIndex} loopElement={loopElement}/>` : '<span/>';
+    const childId = (path, slot) => `instanceId={\`${'${resolvedInstanceId}'}\/${slot}\/${`${path}`.replace(/^\.\//, '').replace(/\.ya?ml$/i, '')}\`}`;
+    const leftComponent = left ? `<${getComponentName(left)} loopIndex={loopIndex} loopElement={loopElement} ${childId(left, 'left')}/>` : '<span/>';
+    const rightComponent = right ? `<${getComponentName(right)} loopIndex={loopIndex} loopElement={loopElement} ${childId(right, 'right')}/>` : '<span/>';
     const view = right ? `condition===true?${rightComponent}:${leftComponent}` : leftComponent;
     return `{${view}}`;
 }
@@ -712,7 +762,7 @@ function conditionOwnProps(data) {
         delete propsData.modifier.props.id;
         delete propsData.modifier.props.scroll;
     }
-    return getPropsStatement(propsData);
+    return [getPropsStatement(propsData), '{...initialProps}'].filter(Boolean).join(' ');
 }
 
 /**
@@ -724,34 +774,42 @@ function conditionOwnProps(data) {
 export async function composeReactCondition({data, path, projectPath}) {
     const statesInString = getStatesStatement(data, path);
     const effectsString = getEffectsStatement(data);
-    const componentStatement = getComponentMemoStatement(data);
+    const componentStatement = getComponentMemoStatement(data, path);
     const logicsStatement = await getLogicsImportStatement(data, path, projectPath);
     const storeStatement = getModuleStoreImportStatement(data, path);
     const componentsImportStatement = getComponentsImportStatement(data);
     const actionImportStatement = getActionImportStatement(data, path);
+    const runtimeStatement = reactRuntimeImportStatement(data, path, projectPath);
+    const translationStatement = containsTranslationBinding(data)
+        ? `import {useFastUITranslation} from '${relativeImport(pathResolve(getSrcPathFromBlueprintPath(path)), pathResolve(projectPath, 'src', 'translations', 'generated.mjs'))}';`
+        : '';
 
     const frame = getFrame(data);
     const ownView = conditionOwnView(data);
     const ownProps = conditionOwnProps(data);
-    const inputsDecl = getInputsStatement(data) === '' ? '' : `${getInputsStatement(data)},`;
+    const prelude = reactComponentPrelude(data, path);
+    const translationStatements = getTranslationStatements(data);
 
     const content = `
 import React from 'react';
 ${logicsStatement}
+${translationStatement}
+${runtimeStatement}
 ${storeStatement}
 ${componentsImportStatement}
 ${actionImportStatement}
 
 // eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overrideProps={},overrideStates={}}) {
+export const ${getFileName(path)}=React.memo(function ${getFileName(path)}({${reactFunctionProps(data)}}) {
+    ${prelude}
     ${statesInString}
-    
+    ${translationStatements}
     ${componentStatement}
 
     ${effectsString}
 
     return(${composeFrame(data, frame, ownView, ownProps)});
-}
+});
     `;
 
     const srcPath = getSrcPathFromBlueprintPath(path);
@@ -762,9 +820,7 @@ export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overridePro
 // -- loop ---------------------------------------------------------------
 
 function getLoopScrollProp(data) {
-    const layoutDirection =
-        frameDirection(data?.modifier?.frame?.base?.type ?? data?.modifier?.frame?.base);
-    return data?.modifier?.props?.scroll ?? layoutDirection === 'row' ? 'horizontal' : 'vertical';
+    return data?.modifier?.props?.scroll;
 }
 
 function getIsLoopHorizontal(data) {
@@ -778,8 +834,17 @@ function loopOwnProps(data) {
     if (propsData?.modifier?.props) {
         delete propsData.modifier.props.scroll;
         delete propsData.modifier.props.id;
+        delete propsData.modifier.props.itemKey;
     }
-    return getPropsStatement(propsData);
+    return [getPropsStatement(propsData), '{...initialProps}'].filter(Boolean).join(' ');
+}
+
+function loopItemIdentityExpression(data) {
+    const itemKey = data?.modifier?.props?.itemKey;
+    const authored = typeof itemKey === 'string' && itemKey.trim()
+        ? `item?.[${JSON.stringify(itemKey.trim())}]??`
+        : '';
+    return `${authored}item?._key??item?.id??item?.key??index`;
 }
 
 async function getLoopEstimate(data, path) {
@@ -811,6 +876,8 @@ function loopOwnView(data) {
     const frame = getFrame(data);
     const gap = Number(frame?.baseStyles?.spaceValue) || 0;
     const getComponentName = x => firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(x)));
+    const itemIdentity = loopItemIdentityExpression(data);
+    const child = `<${getComponentName(feed)} loopIndex={index} loopElement={item} instanceId={\`${'${resolvedInstanceId}'}\/${'${itemIdentity}'}\`}/>`;
     const scrollStyle = scroll === 'both'
         ? "{{...style, overflowX: 'auto', overflowY: 'auto', position: 'relative', minWidth: 0, minHeight: 0}}"
         : scroll === 'horizontal'
@@ -820,7 +887,7 @@ function loopOwnView(data) {
                 : '{style}';
     if (!feed) return '<span/>';
     if (!scroll && !hasOwnStyles && !hasOwnProps) {
-        return `{data?.map((item,index)=> (<${getComponentName(feed)} key={item?._key??index} loopIndex={index} loopElement={item}/>))}`;
+        return `{data?.map((item,index)=> {const itemIdentity=${itemIdentity};return (<React.Fragment key={itemIdentity}>${child}</React.Fragment>);})}`;
     }
     if (!scroll) {
         return `
@@ -828,7 +895,7 @@ function loopOwnView(data) {
             style={style}
             ${propsString}
         >
-            {data?.map((item,index)=> (<${getComponentName(feed)} key={item?._key??index} loopIndex={index} loopElement={item}/>))}
+            {data?.map((item,index)=> {const itemIdentity=${itemIdentity};return (<React.Fragment key={itemIdentity}>${child}</React.Fragment>);})}
         </div>
     `;
     }
@@ -838,7 +905,7 @@ function loopOwnView(data) {
             style=${scrollStyle}
             ${propsString}
         >
-            {data?.map((item,index)=> (<div key={item?._key??index} style={{flex:'0 0 auto'}}><${getComponentName(feed)} loopIndex={index} loopElement={item}/></div>))}
+            {data?.map((item,index)=> {const itemIdentity=${itemIdentity};return (<div key={itemIdentity} style={{flex:'0 0 auto'}}>${child}</div>);})}
         </div>
     `;
     }
@@ -849,7 +916,7 @@ function loopOwnView(data) {
             ${propsString}
         >
             <div style={virtualInnerStyle}>
-                {visibleItems.map(({item,index})=> (<div key={item?._key??index} style={virtualItemStyle(index)}><${getComponentName(feed)} loopIndex={index} loopElement={item}/></div>))}
+                {visibleItems.map(({item,index})=> {const itemIdentity=${itemIdentity};return (<div key={itemIdentity} style={virtualItemStyle(index)}>${child}</div>);})}
             </div>
         </div>
     `;
@@ -865,18 +932,23 @@ function loopOwnView(data) {
 export async function composeReactLoop({data, path, projectPath}) {
     const statesInString = getStatesStatement(data, path);
     const effectsString = getEffectsStatement(data);
-    const componentMemoStatement = getComponentMemoStatement(data);
+    const componentMemoStatement = getComponentMemoStatement(data, path);
     const logicsImportStatement = await getLogicsImportStatement(data, path, projectPath);
     const storeStatement = getModuleStoreImportStatement(data, path);
     const componentsImportStatement = getComponentsImportStatement(data);
     const actionImportStatement = getActionImportStatement(data, path);
+    const runtimeStatement = reactRuntimeImportStatement(data, path, projectPath);
+    const translationStatement = containsTranslationBinding(data)
+        ? `import {useFastUITranslation} from '${relativeImport(pathResolve(getSrcPathFromBlueprintPath(path)), pathResolve(projectPath, 'src', 'translations', 'generated.mjs'))}';`
+        : '';
     const styleStatement = getStyleStatement(data);
 
     const frame = getFrame(data);
     const ownView = loopOwnView(data);
     const ownProps = ownView === '<span/>' ? loopOwnProps(data) : '';
     const needsStyleStatement = ownView.includes('style={style}') || ownView.includes('{...style,');
-    const inputsDecl = getInputsStatement(data) === '' ? '' : `${getInputsStatement(data)},`;
+    const prelude = reactComponentPrelude(data, path);
+    const translationStatements = getTranslationStatements(data);
     const scroll = getLoopScrollProp(data);
     const isHorizontal = getIsLoopHorizontal(data);
     const estimate = await getLoopEstimate(data, path);
@@ -909,14 +981,17 @@ export async function composeReactLoop({data, path, projectPath}) {
     const content = `
 import React from 'react';
 ${logicsImportStatement}
+${translationStatement}
+${runtimeStatement}
 ${storeStatement}
 ${componentsImportStatement}
 ${actionImportStatement}
 
 // eslint-disable-next-line react/prop-types
-export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overrideProps={},overrideStates={}}) {
+export const ${getFileName(path)}=React.memo(function ${getFileName(path)}({${reactFunctionProps(data)}}) {
+    ${prelude}
     ${statesInString}
-    
+    ${translationStatements}
     ${componentMemoStatement}
     
     ${needsStyleStatement ? styleStatement : ''}
@@ -925,7 +1000,7 @@ export function ${getFileName(path)}({${inputsDecl}overrideStyles={},overridePro
     ${effectsString}
 
     return(${composeFrame(data, frame, ownView === '<span/>' ? '' : ownView, ownProps)});
-}
+});
     `;
 
     const srcPath = getSrcPathFromBlueprintPath(path);

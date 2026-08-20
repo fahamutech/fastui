@@ -363,7 +363,7 @@ component:
 
 ## Component reuse (`base: ./path.yml`)
 
-Component reuse is different from composition. When `base` points to a spec file, the generator emits a **thin wrapper** that imports the base component and passes local modifier fields as override props — **no deep-merge happens at build time**.
+Component reuse is different from composition. When `base` points to a spec file, both Flutter and React recursively resolve and deep-merge the specification during generation.
 
 ```yaml
 # src/blueprints/modules/auth/login_button.yml
@@ -382,61 +382,16 @@ component:
       label: Sign in            # seeds the base component's initial label state
 ```
 
-**What the generator produces:**
-
-- A wrapper component that imports the base
-- Passes local `modifier.styles` as `overrideStyles`
-- Passes local `modifier.props` as `overrideProps`
-- Passes local `modifier.states` as `overrideStates`
-
-The base component merges all three at render time:
-- `style = {..._baseStyle, ...overrideStyles}` — overrides win on the leaf element
-- `{...overrideProps}` spread after static props — override props win
-- `useModuleState(name, {...baseDefaults, ...overrideStates})` — seeded initial state
-
-**Generated React wrapper:**
+**Generated React component:**
 
 ```jsx
-import {PrimaryButton} from '../../shared/common/primary_button.jsx';
-
-export function LoginButton({loopElement, loopIndex}) {
-    return (
-        <PrimaryButton
-            loopIndex={loopIndex}
-            loopElement={loopElement}
-            overrideStyles={{"backgroundColor": "#e53935", "boxSizing": "border-box", "minWidth": 0}}
-            overrideProps={{"id": "login-button", "onClick": {"action": "navigation.open", "name": "dashboard", "type": "push"}}}
-            overrideStates={{"label": "Sign in"}}
-        />
-    );
-}
+export const LoginButton = React.memo(function LoginButton({instanceId, initialState = {}, initialProps = {}}) {
+  // Complete generated component: inherited fields are already merged.
+  return <div id="login-button" style={{backgroundColor: '#e53935'}} {...initialProps} />;
+});
 ```
 
-**Generated Flutter wrapper:**
-
-```dart
-import 'package:flutter/material.dart';
-import '../../shared/common/primary_button.dart';
-
-class FastUILoginButton extends StatelessWidget {
-  const FastUILoginButton({super.key, this.loopIndex, this.loopElement});
-  final dynamic loopIndex;
-  final dynamic loopElement;
-
-  @override
-  Widget build(BuildContext context) {
-    return FastUIPrimaryButton(
-      loopIndex: loopIndex,
-      loopElement: loopElement,
-      overrideStyles: {'backgroundColor': '#e53935'},
-      overrideProps: {'id': 'login-button'},
-      overrideStates: {'label': 'Sign in'},
-    );
-  }
-}
-```
-
-> **Component reuse is not inheritance.** The base component owns its own shape, its own states, and its own layout. The wrapper is a fresh, independent file that only forwards overrides — it does not copy or merge the base spec's structure.
+Both targets emit a complete `LoginButton`. Object fields merge with local values winning, arrays replace inherited arrays, inherited child paths are rebased to the derived spec, and inheritance cycles report every participating path.
 
 ---
 

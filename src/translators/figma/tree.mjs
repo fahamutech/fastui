@@ -14,7 +14,7 @@ import {join, resolve} from 'node:path';
 import {ensureFileExist, ensurePathExist} from '../../shared/fs.mjs';
 import {maybeRandomName, sanitizeFullColon} from '../../shared/fn.mjs';
 import {routeFromSurfaceName} from '../../shared/routing.mjs';
-import {getBaseType, generatedNodeName, moduleFromName, stripModuleSuffix} from './naming.mjs';
+import {getBaseType, generatedNodeName, moduleFromName, stripModuleSuffix, textStateBinding} from './naming.mjs';
 import {getContainerLikeStyles, getSize, isRepeatType, transformLayoutAxisAlign, transformLayoutWrap, getImageRef} from './layout.mjs';
 import {getBackgroundBlurEffect, getDropShadowEffect, getLayerBlurEffect} from './effects.mjs';
 import {getColor} from './color.mjs';
@@ -52,6 +52,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
     }
     for (let i = 0; i < fChildren?.length; i++) {
         const child = fChildren[i] ?? {};
+        const stateText = child?.type === 'TEXT' ? textStateBinding(child) : null;
         const name = generatedNodeName(child);
 
         if (child?.type === 'FRAME' || child?.type === 'INSTANCE' || child?.type === 'COMPONENT') {
@@ -133,6 +134,8 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
         } else {
             const sc = {
                 ...child,
+                figmaName: child?.name,
+                stateText,
                 name,
                 module,
                 isLoopElement,
@@ -198,11 +201,11 @@ function surfacePresentationFor(page) {
  * @param downloadAssets
  * @return {Promise<*[]>}
  */
-export async function getPagesAndTraverseChildren({document, components, token, figFile, srcPath, downloadAssets = false}) {
+export async function getPagesAndTraverseChildren({document, components, token, figFile, srcPath, downloadAssets = false, projectPath = process.cwd()}) {
     const pages = [];
     routeLookup = {};
     sharedComponentMap = {};
-    configureAssetDownloads(downloadAssets);
+    configureAssetDownloads(downloadAssets, projectPath);
     const sharedDefinitions = collectSharedComponents(document, components, sharedComponentMap);
     const sPages = document?.children?.filter(x => (x?.visible ?? true) && x?.type === 'FRAME');
 

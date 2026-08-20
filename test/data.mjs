@@ -22,26 +22,28 @@ watch(join(__dirname, 'src', 'blueprints'), {recursive: true}, (event, filename)
 export const specFile = `
 import React from 'react';
 import {getColor} from '../services/test_comp.mjs';
+import {createFastUIComponentContext} from '../../src/fastui_runtime.mjs';
 
 // eslint-disable-next-line react/prop-types
-export function TestComp({loopElement, loopIndex, overrideStyles={}, overrideProps={}, overrideStates={}}) {
-    // eslint-disable-next-line no-unused-vars
-    const component = React.useMemo(() => ({
-        states: {},
-        inputs: {"loopElement": loopElement, "loopIndex": loopIndex}
-    }), [loopElement, loopIndex]);
-    
-    const _baseStyle = React.useMemo(() => ({
+export const TestComp = React.memo(function TestComp({loopElement, loopIndex, instanceId, initialState={}, initialProps={}}) {
+    const resolvedInstanceId = instanceId ?? "test_comp";
+    const inputs = {loopElement, loopIndex};
+    const componentStore = null;
+    const component = React.useMemo(() => createFastUIComponentContext({
+        store: componentStore,
+        componentId: "test_comp",
+        instanceId: resolvedInstanceId,
+        inputs
+    }), [componentStore, resolvedInstanceId, loopElement, loopIndex]);
+    const style = {
         "height": 54,
         "backgroundColor": "blue",
-        "color": getColor({component, args: []})
-    }), [component]);
-    const style = React.useMemo(() => ({..._baseStyle, ...overrideStyles}), [_baseStyle, overrideStyles]);
-    
+        "color": getColor(component.withArgs([]))
+    };
     return (
-        <div style={style} {...overrideProps}></div>
+        <div style={style} {...initialProps}></div>
     );
-}
+});
     
 `;
 

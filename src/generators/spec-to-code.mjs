@@ -1,14 +1,15 @@
 import {composeComponent} from './component.mjs';
 import {composeCondition} from './condition.mjs';
 import {composeLoop} from './loop.mjs';
-import {readSpecs, specToJSON} from '../specs/reader.mjs';
-import {normalizeSpecDocument, prepareBehavior} from './legacy-spec.mjs';
-import {copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
-import {basename, dirname, resolve, sep} from 'node:path';
+import {readSpecs, specToFlutterJSON, specToJSON} from '../specs/reader.mjs';
+import {normalizeSpecDocument, prepareBehavior} from './spec-normalizer.mjs';
+import {copyFile, mkdir, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
+import {dirname, join, resolve, sep} from 'node:path';
 import {getBlueprintRoot, getTemplateSelected} from '../tooling/config.mjs';
 import {getStates, parseLogicReference} from './modifier.mjs';
 import {identifier, pascalIdentifier, relativeImport, specStructure} from './project-structure.mjs';
 import {flutterRuntimeSource} from './templates/flutter/generator.mjs';
+import {reactRuntimeSource} from './templates/reactjs/runtime.mjs';
 
 async function syncTranslatedAssets(projectPath) {
     const source = resolve(projectPath, '.fastui', 'assets', 'figma');
@@ -21,57 +22,14 @@ async function syncTranslatedAssets(projectPath) {
         ? resolve(projectPath, 'assets', 'images', 'figma')
         : resolve(projectPath, 'public', 'images', 'figma');
     await mkdir(target, {recursive: true});
-    await cp(source, target, {recursive: true, force: false, errorOnExist: false});
-}
-
-async function writeIfMissing(path, content) {
-    try {
-        await stat(path);
-        return;
-    } catch (_) {
+    for (const resourceType of ['images', 'vectors']) {
+        const folder = join(source, resourceType);
+        let files = [];
+        try { files = await readdir(folder, {withFileTypes: true}); } catch (_) {}
+        for (const file of files) {
+            if (file.isFile()) await copyFile(join(folder, file.name), join(target, file.name));
+        }
     }
-    await mkdir(dirname(path), {recursive: true});
-    await writeFile(path, content);
-}
-
-async function ensureReactSupportFiles(projectPath) {
-    await writeIfMissing(resolve(projectPath, 'src', 'stores', 'observable_store.mjs'), `import {BehaviorSubject} from 'rxjs';
-
-export function createObservableStore(initialState = {}) {
-  const subject = new BehaviorSubject(Object.freeze({...initialState}));
-  return {
-    state$: subject.asObservable(),
-    get value() { return subject.value; },
-    set(patch) { subject.next(Object.freeze({...subject.value, ...patch})); },
-    update(reducer) { subject.next(Object.freeze(reducer(subject.value))); },
-    subscribe(observer) { return subject.subscribe(observer); },
-    dispose() { subject.complete(); },
-  };
-}
-
-export const appState = createObservableStore();
-`);
-    await writeIfMissing(resolve(projectPath, 'src', 'stores', 'use_observable.mjs'), `import {useSyncExternalStore} from 'react';
-
-export function useObservable(store, selector = value => value) {
-  return useSyncExternalStore(
-    listener => {
-      const subscription = store.subscribe(listener);
-      return () => subscription.unsubscribe();
-    },
-    () => selector(store.value),
-    () => selector(store.value),
-  );
-}
-`);
-}
-
-function humanizeTranslationKey(key) {
-    return `${key ?? ''}`
-        .replace(/[_-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/\b\w/g, char => char.toUpperCase());
 }
 
 function parseTranslationArgs(argsSource = '') {
@@ -110,10 +68,15 @@ function parseTranslationArgs(argsSource = '') {
 function collectTranslationEntries(data) {
     const entries = new Map();
     const visit = value => {
+        if (value?.translation && typeof value.translation === 'object') {
+            const {key, fallback} = value.translation;
+            if (key && fallback !== undefined) entries.set(key, fallback);
+            return;
+        }
         const logic = parseLogicReference(value);
         if (logic?.isCall && logic.name === 't') {
             const [key, fallback] = parseTranslationArgs(logic.argsSource);
-            if (key) entries.set(key, fallback ?? humanizeTranslationKey(key));
+            if (key && fallback !== undefined) entries.set(key, fallback);
             return;
         }
         if (Array.isArray(value)) value.forEach(visit);
@@ -125,66 +88,28 @@ function collectTranslationEntries(data) {
 
 function reactGeneratedTranslationsSource(entries) {
     const translations = JSON.stringify({default: entries}, null, 2);
-    return `const generatedTranslations = ${translations};
+    return `import {createFastUITranslationStore, useFastUITranslationValue} from '../fastui_runtime.mjs';
 
-function defaultTranslationText(key) {
-  return String(key ?? '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim().replace(/\\b\\w/g, char => char.toUpperCase());
+const generatedTranslations = ${translations};
+
+export const fastUITranslationStore = createFastUITranslationStore(
+  generatedTranslations.default ?? {},
+);
+
+export function useFastUITranslation(key, args = {}) {
+  return useFastUITranslationValue(fastUITranslationStore, key, args);
 }
-
-function createFastUITranslations() {
-  return {
-    locale: 'default',
-    translations: {},
-    load(locale, entries) {
-      this.translations[locale] = {...(this.translations[locale] ?? {}), ...entries};
-      return this;
-    },
-    setLocale(locale) {
-      this.locale = locale;
-      return this;
-    },
-    t(key, fallback) {
-      return this.translations[this.locale]?.[key]
-        ?? this.translations.en?.[key]
-        ?? fallback
-        ?? defaultTranslationText(key);
-    },
-  };
-}
-
-export function installFastUITranslations(target = globalThis) {
-  const store = target.fastUITranslations ?? createFastUITranslations();
-  if (typeof store.load !== 'function') store.load = createFastUITranslations().load;
-  if (typeof store.setLocale !== 'function') store.setLocale = createFastUITranslations().setLocale;
-  if (typeof store.t !== 'function') store.t = createFastUITranslations().t;
-  store.locale = store.locale ?? 'default';
-  store.translations = store.translations ?? {};
-  store.load('default', generatedTranslations.default ?? {});
-  target.fastUITranslations = store;
-  return store;
-}
-
-export const fastUITranslations = installFastUITranslations();
 `;
 }
 
 function flutterGeneratedTranslationsSource(entries) {
     const mapEntries = Object.entries(entries)
-        .map(([key, value]) => `  ${JSON.stringify(key)}: ${JSON.stringify(value)},`)
+        .map(([key, value]) =>
+            `  ${JSON.stringify(key)}: ${JSON.stringify(value)},`.replaceAll('$','\\$'))
         .join('\n');
-    return `import '../fastui_runtime.dart';
-
-const Map<String, String> fastUITranslationsDefault = <String, String>{
+    return `const Map<String, String> fastUITranslationsDefault = <String, String>{
 ${mapEntries}
 };
-
-bool _fastUITranslationsInstalled = false;
-
-void installFastUITranslations() {
-  if (_fastUITranslationsInstalled) return;
-  FastUITranslations.instance.load('default', fastUITranslationsDefault);
-  _fastUITranslationsInstalled = true;
-}
 `;
 }
 
@@ -197,81 +122,6 @@ async function writeGeneratedTranslations(projectPath, template, entries) {
         ? flutterGeneratedTranslationsSource(entries)
         : reactGeneratedTranslationsSource(entries));
     return target;
-}
-
-function flutterFileName(value) {
-    return `${value}`
-        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-        .replace(/[^a-zA-Z0-9.]+/g, '_')
-        .toLowerCase();
-}
-
-async function collectFiles(root) {
-    const files = [];
-    let entries = [];
-    try { entries = await readdir(root, {withFileTypes: true}); } catch (_) { return files; }
-    for (const entry of entries) {
-        const path = resolve(root, entry.name);
-        if (entry.isDirectory()) files.push(...await collectFiles(path));
-        else files.push(path);
-    }
-    return files;
-}
-
-/** Copy legacy user implementations into the visible services tree without deleting or overwriting either copy. */
-async function migrateLegacyServices(specRoot, template) {
-    const absoluteRoot = resolve(specRoot);
-    const parts = absoluteRoot.split(sep);
-    const blueprintIndex = parts.lastIndexOf('blueprints');
-    if (blueprintIndex < 0) return [];
-    const sourceRoot = parts.slice(0, blueprintIndex).join(sep) || sep;
-    const moduleRoot = resolve(sourceRoot, 'blueprints', 'modules');
-    const migrated = [];
-    for (const source of await collectFiles(moduleRoot)) {
-        const sourceParts = source.split(sep);
-        const moduleIndex = sourceParts.indexOf('modules', blueprintIndex + 1);
-        const logicIndex = sourceParts.lastIndexOf('logics');
-        if (moduleIndex < 0 || logicIndex <= moduleIndex) continue;
-        const expectedExtension = template === 'flutter' ? '.dart' : '.mjs';
-        if (!source.endsWith(expectedExtension)) continue;
-        const targetName = template === 'flutter' ? flutterFileName(basename(source)) : basename(source);
-        const target = resolve(sourceRoot, 'services', ...sourceParts.slice(moduleIndex + 1, logicIndex), targetName);
-        try {
-            await stat(target);
-        } catch (_) {
-            await mkdir(dirname(target), {recursive: true});
-            await copyFile(source, target);
-            migrated.push(target);
-        }
-    }
-    return migrated;
-}
-
-async function removeDuplicateLegacyState(projectPath, template) {
-    const pairs = template === 'flutter'
-        ? [['lib/state/observable_store.dart', 'lib/stores/observable_store.dart']]
-        : [
-            ['src/state/observable_store.mjs', 'src/stores/observable_store.mjs'],
-            ['src/state/use_observable.mjs', 'src/stores/use_observable.mjs'],
-        ];
-    const normalize = value => `${value}`.replace(/\s+/g, '');
-    for (const [legacyRelative, currentRelative] of pairs) {
-        const legacy = resolve(projectPath, legacyRelative);
-        const current = resolve(projectPath, currentRelative);
-        try {
-            const [legacySource, currentSource] = await Promise.all([
-                readFile(legacy, 'utf8'),
-                readFile(current, 'utf8'),
-            ]);
-            if (normalize(legacySource) === normalize(currentSource)) await rm(legacy, {force: true});
-        } catch (_) {
-        }
-    }
-    const legacyRoot = resolve(projectPath, template === 'flutter' ? 'lib/state' : 'src/state');
-    try {
-        if ((await readdir(legacyRoot)).length === 0) await rm(legacyRoot, {recursive: true});
-    } catch (_) {
-    }
 }
 
 function generatedPathForSpec(specPath, template) {
@@ -306,7 +156,7 @@ async function updateGeneratedManifest({projectPath, specRoot, results, template
     for (const stale of previous.files ?? []) {
         const target = resolve(stale);
         const generatedModule = target === allowedModuleRoot || target.startsWith(`${allowedModuleRoot}${sep}`);
-        const generatedStoreModel = target.startsWith(`${allowedStoreRoot}${sep}`) && /models\.generated\.(?:dart|mjs)$/i.test(target);
+        const generatedStoreModel = target.startsWith(`${allowedStoreRoot}${sep}`) && /(?:(?:models|providers|stores)\.generated\.(?:dart|mjs)|store\.mjs)$/i.test(target);
         if ((generatedModule || generatedStoreModel) && !current.has(pathKey(target))) {
             await rm(target, {force: true});
         }
@@ -323,100 +173,153 @@ function jsDocType(value) {
 }
 
 function dartType(value) {
-    if (Array.isArray(value)) return 'List<dynamic>';
-    if (value && typeof value === 'object') return 'Map<String, dynamic>';
-    if (typeof value === 'boolean') return 'bool';
-    if (typeof value === 'number') return Number.isInteger(value) ? 'int' : 'double';
-    if (typeof value === 'string' && !/^(?:inputs|states)\./i.test(value)) return 'String';
+    if (Array.isArray(value)) return 'List<dynamic>?';
+    if (value && typeof value === 'object') return 'Map<String, dynamic>?';
+    if (typeof value === 'boolean') return 'bool?';
+    if (typeof value === 'number') return Number.isInteger(value) ? 'int?' : 'double?';
+    if (typeof value === 'string' && !/^(?:inputs|states)\./i.test(value)) return 'String?';
     return 'dynamic';
+}
+
+function dartValue(value) {
+    if (value === undefined || value === null) return 'null';
+    if (typeof value === 'string') return JSON.stringify(value).replaceAll('$', '\\$');
+    if (typeof value === 'number' || typeof value === 'boolean') return `${value}`;
+    if (Array.isArray(value)) return `<dynamic>[${value.map(dartValue).join(', ')}]`;
+    if (typeof value === 'object') {
+        return `<String, dynamic>{${Object.entries(value).map(([key, entry]) => `${dartValue(key)}: ${dartValue(entry)}`).join(', ')}}`;
+    }
+    return 'null';
 }
 
 function reactModelsSource(group) {
     return `${group.map(item => {
         const name = `${item.componentName}StateModel`;
         const fields = Object.entries(item.states).map(([key, value]) => ` * @property {${jsDocType(value)}} ${identifier(key)}`).join('\n');
-        return `/**\n * @typedef {Object} ${name}\n${fields}\n */`;
+        return `/**\n * @readonly\n * @typedef {Object} ${name}\n${fields}\n */`;
     }).join('\n\n')}\n`;
 }
 
-function reactStoreSource(storePath, sourceRoot) {
-    const observableImport = relativeImport(storePath, resolve(sourceRoot, 'stores', 'observable_store.mjs'));
-    const hookImport = relativeImport(storePath, resolve(sourceRoot, 'stores', 'use_observable.mjs'));
-    return `import {useCallback, useEffect, useId, useMemo, useRef} from 'react';
-import {createObservableStore} from '${observableImport}';
-import {useObservable} from '${hookImport}';
-
-export const moduleStore = createObservableStore();
-
-/**
- * Returns observable state isolated to one mounted component instance.
- * @template {Record<string, unknown>} T
- * @param {string} componentName
- * @param {T} initialState
- * @returns {[T, (patch: Partial<T>|((current: T) => Partial<T>)) => void]}
- */
-export function useModuleState(componentName, initialState) {
-  const reactId = useId();
-  const instanceId = useMemo(() => componentName + ':' + reactId, [componentName, reactId]);
-  const initialStateRef = useRef(initialState);
-  const value = useObservable(moduleStore, state => state[instanceId] ?? initialStateRef.current);
-  const setState = useCallback(patch => {
-    moduleStore.update(state => {
-      const current = state[instanceId] ?? initialStateRef.current;
-      const next = typeof patch === 'function' ? patch(current) : patch;
-      return {...state, [instanceId]: Object.freeze({...current, ...next})};
-    });
-  }, [instanceId]);
-  useEffect(() => {
-    if (moduleStore.value[instanceId] === undefined) {
-      moduleStore.set({[instanceId]: Object.freeze({...initialStateRef.current})});
+function reactStateValue(value) {
+    if (typeof value === 'string' && /^inputs\./i.test(value.trim())) {
+        return value.trim().replace(/^inputs\./i, 'inputs.');
     }
-    return () => moduleStore.update(state => {
-      const next = {...state};
-      delete next[instanceId];
-      return next;
-    });
-  }, [instanceId]);
-  return [value, setState];
+    return JSON.stringify(value);
 }
-`;
+
+function reactStoreExportName(componentName) {
+    const camel = `${componentName[0] ?? ''}`.toLowerCase() + componentName.slice(1);
+    return `${identifier(camel)}Store`;
+}
+
+function reactStoreSource(group, storePath) {
+    const runtimeImport = relativeImport(storePath, resolve(group[0].projectSourceRoot, 'fastui_runtime.mjs'));
+    const stores = group.map(item => {
+        const storeName = reactStoreExportName(item.componentName);
+        const initial = Object.entries(item.states)
+            .map(([key, value]) => `    ${JSON.stringify(key)}: ${reactStateValue(value)},`)
+            .join('\n');
+        const setters = Object.keys(item.states)
+            .map(key => {
+                const field = identifier(key);
+                return `    set${field[0].toUpperCase()}${field.slice(1)}: (state, value) => ({...state, ${JSON.stringify(key)}: value}),`;
+            })
+            .join('\n');
+        return `export const ${storeName} = createFastUIComponentStore({
+  componentId: ${JSON.stringify(item.specId)},
+  fields: ${JSON.stringify(Object.keys(item.states))},
+  createInitialState: (inputs = {}) => Object.freeze({
+${initial}
+  }),
+  setters: {
+${setters}
+  },
+});`;
+    }).join('\n\n');
+    return `import {createFastUIComponentStore} from '${runtimeImport}';\n\n${stores}\n`;
 }
 
 function flutterModelsSource(group) {
-    return `${group.map(item => {
+    return `const Object _fastUIUnset = Object();\n\n${group.map(item => {
         const name = `FastUI${item.componentName}StateModel`;
         const fields = Object.entries(item.states);
         const constructor = fields.map(([key]) => `required this.${identifier(key)}`).join(', ');
         const declarations = fields.map(([key, value]) => `  final ${dartType(value)} ${identifier(key)};`).join('\n');
-        return `class ${name} {\n  const ${name}({${constructor}});\n${declarations}\n}`;
+        const copyParams = fields.map(([key]) => `Object? ${identifier(key)} = _fastUIUnset`).join(', ');
+        const copies = fields.map(([key, value]) => {
+            const field = identifier(key);
+            return `      ${field}: identical(${field}, _fastUIUnset) ? this.${field} : ${field} as ${dartType(value)},`;
+        }).join('\n');
+        return `class ${name} {\n  const ${name}({${constructor}});\n${declarations}\n\n  ${name} copyWith({${copyParams}}) => ${name}(\n${copies}\n  );\n}`;
     }).join('\n\n')}\n`;
 }
 
-function flutterStoreSource() {
-    return `import 'package:flutter/foundation.dart';
+function flutterStoreSource(group, storePath) {
+    const runtimeImport = relativeImport(storePath, resolve(group[0].projectSourceRoot, 'fastui_runtime.dart'));
+    const modelsImport = relativeImport(storePath, group[0].storeModelsPath);
+    const providers = group.map(item => {
+        const model = `FastUI${item.componentName}StateModel`;
+        const notifier = `FastUI${item.componentName}Notifier`;
+        const camelName = `${item.componentName[0]}`.toLowerCase() + item.componentName.slice(1);
+        const provider = `${identifier(camelName)}Provider`;
+        const initialState = `fastUI${item.componentName}InitialState`;
+        const stateDefaults = `fastUI${item.componentName}StateDefaults`;
+        const defaultEntries = Object.entries(item.states)
+            .map(([key, value]) => `  ${JSON.stringify(key)}: ${dartValue(value)},`)
+            .join('\n');
+        const initialFields = Object.entries(item.states).map(([key, value]) => {
+            const field = identifier(key);
+            const type = dartType(value);
+            const override = `overrides[${JSON.stringify(key)}]`;
+            const fallback = `${stateDefaults}[${JSON.stringify(key)}]`;
+            return `    ${field}: overrides.containsKey(${JSON.stringify(key)}) ? ${type === 'dynamic' ? override : `${override} as ${type}`} : ${type === 'dynamic' ? fallback : `${fallback} as ${type}`},`;
+        }).join('\n');
+        const setters = Object.entries(item.states).map(([key, value]) => {
+            const field = identifier(key);
+            return `  void set${field[0].toUpperCase()}${field.slice(1)}(${dartType(value)} value) => state = state.copyWith(${field}: value);`;
+        }).join('\n');
+        const cases = Object.entries(item.states).map(([key, value]) => {
+            const field = identifier(key);
+            return `      case ${JSON.stringify(key)}:\n        set${field[0].toUpperCase()}${field.slice(1)}(value as ${dartType(value)});\n        return;`;
+        }).join('\n');
+        return `const Map<String, dynamic> ${stateDefaults} = <String, dynamic>{
+${defaultEntries}
+};
 
-class FastUIModuleStore extends ChangeNotifier {
-  final Map<Type, Map<String, Object>> _values = <Type, Map<String, Object>>{};
+${model} ${initialState}([Map<String, dynamic> overrides = const <String, dynamic>{}]) => ${model}(
+${initialFields}
+);
 
-  Map<String, T> values<T extends Object>() =>
-      Map<String, T>.unmodifiable((_values[T] ?? const <String, Object>{}).cast<String, T>());
+class ${notifier} extends AutoDisposeFamilyNotifier<${model}, FastUIProviderInstance<${model}>> {
+  Future<void>? _initialization;
 
-  void set<T extends Object>(String instanceId, T value) {
-    (_values[T] ??= <String, Object>{})[instanceId] = value;
-    notifyListeners();
-  }
+  @override
+  ${model} build(FastUIProviderInstance<${model}> argument) => ${initialState}(argument.initialOverrides);
 
-  void remove<T extends Object>(String instanceId) {
-    if (_values[T]?.remove(instanceId) != null) notifyListeners();
+  Future<void> initialize(FutureOr<void> Function() callback) =>
+      _initialization ??= Future<void>.sync(callback);
+
+${setters}
+
+  void setField(String key, dynamic value) {
+    switch (key) {
+${cases}
+      default:
+        throw ArgumentError.value(key, 'key', 'Unknown FastUI state field');
+    }
   }
 }
 
-final moduleStore = FastUIModuleStore();
-`;
+final ${provider} = NotifierProvider.autoDispose.family<${notifier}, ${model}, FastUIProviderInstance<${model}>>(${notifier}.new);`;
+    }).join('\n\n');
+    return `import 'dart:async';\nimport 'package:flutter_riverpod/flutter_riverpod.dart';\nimport '${runtimeImport}';\nimport '${modelsImport}';\n\n${providers}\n`;
 }
 
 async function writeModuleStores(results, template) {
-    const stateful = results.filter(result => result.generated && Object.keys(result.states ?? {}).length > 0);
+    const stateful = results.filter(result => result.generated && (
+        Object.keys(result.states ?? {}).length > 0
+        || (template === 'reactjs' && Object.keys(result.effects ?? {}).length > 0)
+    ));
     const groups = new Map();
     for (const result of stateful) {
         const structure = specStructure(result.specPath, template);
@@ -427,50 +330,75 @@ async function writeModuleStores(results, template) {
     for (const [modelsPath, group] of groups) {
         const {storePath, projectSourceRoot} = group[0];
         await mkdir(dirname(storePath), {recursive: true});
-        try {
-            await stat(storePath);
-        } catch (_) {
-            await writeFile(storePath, template === 'flutter'
-                ? flutterStoreSource()
-                : reactStoreSource(storePath, projectSourceRoot));
+        if (template === 'flutter') {
+            await writeFile(storePath, flutterStoreSource(group, storePath));
+        } else {
+            await writeFile(storePath, reactStoreSource(group, storePath));
         }
         await writeFile(modelsPath, template === 'flutter' ? flutterModelsSource(group) : reactModelsSource(group));
     }
-    return [...groups.keys()];
+    return [...groups.entries()].flatMap(([modelsPath, group]) => [modelsPath, group[0].storePath]);
 }
 
-export async function generateSpecFile({specPath, projectPath = process.cwd()}) {
-    const document = await specToJSON(specPath);
+async function prepareSpecFile({specPath, projectPath = process.cwd()}) {
+    const document = getTemplateSelected() === 'flutter'
+        ? await specToFlutterJSON(specPath)
+        : await specToJSON(specPath);
     const normalized = normalizeSpecDocument(document);
     if (!normalized.data || normalized.kind === 'unknown') {
-        return {specPath, kind: normalized.kind, generated: false, translations: {}};
+        return {specPath, projectPath, kind: normalized.kind, generated: false, translations: {}};
     }
     const data = prepareBehavior(normalized.kind, normalized.data);
-    const paths = {path: specPath, projectPath};
-    if (normalized.kind === 'condition') await composeCondition({data, ...paths});
-    else if (normalized.kind === 'loop') await composeLoop({data, ...paths});
-    else await composeComponent({data, ...paths});
-    return {specPath, kind: normalized.kind, generated: true, states: getStates(data), translations: collectTranslationEntries(data)};
+    return {
+        specPath,
+        projectPath,
+        kind: normalized.kind,
+        generated: true,
+        data,
+        states: getStates(data),
+        effects: data?.modifier?.effects ?? {},
+        translations: collectTranslationEntries(data),
+    };
+}
+
+async function renderPreparedSpec(prepared) {
+    if (!prepared.generated) return prepared;
+    const paths = {path: prepared.specPath, projectPath: prepared.projectPath};
+    if (prepared.kind === 'condition') await composeCondition({data: prepared.data, ...paths});
+    else if (prepared.kind === 'loop') await composeLoop({data: prepared.data, ...paths});
+    else await composeComponent({data: prepared.data, ...paths});
+    return prepared;
+}
+
+export async function generateSpecFile(options) {
+    const rendered = await renderPreparedSpec(await prepareSpecFile(options));
+    const {data: _data, projectPath: _projectPath, ...result} = rendered;
+    return result;
 }
 
 export async function generateCodeFromSpecs({root, projectPath = process.cwd()} = {}) {
     await syncTranslatedAssets(projectPath);
     const template = getTemplateSelected();
     const specRoot = root ?? resolve(projectPath, getBlueprintRoot(template));
-    await removeDuplicateLegacyState(projectPath, template);
     if (template === 'flutter') {
         await writeFile(resolve(projectPath, 'lib', 'fastui_runtime.dart'), flutterRuntimeSource());
     } else {
-        await ensureReactSupportFiles(projectPath);
+        await writeFile(resolve(projectPath, 'src', 'fastui_runtime.mjs'), reactRuntimeSource());
     }
-    await migrateLegacyServices(specRoot, template);
-    const results = [];
+    const prepared = [];
     for (const specPath of await readSpecs(specRoot)) {
-        results.push(await generateSpecFile({specPath, projectPath}));
+        prepared.push(await prepareSpecFile({specPath, projectPath}));
     }
-    const translations = Object.assign({}, ...results.map(result => result.translations ?? {}));
+    const translations = Object.assign({}, ...prepared.map(result => result.translations ?? {}));
     const translationFile = await writeGeneratedTranslations(projectPath, template, translations);
-    const storeFiles = await writeModuleStores(results, template);
-    await updateGeneratedManifest({projectPath, specRoot, results, template, additionalFiles: [...storeFiles, translationFile]});
+    const storeFiles = await writeModuleStores(prepared, template);
+    const results = [];
+    for (const item of prepared) {
+        const rendered = await renderPreparedSpec(item);
+        const {data: _data, projectPath: _projectPath, ...result} = rendered;
+        results.push(result);
+    }
+    const runtimeFile = resolve(projectPath, template === 'flutter' ? 'lib/fastui_runtime.dart' : 'src/fastui_runtime.mjs');
+    await updateGeneratedManifest({projectPath, specRoot, results, template, additionalFiles: [...storeFiles, translationFile, runtimeFile]});
     return results;
 }

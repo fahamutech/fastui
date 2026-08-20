@@ -31,7 +31,9 @@ export function getChildren(data) {
     const modifier = {...data?.modifier ?? {}};
     const children = modifier?.props?.children;
     const logic = parseLogicReference(children);
-    if (`${children}`.trim().toLowerCase().startsWith('states.')) {
+    if (children?.translation && typeof children.translation === 'object') {
+        return {type: 'translation', value: {...children.translation}};
+    } else if (`${children}`.trim().toLowerCase().startsWith('states.')) {
         return {type: 'state', value: `${children}`?.replace(/^(states.)/ig, '')};
     } else if (`${children}`.trim().toLowerCase().startsWith('components.')) {
         return {type: 'component', value: `${children}`?.replace(/^(components.)/ig, '')};
@@ -88,9 +90,7 @@ function resolveFrameBase(base) {
  *                  Set when `frame.base` is authored as `{type, styles}`.
  * - `current`    : styles applied only to this node's own rendered view.
  * - `next`       : styles applied uniformly to each extended child's wrapper.
- * Normalizes on read (accepting the legacy `frame.styles` field as
- * `current`) so this accessor is correct whether or not legacy-spec.mjs's
- * normalization already ran on `data`.
+ * Reads the current `frame.current` composition contract.
  */
 export function getFrame(data) {
     const frame = data?.modifier?.frame;
@@ -107,7 +107,7 @@ export function getFrame(data) {
 
 /**
  * Ordered list of child spec paths this node composes as its top-down
- * children. Always normalized to an array by legacy-spec.mjs, so this is a
+ * children. Always normalized to an array by spec-normalizer.mjs, so this is a
  * thin, explicit accessor kept for readability at call sites.
  * @return {string[]}
  */
@@ -129,5 +129,3 @@ export function getRight(data) {
 export function getFeed(data) {
     return data?.modifier?.feed;
 }
-
-

@@ -2,7 +2,7 @@
  * Flutter routing/AppRoute code generation: the generated `app_route.dart`
  * router wiring plus the user-owned `routing_guard.dart` stub.
  */
-import {readFile, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {ensureFileExist} from '../../../shared/fs.mjs';
 import {getFileName} from '../../naming.mjs';
@@ -62,8 +62,16 @@ export async function ensureFlutterAppRouteFile({pages, initialId}) {
     const routeEntries = routes.map(routeEntry).join('\n');
     const outputPath = resolve(join('lib', 'app_route.dart'));
     const guardPath = resolve(join('lib', 'routing_guard.dart'));
+    const translationsPath = resolve(join('lib', 'translations', 'generated.dart'));
+    await mkdir(resolve(join('lib', 'translations')), {recursive: true});
     await ensureFileExist(outputPath);
     await ensureFileExist(guardPath);
+    await ensureFileExist(translationsPath);
+    let translationsSource = '';
+    try { translationsSource = await readFile(translationsPath, 'utf8'); } catch (_) {}
+    if (!translationsSource.trim()) {
+        await writeFile(translationsPath, 'const Map<String, String> fastUITranslationsDefault = <String, String>{};\n');
+    }
     let guardSource = '';
     try { guardSource = await readFile(guardPath, 'utf8'); } catch (_) {}
     if (!guardSource.includes('beforeNavigate')) await writeFile(guardPath, flutterRoutingGuardSource);

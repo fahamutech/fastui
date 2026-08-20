@@ -14,6 +14,13 @@ export function containsNavigationAction(value) {
     return Object.values(value).some(containsNavigationAction);
 }
 
+export function containsTranslationBinding(value) {
+    if (Array.isArray(value)) return value.some(containsTranslationBinding);
+    if (!value || typeof value !== 'object') return false;
+    if (value.translation && typeof value.translation === 'object') return true;
+    return Object.values(value).some(containsTranslationBinding);
+}
+
 export function analyzeBehavior(data = {}, {kind = 'component'} = {}) {
     const states = getStates(data);
     const effects = getEffects(data);
@@ -27,6 +34,7 @@ export function analyzeBehavior(data = {}, {kind = 'component'} = {}) {
         hasCondition,
         hasControllers,
         hasLogic: containsLogicReference(data),
+        hasTranslation: containsTranslationBinding(data),
         hasNavigation: containsNavigationAction(data),
         requiresReactState: hasLocalState,
         requiresReactEffect: hasEffects,

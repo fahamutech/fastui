@@ -13,6 +13,7 @@
  * COMPONENT spec by pointing `base` at it (see shared-components.mjs).
  */
 import * as yaml from 'js-yaml';
+import {createHash} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
 import {sanitizeFullColon} from '../../shared/fn.mjs';
 import {
@@ -23,7 +24,7 @@ import {
     loopScrollDirection
 } from './layout.mjs';
 import {getColor} from './color.mjs';
-import {getBaseType, sanitizedNameForLoopElement} from './naming.mjs';
+import {getBaseType, sanitizedNameForLoopElement, textStateBinding, vectorResourceName} from './naming.mjs';
 import {interactionBehavior} from './route.mjs';
 import {sharedComponentBasePath} from './shared-components.mjs';
 import {getFigmaImagePath} from './assets.mjs';
@@ -61,11 +62,16 @@ function toFrameShape(internalFrame, extraBaseStyles = {}) {
  * caps at 40 characters so keys stay readable in translation files.
  */
 function translationKey(text) {
-    return `${text ?? ''}`
+    const raw = `${text ?? ''}`;
+    const base = raw
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '')
         .slice(0, 40) || 'text';
+    const lossy = raw.length > 40 || /[^a-zA-Z0-9\s]/.test(raw);
+    return lossy
+        ? `${base.slice(0, 31)}_${createHash('sha1').update(raw).digest('hex').slice(0, 8)}`
+        : base;
 }
 
 export async function createTextComponent(filename, child) {
@@ -73,23 +79,36 @@ export async function createTextComponent(filename, child) {
     // translation key is generated for them because the value comes from data.
     const isLoopEl = child?.isLoopElement;
     const raw = child?.characters ?? '';
+    const stateText = child?.stateText ?? textStateBinding(child);
+    const stateTextService = stateText
+        ? `${logicsFnName({...child, name: stateText.descriptiveName})}_init`
+        : undefined;
     const childrenProp = isLoopEl
         ? `inputs.loopElement.${sanitizedNameForLoopElement(child)}??${JSON.stringify(raw)}`
-        : `logics.t('${translationKey(raw)}', ${JSON.stringify(raw)})`;
+        : stateText
+            ? `states.${stateText.key}`
+            : {translation: {key: translationKey(raw), fallback: raw}};
+    const figmaStyle = child?.style ?? {};
     const yamlData = yaml.dump({
         component: {
             base: 'text',
             modifier: {
                 styles: {
-                    ...child?.style ?? {},
+                    fontFamily: figmaStyle.fontFamily,
+                    fontWeight: figmaStyle.fontWeight,
+                    fontSize: figmaStyle.fontSize,
+                    letterSpacing: figmaStyle.letterSpacing,
+                    lineHeightPx: figmaStyle.lineHeightPx,
                     ...getSizeStyles(child),
                     color: getColor(child?.fills),
-                    fontStyle: child?.style?.italic ? 'italic' : undefined,
-                    textAlign: child?.style?.textAlignHorizontal === 'LEFT'
+                    fontStyle: figmaStyle.italic || `${figmaStyle.fontStyle ?? ''}`.toUpperCase() === 'ITALIC'
+                        ? 'italic'
+                        : undefined,
+                    textAlign: figmaStyle.textAlignHorizontal === 'LEFT'
                         ? 'start'
-                        : child?.style?.textAlignHorizontal === 'CENTER'
+                        : figmaStyle.textAlignHorizontal === 'CENTER'
                             ? 'center'
-                            : child?.style?.textAlignHorizontal === 'RIGHT'
+                            : figmaStyle.textAlignHorizontal === 'RIGHT'
                                 ? 'end'
                                 : undefined,
                 },
@@ -97,6 +116,8 @@ export async function createTextComponent(filename, child) {
                     children: childrenProp,
                     id: sanitizeFullColon(`${child?.name}`)
                 },
+                states: stateText ? {[stateText.key]: raw} : undefined,
+                effects: stateText ? {onInit: {body: `logics.${stateTextService}`}} : undefined,
                 frame: toFrameShape(child?.childFrame),
             }
         }
@@ -108,7 +129,7 @@ export async function createTextInputComponent(filename, child, type = 'text') {
     // onSubmit calls a logics function so the generator auto-creates a service
     // stub for input business logic (validation, API calls, etc).
     // onChange remains a state.set action to keep value state updated live.
-    const inputFn = `logics.${logicsFnName(child)}`;
+    const inputFn = logicsFnName(child);
     const yamlData = yaml.dump({
         component: {
             base: 'container',
@@ -124,9 +145,9 @@ export async function createTextInputComponent(filename, child, type = 'text') {
                     control: 'input',
                     type: 'states.inputType',
                     value: 'states.value',
-                    onChange: {action: 'state.set', target: 'value', value: 'event.value'},
-                    onSubmit: inputFn,
-                    placeholder: 'Type here',
+                    onChange: `logics.${inputFn}_change`,
+                    onSubmit: `logics.${inputFn}_submit`,
+                    placeholder: {translation: {key: translationKey('Type here'), fallback: 'Type here'}},
                     id: sanitizeFullColon(`${child?.name}`)
                 },
                 states: {
@@ -134,6 +155,7 @@ export async function createTextInputComponent(filename, child, type = 'text') {
                     inputType: type,
                     borderColor: getColor(child?.strokes) ?? 'transparent',
                 },
+                effects: {onInit: {body: `logics.${inputFn}_init`}},
                 frame: toFrameShape(child?.childFrame),
             }
         }
@@ -171,7 +193,7 @@ export async function createFrameComponent({filename, child, routeLookup}) {
     // _button nodes wire their onClick to a logics service function so the
     // generator auto-creates a stub. Other frame types don't need a default.
     const isButton = baseType === 'button';
-    const logicsFn = isButton ? `logics.${logicsFnName(child)}` : undefined;
+    const logicsFn = isButton ? `logics.${logicsFnName(child)}_press` : undefined;
     const yamlData = yaml.dump({
         component: {
             base: 'container',
@@ -236,7 +258,7 @@ export async function createConditionComponent({filename, child, routeLookup}) {
     const leftName = child?.children?.[1]?.name;
     // Condition nodes get an onInit effect that calls a logics function so
     // the generator auto-creates a stub for driving the condition state.
-    const conditionFn = `logics.${logicsFnName(child)}`;
+    const conditionFn = `logics.${logicsFnName(child)}_init`;
 
     const yamlData = yaml.dump({
         condition: {
@@ -265,8 +287,7 @@ export async function createLoopComponent({filename, child}) {
     const last = child?.children?.[0];
     // Loop nodes get an onInit effect that calls a logics function so the
     // generator auto-creates a stub for loading the list data.
-    const loopFn = `logics.${logicsFnName(child)}`;
-    console.log(loopScrollDirection(child))
+    const loopFn = `logics.${logicsFnName(child)}_init`;
     const yamlData = yaml.dump({
         loop: {
             modifier: {
@@ -332,7 +353,7 @@ export async function createVectorComponent({filename, child, srcPath, token, fi
         figFile,
         format: 'svg',
         srcPath,
-        imageRef: sanitizeFullColon(`${child?.name}`),
+        imageRef: vectorResourceName(child),
         child,
     });
     const yamlData = dumpImageYaml({srcUrl, child, objectFit: 'none'});

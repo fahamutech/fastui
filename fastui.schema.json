@@ -8,14 +8,6 @@
     "component": {
       "$ref": "#/$defs/component_root"
     },
-    "app": {
-      "$comment": "Alias for component. Used for the root application shell spec.",
-      "$ref": "#/$defs/component_root"
-    },
-    "components": {
-      "$comment": "Alias for component. Used when a spec exports multiple variants (legacy).",
-      "$ref": "#/$defs/component_root"
-    },
     "loop": {
       "$ref": "#/$defs/loop_root"
     },
@@ -160,6 +152,24 @@
         }
       }
     },
+    "translation_binding": {
+      "$comment": "Reactive localized text resolved from the active locale, then the default catalog, then the exact key. fallback is catalog-generation metadata and is never rendered directly.",
+      "type": "object",
+      "required": ["translation"],
+      "properties": {
+        "translation": {
+          "type": "object",
+          "required": ["key"],
+          "properties": {
+            "key": {"type": "string", "minLength": 1},
+            "fallback": {"type": "string"},
+            "args": {"type": "object"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "props": {
       "$comment": "Props are platform-neutral attributes passed to the rendered primitive.\nCommon props shared across all component types:",
       "type": "object",
@@ -169,8 +179,11 @@
           "type": "string"
         },
         "children": {
-          "$comment": "Inline text content. Can reference state ('states.<name>'), input\n('inputs.<name>'), or component ('components.<name>'). Only meaningful\non base: text or base: container.",
-          "type": "string"
+          "$comment": "Inline text content, a state/input reference, or a reactive translation binding.",
+          "oneOf": [
+            {"type": "string"},
+            {"$ref": "#/$defs/translation_binding"}
+          ]
         },
         "onClick": {
           "$comment": "Action triggered when the user taps/clicks this node.",
@@ -178,7 +191,7 @@
         },
         "onChange": {
           "$comment": "Action triggered when an input value changes.",
-          "$ref": "#/$defs/action"
+          "oneOf": [{"$ref": "#/$defs/action"}, {"type": "string", "pattern": "^(logics|services)\\."}]
         },
         "src": {
           "$comment": "Image source URL. Required for base: image. Can be a static path,\na loop element reference ('inputs.loopElement.<field>'), or a state.",
@@ -204,7 +217,7 @@
         },
         "placeholder": {
           "$comment": "Placeholder text for an input control.",
-          "type": "string"
+          "oneOf": [{"type": "string"}, {"$ref": "#/$defs/translation_binding"}]
         },
         "scroll": {
           "$comment": "Scroll direction for loop containers.",
@@ -271,7 +284,11 @@
         },
         "onSubmit": {
           "$comment": "Action triggered when a form or input is submitted (Enter key). React: onSubmit. Flutter: TextFormField.onFieldSubmitted.",
-          "$ref": "#/$defs/action"
+          "oneOf": [{"$ref": "#/$defs/action"}, {"type": "string", "pattern": "^(logics|services)\\."}]
+        },
+        "itemKey": {
+          "$comment": "Stable key expression for loop provider identity. Falls back to item _key, id, key, then index.",
+          "type": "string"
         },
         "onMouseEnter": {
           "$comment": "Action triggered when the pointer enters the element. React: onMouseEnter. Flutter: MouseRegion.onEnter.",
@@ -435,6 +452,10 @@
                 "scroll": {
                   "type": "string",
                   "enum": ["vertical", "horizontal", "both", "none"]
+                },
+                "itemKey": {
+                  "$comment": "Optional item field used first for stable component instance identity. Falls back to _key, id, key, then index.",
+                  "type": "string"
                 }
               },
               "additionalProperties": false
@@ -2430,11 +2451,6 @@
         "fallbackHeight": {
           "$comment": "FastUI-specific: fallback pixel height used when the parent has no bounded height constraint. Prevents zero-size layout in Flutter when height: '100%'.",
           "type": "number"
-        },
-        "childDirection": {
-          "$comment": "FastUI internal hint (deprecated — use frame.base instead). Retained for backwards compatibility with older translated specs.",
-          "type": "string",
-          "enum": ["row", "column"]
         }
       }
     }

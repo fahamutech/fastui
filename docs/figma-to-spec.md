@@ -14,6 +14,8 @@ fastui specs automate reactjs --fresh
          │       Cached at .fastui/figma-cache.json unless --fresh
          │
          ├─ 2. translateFigmaToSpecs()   figma-to-spec.mjs
+         │       ├─ discover + reconcile resources   resources.mjs
+         │       │       images, vectors, used font variants → verified cache + target config
          │       ├─ collectSharedComponents()   shared-components.mjs
          │       │       Build map: componentId → {name, path}
          │       │
@@ -52,6 +54,19 @@ Figma layer names control how FastUI classifies and names nodes.
 | `_input` | Text input | `component` (with `control: input`) |
 | `_image` | Image fill | `component` (with `base: image`) |
 | *(none)* | Container / text / vector | `component` (base inferred from Figma type) |
+
+### Text localization and state
+
+Ordinary Figma `TEXT` layers are emitted as translation bindings in the generated `default` catalog. To make text service-controlled, end the layer name with `_$<stateKey>` while leaving the visible characters as the initial value:
+
+```
+Layer: ProfileName_$name
+Visible text: Joshua
+→ props.children: states.name
+→ states.name: Joshua
+```
+
+The short form `$name` is also accepted. State keys must be Dart-safe identifiers. The marker is removed from generated filenames and IDs. Loop-element text remains bound to loop data and takes precedence over this marker.
 
 **Examples:**
 
@@ -99,7 +114,8 @@ component:
 
 | Figma type | Figma name suffix | Generated spec |
 |---|---|---|
-| `TEXT` | (any) | `component: { base: text }` |
+| `TEXT` | ordinary | `component: { base: text }` with a translation binding |
+| `TEXT` | `_$<stateKey>` | `component: { base: text }` bound to component-local state |
 | `RECTANGLE` | `_input` | `component: { base: container, props: { control: input } }` |
 | `RECTANGLE` | `_image` | `component: { base: image }` |
 | `RECTANGLE` | (other) | `component: { base: container }` with background image fill |
@@ -225,8 +241,43 @@ Figma node: id="1:23", name="Product Card_button"
 
 ### Asset downloading
 
-Image fills and vector nodes trigger asset downloads during `--fresh` runs.  
-Downloaded assets are saved to `.fastui/assets/figma/` and copied to `public/images/figma/` (React) or `assets/images/figma/` (Flutter) during `specs build`.
+Every automation run inventories image fills, vector nodes, and the font variants used by text. Missing or corrupt resources are repaired; `--fresh` revalidates the full inventory. A failed refresh retains the last verified cached file.
+
+Resources and ownership metadata are stored under:
+
+```
+.fastui/assets/figma/images/
+.fastui/assets/figma/vectors/
+.fastui/assets/figma/fonts/
+.fastui/assets/figma/manifest.json
+.fastui/reports/figma-resources.json
+```
+
+Images and vectors are copied to `public/images/figma/` for React or `assets/images/figma/` for Flutter. Downloads are atomic, MIME-checked, SHA-256 tracked, retried for transient Figma/server failures, and limited to four concurrent transfers. Unresolved resources produce warnings and retain deterministic `asset://figma/...` spec references.
+
+### Font sources and target registration
+
+Figma supplies font family/style usage but not font binaries. Declare licensed sources explicitly in `fastui.config.json`:
+
+```json
+{
+  "resources": {
+    "fonts": {
+      "Inter": {"source": "google"},
+      "Brand Sans": {
+        "files": [
+          {"path": "design/fonts/BrandSans-Regular.ttf", "weight": 400, "style": "normal"},
+          {"url": "https://assets.example.com/BrandSans-Bold.woff2", "weight": 700, "style": "normal", "sha256": "optional"}
+        ]
+      }
+    }
+  }
+}
+```
+
+Google sources use the official Web Fonts API and require `GOOGLE_FONTS_API_KEY`. FastUI resolves only exact used weight/style variants, unless a configured file declares a `weightRange`. Missing variants keep the original `fontFamily` in generated code so platform fallback still works.
+
+Flutter fonts are copied to `assets/fonts/figma/` and merged under `flutter.fonts` in `pubspec.yaml`; normal variants omit `style`, while italics use `style: italic`. User-authored families and variants are preserved. React fonts are copied to `public/fonts/figma/`, emitted as `fastui-fonts.generated.css`, and loaded by one marked `index.html` link. Projects without a usable HTML integration point receive one generated CSS import in their detected entry module.
 
 ---
 
@@ -244,5 +295,6 @@ Downloaded assets are saved to `.fastui/assets/figma/` and copied to `public/ima
 | `src/translators/figma/effects.mjs` | Drop shadow, blur → CSS filter/boxShadow |
 | `src/translators/figma/route.mjs` | Prototype interactions → navigation actions |
 | `src/translators/figma/shared-components.mjs` | MAIN COMPONENT catalog and path resolution |
-| `src/translators/figma/assets.mjs` | Image download, caching, path resolution |
+| `src/translators/figma/resources.mjs` | Resource discovery, verified reconciliation, manifests, fonts, and target configuration |
+| `src/translators/figma/assets.mjs` | Deterministic cached asset path resolution while specs are written |
 | `src/shared/routing.mjs` | Surface name → route type classification |

@@ -36,7 +36,7 @@ Figma Design File
 │                                                                 │
 │  spec-to-code.mjs    ← public entry point                       │
 │  ├── specs/reader.mjs     read + resolve base inheritance       │
-│  ├── legacy-spec.mjs      normalize extend/frame shapes         │
+│  ├── spec-normalizer.mjs  normalize extend/frame shapes         │
 │  ├── modifier.mjs         typed accessors over modifier fields  │
 │  ├── component.mjs        dispatch to template generator        │
 │  ├── condition.mjs        dispatch condition generator          │
@@ -66,13 +66,13 @@ specPath (.yml)
 Resolved document (JS object)
     │  base: path?  ── resolves & deep-merges the referenced spec
     │
-    ▼  legacy-spec.mjs → normalizeSpecDocument()
+    ▼  spec-normalizer.mjs → normalizeSpecDocument()
 Normalized document
     │  extend  → always string[]
     │  frame   → always {base, id, current, next}
     │  removes compose / ref / wrapper
     │
-    ▼  legacy-spec.mjs → prepareBehavior()
+    ▼  spec-normalizer.mjs → prepareBehavior()
 Behaviour-augmented document
     │  implicit state keys added for every state.set target
     │  condition default: false
@@ -104,14 +104,14 @@ If `component.base` is a `.yml` path, `reader.mjs` loads that file first, then d
 
 ---
 
-### `src/generators/legacy-spec.mjs`
+### `src/generators/spec-normalizer.mjs`
 
 Normalizes any spec document into the single shape the generators expect.
 
 | Export | Purpose |
 |---|---|
-| `normalizeSpecDocument(doc)` | Returns `{kind, data}`. Removes `components`/`app` aliases, strips legacy fields |
-| `normalizeLegacyComposition(data)` | Normalizes `extend` → `string[]`, `frame` → `{base,id,current,next}`, deletes `ref`/`compose`/`wrapper` |
+| `normalizeSpecDocument(doc)` | Returns `{kind, data}` for the current `component`, `condition`, or `loop` roots |
+| `normalizeComposition(data)` | Normalizes `extend` → `string[]` and `frame` → `{base,id,current,next}` |
 | `prepareBehavior(kind, data)` | Adds implicit state keys for `state.set` targets; adds `condition:false` and `data:[]` defaults |
 
 ---
@@ -127,7 +127,7 @@ Typed read-only accessors over a spec document's `modifier` field. Generators us
 | `getProps(data)` | props object (without `children`) |
 | `getStates(data)` | states map |
 | `getEffects(data)` | effects map |
-| `getFrame(data)` | `{base, id, current, next}` — normalizes legacy `frame.styles` |
+| `getFrame(data)` | `{base, id, current, next}` |
 | `getExtendList(data)` | `string[]` — ordered extend paths |
 | `getLeft(data)` | condition left path |
 | `getRight(data)` | condition right path |
@@ -154,7 +154,7 @@ specPath:  /project/src/blueprints/modules/home/ihome_Home.yml
                                    ┌ moduleSegments = ['home']
                                    │ componentName  = 'Home'
 service:   /project/src/services/home/ihome_Home.mjs
-store:     /project/src/stores/home/store.mjs
+store:     /project/src/stores/home/stores.generated.mjs
 models:    /project/src/stores/home/models.generated.mjs
 output:    /project/src/modules/home/ihome_Home.jsx
 ```
@@ -185,24 +185,24 @@ The manifest `.fastui/generated-manifest.json` tracks every generated file path.
 
 ## State management
 
-FastUI generates a **per-module observable store** alongside each set of stateful components.
+FastUI generates public component stores grouped into one generated file per module.
 
-### React (`src/stores/<module>/store.mjs`)
+### React (`src/stores/<module>/stores.generated.mjs`)
 
+```js
+profileNameStore.get(instanceId)
+profileNameStore.subscribe(instanceId, listener)
+profileNameStore.setName(instanceId, value)
+profileNameStore.setField(instanceId, key, value)
+profileNameStore.update(instanceId, reducer)
 ```
-useModuleState(componentName, initialState)
-    → [state, setState]
-```
 
-Built on `createObservableStore` (RxJS BehaviorSubject under the hood). Each component instance gets a unique key derived from React's `useId` so sibling instances never share state.
+The stores use RxJS internally. Generated components subscribe through selector-based `useSyncExternalStore` hooks, so unrelated state-field changes do not rerender them. IDs derive deterministically from the spec path and composition location; equal explicit IDs intentionally share state.
 
-### Flutter (`lib/stores/<module>/store.dart`)
+### Flutter (`lib/stores/<module>/providers.generated.dart`)
 
 ```dart
-FastUIModuleStore (extends ChangeNotifier)
-  .set<T>(instanceId, value)
-  .values<T>()
-  .remove<T>(instanceId)
+NotifierProvider.autoDispose.family<Notifier, State, FastUIProviderInstance<State>>
 ```
 
-`moduleStore` is a global singleton. Each `StatefulWidget` calls `moduleStore.set` on init and `moduleStore.remove` on dispose.
+Each generated component instance watches an immutable Riverpod state model. Generated notifiers expose typed setters plus `setField`, and service contexts mutate that same provider. Stable instance IDs isolate siblings while allowing explicit sharing.

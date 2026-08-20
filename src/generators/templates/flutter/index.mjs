@@ -2,9 +2,7 @@ import {BaseTemplate} from "../base.mjs";
 
 export class FlutterTemplate extends BaseTemplate {
     statePresentation(states, getStateIV) {
-        return Object.keys(states ?? {})
-            .map(key => `late dynamic state_${key}; // initialized with ${getStateIV(key)}`)
-            .join('\n');
+        return '';
     }
 
     sideEffectsPresentation(effects, getBody) {

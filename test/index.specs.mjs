@@ -1,8 +1,9 @@
 import {expect} from "chai";
 import {mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from "node:fs/promises";
-import {join, resolve} from "node:path"
+import {dirname, join, resolve} from "node:path"
 import {tmpdir} from "node:os";
-import {readSpecs, specToJSON} from "../src/specs/reader.mjs";
+import {pathToFileURL} from 'node:url';
+import {readSpecs, specToFlutterJSON, specToJSON} from "../src/specs/reader.mjs";
 import {composeComponent} from "../src/generators/component.mjs";
 import {composeCondition} from "../src/generators/condition.mjs";
 import {composeLoop} from "../src/generators/loop.mjs";
@@ -11,10 +12,19 @@ import {ensureBlueprintFolderExist, ensureWatchFileExist} from "../src/tooling/s
 import {initializeProject} from "../src/tooling/project.mjs";
 import {routeFromSurfaceName} from "../src/shared/routing.mjs";
 import {fetchFigmaFile, getDesignDocument, getPagesAndTraverseChildren, resolvePrototypeRoute, walkFrameChildren} from "../src/translators/figma/index.mjs";
-import {repeatScrollDirection} from "../src/translators/figma/layout.mjs";
+import {loopScrollDirection} from "../src/translators/figma/layout.mjs";
+import {generatedNodeName} from "../src/translators/figma/naming.mjs";
 import {generateCodeFromSpecs} from '../src/generators/spec-to-code.mjs';
 import {createFrameComponent, createTextComponent} from '../src/translators/figma/spec-writer.mjs';
+import {discoverFigmaResources, reconcileFigmaResources} from '../src/translators/figma/resources.mjs';
+import {reactRuntimeSource} from '../src/generators/templates/reactjs/runtime.mjs';
+import {normalizeSpecDocument} from '../src/generators/spec-normalizer.mjs';
+import * as yaml from 'js-yaml';
+import React from 'react';
+import TestRenderer, {act} from 'react-test-renderer';
 import {specFile, logicFile} from './data.mjs'
+
+const delay = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
 
 describe('Specs', function () {
     before(() => {
@@ -33,6 +43,8 @@ describe('Specs', function () {
 
     describe('build', function () {
         before(async () => {
+            await mkdir(resolve('./test/services'), {recursive: true});
+            await writeFile(resolve('./test/services/test_comp.mjs'), logicFile);
             const specsPath = await readSpecs('./test/blueprints');
             for (const specPath of specsPath) {
                 const data = await specToJSON(specPath);
@@ -115,7 +127,7 @@ describe('Specs', function () {
             }});
             await composeComponent({path: labelPath, projectPath: root, data: {
                 base: 'text',
-                modifier: {extend: './icon.yml', states: {value: 'Continue for $100'}, props: {id: 'label_id', children: 'states.value'}, styles: {fontSize: 16}, frame: {base: 'row.start', styles: {flex: 1, height: '100%'}}}
+                modifier: {extend: './icon.yml', states: {value: 'Continue for $100'}, props: {id: 'label_id', children: 'states.value'}, styles: {fontSize: 16}, frame: {base: 'row.start', current: {flex: 1, height: '100%'}}}
             }});
             await composeCondition({path: buttonPath, projectPath: root, data: {
                 modifier: {left: './label.yml', props: {onClick: 'logics.onClick'}, frame: {base: 'row.start'}}
@@ -133,19 +145,21 @@ describe('Specs', function () {
             const staticWidget = await readFile(join(root, 'lib', 'modules', 'static.dart'), 'utf8');
             expect(label).to.include('class Label');
             expect(label).to.include("import './icon.dart';");
-            // widget.overrideStates is required inside a StatefulWidget's State class
-            expect(label).to.include("stateValue = (widget.overrideStates['value'] ?? 'Continue for \\$100') as dynamic;");
-            expect(label).to.include("FastUIStyleHelper.applyMeta(child, id: widget.overrideProps['id'] ?? 'label_id')");
-            expect(label).to.include('LayoutBuilder(builder: (context, constraints)');
+            expect(label).to.include('extends ConsumerStatefulWidget');
+            expect(label).to.include('initialOverrides: widget.overrideStates');
+            expect(label).not.to.include("Continue for \\$100");
+            expect(label).to.include('ref.watch(labelProvider(_providerInstance))');
+            expect(label).to.include("widget.overrideProps['id'] ?? 'label_id'");
+            expect(label).to.match(/LayoutBuilder\(\s*builder: \(context, constraints\)/);
             expect(label).to.include('constraints.hasBoundedWidth');
-            expect(label).to.include('height: constraints.hasBoundedHeight ? constraints.maxHeight');
-            expect(button).to.include('GestureDetector(onTap:');
+            expect(label).to.match(/height:\s*constraints\.hasBoundedHeight\s*\? constraints\.maxHeight/);
+            expect(button).to.match(/GestureDetector\(\s*onTap:/);
             expect(button).to.include('Label(');
-            expect(list).to.include('List<dynamic>.from(stateData');
-            expect(list).to.include('ListView.builder(scrollDirection: Axis.vertical');
+            expect(list).to.match(/core\.List<dynamic>\.from\(\s*state\.data/);
+            expect(list).to.match(/ListView\.(?:builder|separated)\(/);
             expect(staticWidget).to.include('extends StatelessWidget');
             expect(staticWidget).not.to.include('void initState()');
-            expect(await readFile(join(root, 'lib', 'services', 'button.dart'), 'utf8')).to.include('dynamic onClick');
+            expect(await readFile(join(root, 'lib', 'services', 'button.dart'), 'utf8')).to.include('FutureOr<void> onClick');
         });
 
         it('distinguishes scrollable areas from loop lists in React and Flutter', async function () {
@@ -176,12 +190,13 @@ describe('Specs', function () {
             const horizontalFlutter = await readFile(join(root, 'lib', 'modules', 'horizontal.dart'), 'utf8');
             const staticFlutter = await readFile(join(root, 'lib', 'modules', 'static_loop.dart'), 'utf8');
             const areaFlutter = await readFile(join(root, 'lib', 'modules', 'scroll_area.dart'), 'utf8');
-            expect(scrollingFlutter).to.include('ListView.builder(scrollDirection: Axis.vertical');
-            expect(horizontalFlutter).to.include('ListView.builder(scrollDirection: Axis.horizontal');
-            expect(horizontalFlutter).to.include('SizedBox(height: listHeight, child: ListView.builder');
-            expect(staticFlutter).to.include('ListView.builder(scrollDirection: Axis.vertical');
+            expect(scrollingFlutter).to.include('ListView.separated(');
+            expect(horizontalFlutter).to.include('ListView.separated(');
+            expect(horizontalFlutter).to.match(/scrollDirection:\s*Axis\.horizontal/);
+            expect(staticFlutter).not.to.include('ListView.');
+            expect(staticFlutter).to.include('Column(');
             expect(staticFlutter).not.to.include('SingleChildScrollView');
-            expect(areaFlutter).to.include('SingleChildScrollView(scrollDirection: Axis.vertical');
+            expect(areaFlutter).to.match(/SingleChildScrollView\(\s*scrollDirection:\s*Axis\.vertical/);
             expect(areaFlutter).not.to.include('ListView.builder');
 
             process.env.FASTUI_TEMPLATE = 'reactjs';
@@ -207,7 +222,8 @@ describe('Specs', function () {
             const scrollingReact = await readFile(join(root, 'src', 'modules', 'scrolling.jsx'), 'utf8');
             const staticReact = await readFile(join(root, 'src', 'modules', 'static_loop.jsx'), 'utf8');
             const areaReact = await readFile(join(root, 'src', 'modules', 'scroll_area.jsx'), 'utf8');
-            expect(scrollingReact).to.include('overrideStates={}');
+            expect(scrollingReact).to.include('instanceId,initialState={},initialProps={}');
+            expect(scrollingReact).not.to.include('overrideStates');
             expect(scrollingReact).to.include("overflowX:'auto'");
             expect(scrollingReact).to.include('minWidth:0');
             expect(scrollingReact).not.to.include('ref={listRef}');
@@ -217,7 +233,6 @@ describe('Specs', function () {
             expect(scrollingReact).not.to.include('scroll=');
             expect(staticReact).not.to.include('overflowX');
             expect(staticReact).not.to.include('overflowY');
-            expect(staticReact).not.to.include('style={style}');
             expect(staticReact).not.to.include('const style = React.useMemo');
             expect(areaReact).to.include('overflowY');
             expect(areaReact).to.include('"flex":1');
@@ -263,7 +278,7 @@ describe('Specs', function () {
                 }
             }});
             const flutterGenerated = await readFile(join(root, 'lib', 'modules', 'gap_parent.dart'), 'utf8');
-            expect(flutterGenerated).to.include('SizedBox(height: 16)');
+            expect(flutterGenerated).to.match(/SizedBox\(\s*height: 16/);
             expect(flutterGenerated).not.to.include('spaceValue');
         });
 
@@ -329,15 +344,226 @@ describe('Specs', function () {
             }});
             const flutterGenerated = await readFile(join(root, 'lib', 'modules', 'frame_parent.dart'), 'utf8');
             expect(flutterGenerated).to.include('EdgeInsets.fromLTRB(0, 8, 0, 0)');
-            expect(flutterGenerated).not.to.include('_buildWithOverride({})');
-            expect(flutterGenerated).to.include('FrameChild(loopIndex: widget.loopIndex, loopElement: widget.loopElement)');
+            expect(flutterGenerated).not.to.include('_buildWithOverride');
+            expect(flutterGenerated).to.include('FrameChild(');
+            expect(flutterGenerated).to.include("instanceId: '\${widget.instanceId ?? 'root'}/0/FrameChild'");
         });
 
         it('serializes Figma text with translation key plus raw fallback text', async function () {
             const specPath = join(root, 'translated_text_spec.yml');
-            await createTextComponent(specPath, {name: 'ShopNow', characters: 'Shop now'});
+            await createTextComponent(specPath, {
+                name: 'ShopNow',
+                characters: 'Shop now',
+                style: {
+                    fontFamily: 'Inter',
+                    fontPostScriptName: 'Inter-Regular',
+                    fontWeight: 400,
+                    fontSize: 14,
+                    textAutoResize: 'WIDTH_AND_HEIGHT',
+                    textAlignHorizontal: 'LEFT',
+                    textAlignVertical: 'TOP',
+                    letterSpacing: 0,
+                    lineHeightPx: 16.8,
+                    lineHeightPercent: 100,
+                    lineHeightUnit: 'INTRINSIC_%',
+                },
+            });
             const spec = await specToJSON(specPath);
-            expect(spec.component.modifier.props.children).to.equal("logics.t('shop_now', \"Shop now\")");
+            expect(spec.component.modifier.props.children).to.deep.equal({translation: {key: 'shop_now', fallback: 'Shop now'}});
+            expect(spec.component.modifier.styles).to.deep.equal({
+                fontFamily: 'Inter',
+                fontWeight: 400,
+                fontSize: 14,
+                letterSpacing: 0,
+                lineHeightPx: 16.8,
+                textAlign: 'start',
+            });
+        });
+
+        it('serializes Figma $ text markers as component-local state', async function () {
+            const specPath = join(root, 'state_text_spec.yml');
+            await createTextComponent(specPath, {
+                id: 'profile-name',
+                type: 'TEXT',
+                name: 'ProfileName_$name',
+                characters: 'Joshua',
+            });
+            const spec = await specToJSON(specPath);
+            expect(spec.component.modifier.props.children).to.equal('states.name');
+            expect(spec.component.modifier.states).to.deep.equal({name: 'Joshua'});
+            expect(spec.component.modifier.effects.onInit.body).to.equal('logics.ProfileName_init');
+            expect(generatedNodeName({id: '1:2', type: 'TEXT', name: 'ProfileName_$name'})).to.equal('i1_2_Profilename');
+            expect(generatedNodeName({id: '1:3', type: 'TEXT', name: '$name'})).to.equal('i1_3_Name_text');
+        });
+
+        it('generates Figma state text as provider-backed Flutter UI', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const specPath = join(root, 'lib', 'blueprints', 'modules', 'profile_name.yml');
+            await mkdir(join(root, 'lib', 'blueprints', 'modules'), {recursive: true});
+            await createTextComponent(specPath, {
+                id: 'profile-name',
+                type: 'TEXT',
+                name: 'ProfileName_$name',
+                characters: 'Joshua',
+            });
+            await generateCodeFromSpecs({root: join(root, 'lib', 'blueprints'), projectPath: root});
+            const widget = await readFile(join(root, 'lib', 'modules', 'profile_name.dart'), 'utf8');
+            const provider = await readFile(join(root, 'lib', 'stores', 'shared', 'providers.generated.dart'), 'utf8');
+            expect(widget).to.include('extends ConsumerStatefulWidget');
+            expect(widget).to.include('final String? instanceId');
+            expect(widget).to.include('ref.watch(profileNameProvider(_providerInstance))');
+            expect(widget).to.include('(state.name ?? \'\').toString()');
+            expect(provider).to.include('class FastUIProfileNameNotifier extends AutoDisposeFamilyNotifier');
+            expect(provider).to.include('FastUIProfileNameStateModel fastUIProfileNameInitialState');
+            expect(provider).to.include('argument.initialOverrides');
+            expect(provider).to.include('Joshua');
+            expect(provider).to.include('void setName(String? value) => state = state.copyWith(name: value)');
+            expect(provider).to.include('case "name":');
+            expect(provider).to.include('Future<void> initialize(FutureOr<void> Function() callback)');
+            expect(provider).not.to.include('ChangeNotifier');
+            expect(widget).not.to.include('FastUIModuleStore');
+            expect(widget).not.to.include('_publishState');
+            expect(widget).not.to.include('Joshua');
+        });
+
+        it('generates ordinary translated text as a reactive ConsumerWidget without a service', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const specPath = join(root, 'lib', 'blueprints', 'modules', 'welcome_title.yml');
+            await createTextComponent(specPath, {
+                id: 'welcome-title',
+                type: 'TEXT',
+                name: 'WelcomeTitle_text',
+                characters: 'Welcome',
+            });
+            await generateCodeFromSpecs({root: join(root, 'lib', 'blueprints'), projectPath: root});
+            const widget = await readFile(join(root, 'lib', 'modules', 'welcome_title.dart'), 'utf8');
+            const runtime = await readFile(join(root, 'lib', 'fastui_runtime.dart'), 'utf8');
+            const catalog = await readFile(join(root, 'lib', 'translations', 'generated.dart'), 'utf8');
+            expect(widget).to.include('extends ConsumerWidget');
+            expect(widget).to.include('ref.watch(fastUITranslateProvider(');
+            expect(widget).to.include("key: 'welcome'");
+            expect(widget).not.to.include('fallback:');
+            expect(widget).not.to.include('defaultCatalog:');
+            expect(widget).not.to.include("services/welcome_title.dart");
+            expect(runtime).to.match(/const FastUITranslationState\(\{\s*this\.locale = 'default'/);
+            expect(runtime).to.include("catalogs['default']?[key]");
+            expect(catalog).to.match(/["']welcome["']:\s*["']Welcome["']/);
+        });
+
+        it('emits typed Flutter text and box styles without raw style maps', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const specPath = join(root, 'lib', 'blueprints', 'modules', 'styled_text.yml');
+            await composeComponent({path: specPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {
+                    styles: {
+                        fontFamily: 'Inter', fontWeight: 400, fontSize: 14,
+                        lineHeightPx: 16.8, color: '#ffffff', textAlign: 'start',
+                        width: 120, padding: '4 8', borderRadius: 6,
+                        backgroundColor: '#111111', opacity: 0.9,
+                        fontPostScriptName: 'Inter-Regular', textAutoResize: 'WIDTH_AND_HEIGHT',
+                    },
+                    props: {children: 'Styled'},
+                },
+            }});
+            const widget = await readFile(join(root, 'lib', 'modules', 'styled_text.dart'), 'utf8');
+            expect(widget).to.include("fontFamily: 'Inter'");
+            expect(widget).to.include('fontWeight: FontWeight.w400');
+            expect(widget).to.include('fontSize: 14');
+            expect(widget).to.include('width: 120');
+            expect(widget).to.include('padding: EdgeInsets.fromLTRB(8, 4, 8, 4)');
+            expect(widget).to.include('borderRadius: BorderRadius.circular(6)');
+            expect(widget).to.include('Opacity(');
+            expect(widget).not.to.include('_buildWithOverride');
+            expect(widget).not.to.include('overrideStyles');
+            expect(widget).not.to.include('fontPostScriptName');
+            expect(widget).not.to.include('textAutoResize');
+        });
+
+        it('retains service-computed Flutter styles without runtime override maps', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const specPath = join(root, 'lib', 'blueprints', 'modules', 'dynamic_style.yml');
+            await composeComponent({path: specPath, projectPath: root, data: {
+                base: 'container',
+                modifier: {styles: 'logics.computeStyle', props: {children: 'Dynamic'}},
+            }});
+            const widget = await readFile(join(root, 'lib', 'modules', 'dynamic_style.dart'), 'utf8');
+            const service = await readFile(join(root, 'lib', 'services', 'dynamic_style.dart'), 'utf8');
+            expect(widget).to.include('FastUIStyleHelper.buildBox(');
+            expect(widget).to.include('computeStyle(');
+            expect(widget).to.include('_componentContext(');
+            expect(widget).not.to.include('overrideStyles');
+            expect(service).to.include('Map<String, dynamic> computeStyle(');
+            expect(service).to.include('return const <String, dynamic>{};');
+            expect(service).not.to.include("import 'dart:async';");
+        });
+
+        it('emits translation keys and interpolation args without UI fallbacks on both targets', async function () {
+            const data = {
+                base: 'text',
+                modifier: {
+                    states: {name: 'Joshua'},
+                    props: {children: {translation: {
+                        key: 'welcome_name',
+                        fallback: 'Welcome {name}',
+                        args: {name: 'states.name'},
+                    }}},
+                },
+            };
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const flutterPath = join(root, 'lib', 'blueprints', 'modules', 'interpolated.yml');
+            await composeComponent({path: flutterPath, projectPath: root, data});
+            const flutter = await readFile(join(root, 'lib', 'modules', 'interpolated.dart'), 'utf8');
+            expect(flutter).to.include("key: 'welcome_name'");
+            expect(flutter).to.include("args: {'name': state.name}");
+            expect(flutter).not.to.include('Welcome {name}');
+            expect(flutter).not.to.include('fallback:');
+
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const reactPath = join(root, 'src', 'blueprints', 'modules', 'interpolated.yml');
+            await composeComponent({path: reactPath, projectPath: root, data});
+            const react = await readFile(join(root, 'src', 'modules', 'interpolated.jsx'), 'utf8');
+            expect(react).to.include('useFastUITranslation("welcome_name",{"name":name})');
+            expect(react).not.to.include('Welcome {name}');
+            process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
+        it('emits translated input placeholders without fallback literals', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const data = {
+                base: 'input',
+                modifier: {
+                    states: {value: ''},
+                    props: {
+                        control: 'input',
+                        value: 'states.value',
+                        placeholder: {translation: {key: 'type_here', fallback: 'Type here'}},
+                    },
+                },
+            };
+            const path = join(root, 'lib', 'blueprints', 'modules', 'translated_input.yml');
+            await composeComponent({path, projectPath: root, data});
+            const widget = await readFile(join(root, 'lib', 'modules', 'translated_input.dart'), 'utf8');
+            expect(widget).to.include("const FastUITranslationRequest(key: 'type_here')");
+            expect(widget).not.to.include('Type here');
+            expect(widget).not.to.include('fallback:');
+        });
+
+        it('rejects malformed Figma state-text markers with node context', async function () {
+            let failure;
+            try {
+                await createTextComponent(join(root, 'invalid_state_text.yml'), {
+                    id: 'bad-text',
+                    type: 'TEXT',
+                    name: 'ProfileName_$9name',
+                    characters: 'Joshua',
+                });
+            } catch (error) {
+                failure = error;
+            }
+            expect(failure?.message).to.include('ProfileName_$9name');
+            expect(failure?.message).to.include('bad-text');
+            expect(failure?.message).to.include('Use $name or DescriptiveName_$name');
         });
 
         it('renders logics.t children through generated services for React and Flutter', async function () {
@@ -353,10 +579,10 @@ describe('Specs', function () {
             const reactGenerated = await readFile(join(root, 'src', 'modules', 'translated_text.jsx'), 'utf8');
             const reactService = await readFile(join(root, 'src', 'services', 'translated_text.mjs'), 'utf8');
             expect(reactGenerated).to.include("import {t} from '../services/translated_text.mjs';");
-            expect(reactGenerated).to.include("{t({component,args:['shop_now', 'Shop now']})}");
-            expect(reactService).to.include("import {fastUITranslations} from '../translations/generated.mjs';");
-            expect(reactService).to.include('export function t(data)');
-            expect(reactService).to.include('return fastUITranslations.t(key, fallback);');
+            expect(reactGenerated).to.include("{t(component.withArgs(['shop_now', 'Shop now']))}");
+            expect(reactService).to.include("import {fastUITranslationStore} from '../translations/generated.mjs';");
+            expect(reactService).to.include('export function t(context)');
+            expect(reactService).to.include('return fastUITranslationStore.translate(key);');
 
             process.env.FASTUI_TEMPLATE = 'flutter';
             const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
@@ -370,27 +596,27 @@ describe('Specs', function () {
             const flutterService = await readFile(join(root, 'lib', 'services', 'translated_text.dart'), 'utf8');
             const flutterRuntime = await readFile(join(root, 'lib', 'fastui_runtime.dart'), 'utf8');
             expect(flutterGenerated).to.include("import '../services/translated_text.dart';");
-            expect(flutterGenerated).to.include("Text(t(_componentContext(context, ['shop_now', 'Shop now'])).toString()");
-            expect(flutterGenerated).to.include("'args': argument == null ? <dynamic>[] : argument is List ? List<dynamic>.from(argument) : <dynamic>[argument]");
+            expect(flutterGenerated).to.include("t(_componentContext(context, ref, ['shop_now', 'Shop now']))");
+            expect(flutterGenerated).to.include('args: argument == null ? <dynamic>[]');
             expect(flutterService).to.include("import '../fastui_runtime.dart';");
-            expect(flutterService).to.include("import '../translations/generated.dart';");
-            expect(flutterService).to.include('dynamic t(Map<String, dynamic> data)');
+            expect(flutterService).to.include('dynamic t(FastUIComponentContext<dynamic, dynamic> context)');
             expect(flutterService).to.include('final normalized = args.length == 1 && args.first is List ? List<dynamic>.from(args.first as List) : args;');
-            expect(flutterService).to.include('FastUITranslations.instance.t(key, fallback: fallback)');
-            expect(flutterRuntime).to.include('static String humanizeKey(String key)');
-            expect(flutterRuntime).to.include('?? fallback');
-            expect(flutterRuntime).to.include('?? humanizeKey(key)');
+            expect(flutterService).to.include('fastUITranslationProvider');
+            expect(flutterRuntime).to.include("catalogs['default']?[key]");
+            expect(flutterRuntime).to.include('?? key;');
+            expect(flutterRuntime).not.to.include('humanizeKey');
         });
 
-        it('Figma translator resolves scroll direction from overflowDirection only (scroll is intentional)', async function () {
-            expect(repeatScrollDirection({overflowDirection: 'VERTICAL_SCROLLING'})).to.equal('vertical');
-            expect(repeatScrollDirection({overflowDirection: 'HORIZONTAL_SCROLLING'})).to.equal('horizontal');
-            expect(repeatScrollDirection({overflowDirection: 'HORIZONTAL_AND_VERTICAL_SCROLLING'})).to.equal('both');
-            expect(repeatScrollDirection({mainFrame: {overflowDirection: 'HORIZONTAL_SCROLLING'}})).to.equal('horizontal');
-            expect(repeatScrollDirection({layoutMode: 'VERTICAL'})).to.equal(undefined);
-            expect(repeatScrollDirection({layoutMode: 'HORIZONTAL'})).to.equal(undefined);
-            expect(repeatScrollDirection({})).to.equal(undefined);
-            expect(repeatScrollDirection(undefined)).to.equal(undefined);
+        it('Figma loops explicitly serialize props.scroll', async function () {
+            expect(loopScrollDirection({overflowDirection: 'VERTICAL_SCROLLING'})).to.equal('vertical');
+            expect(loopScrollDirection({overflowDirection: 'HORIZONTAL_SCROLLING'})).to.equal('horizontal');
+            expect(loopScrollDirection({overflowDirection: 'HORIZONTAL_AND_VERTICAL_SCROLLING'})).to.equal('both');
+            expect(loopScrollDirection({mainFrame: {overflowDirection: 'HORIZONTAL_SCROLLING'}})).to.equal('horizontal');
+            expect(loopScrollDirection({props: {scroll: 'horizontal'}, layoutMode: 'VERTICAL'})).to.equal('horizontal');
+            expect(loopScrollDirection({layoutMode: 'VERTICAL'})).to.equal('vertical');
+            expect(loopScrollDirection({layoutMode: 'HORIZONTAL'})).to.equal('horizontal');
+            expect(loopScrollDirection({})).to.equal(undefined);
+            expect(loopScrollDirection(undefined)).to.equal(undefined);
 
             const document = {children: [{
                 id: 'page', name: 'scroll_page', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
@@ -404,7 +630,7 @@ describe('Specs', function () {
             const children = await getPagesAndTraverseChildren({document, srcPath});
             await walkFrameChildren({children, srcPath});
             const listSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'ilist_Items_repeat.yml'), 'utf8');
-            expect(listSpec).not.to.include('scroll:');
+            expect(listSpec).to.include('scroll: vertical');
 
             const documentWithExplicit = {children: [{
                 id: 'page2', name: 'scroll_page2', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
@@ -440,21 +666,27 @@ describe('Specs', function () {
             };
             const result = await initializeProject({template: 'flutter', runCommand: fakeFlutter});
             expect(result).to.deep.equal({template: 'flutter', blueprintRoot: 'lib/blueprints'});
-            expect(JSON.parse(await readFile(join(root, 'fastui.config.json'), 'utf8')).template).to.equal('flutter');
+            const config = JSON.parse(await readFile(join(root, 'fastui.config.json'), 'utf8'));
+            expect(config.template).to.equal('flutter');
+            expect(config.resources.fonts).to.deep.equal({});
             await readdir(join(root, 'lib', 'blueprints'));
+            await readdir(join(root, 'assets', 'fonts', 'figma'));
             expect(await readFile(join(root, 'lib', 'main.dart'), 'utf8')).to.include('FastUIAppRoute');
-            expect(await readFile(join(root, 'lib', 'main.dart'), 'utf8')).to.include('FastUIStateScope');
+            expect(await readFile(join(root, 'lib', 'main.dart'), 'utf8')).to.include('ProviderScope');
             expect(await readFile(join(root, 'lib', 'app_route.dart'), 'utf8')).to.include('FastUIStyleHelper.lightTheme()');
             expect(await readFile(join(root, 'lib', 'app_route.dart'), 'utf8')).to.include('FastUIStyleHelper.darkTheme()');
             const runtime = await readFile(join(root, 'lib', 'fastui_runtime.dart'), 'utf8');
             expect(runtime).to.include(`RegExp(r'''^['"]|['"]$''')`);
+            expect(await readFile(join(root, 'lib', 'translations', 'generated.dart'), 'utf8'))
+                .to.include('fastUITranslationsDefault');
             const startScript = await readFile(join(root, 'fastui_dev.sh'), 'utf8');
             expect(startScript).to.include('WATCHER_PID_FILE=".fastui/watch.pid"');
             expect(startScript).to.include('export FASTUI_FLUTTER_PID="$FLUTTER_PID"');
             expect(startScript).to.include('wait "$FLUTTER_PID"');
             expect(startScript).to.include('trap cleanup EXIT');
             expect(startScript).to.include("trap 'cleanup; exit 130' INT TERM");
-            expect(await readFile(join(root, 'lib', 'stores', 'observable_store.dart'), 'utf8')).to.include('extends ChangeNotifier');
+            const pubspec = await readFile(join(root, 'pubspec.yaml'), 'utf8');
+            expect(pubspec).to.include('flutter_riverpod: ^2.6.1');
         });
 
         it('builds from the configured blueprint root when no path is supplied', async function () {
@@ -465,7 +697,7 @@ describe('Specs', function () {
             await stat(join(root, 'lib', 'modules', 'default_root.dart'));
         });
 
-        it('build path creates missing root React store support files', async function () {
+        it('build path creates the generated React observable runtime', async function () {
             process.env.FASTUI_TEMPLATE = 'reactjs';
             const reactRoot = join(root, 'src', 'blueprints', 'modules');
             await mkdir(reactRoot, {recursive: true});
@@ -473,8 +705,10 @@ describe('Specs', function () {
             await writeFile(specPath, 'component:\n  base: container\n  modifier: {}\n');
             const results = await generateCodeFromSpecs({projectPath: root});
             expect(results.some(result => result.specPath.endsWith('build_support.yml'))).to.equal(true);
-            expect(await readFile(join(root, 'src', 'stores', 'observable_store.mjs'), 'utf8')).to.include('export const appState = createObservableStore()');
-            expect(await readFile(join(root, 'src', 'stores', 'use_observable.mjs'), 'utf8')).to.include('useSyncExternalStore');
+            const runtime = await readFile(join(root, 'src', 'fastui_runtime.mjs'), 'utf8');
+            expect(runtime).to.include('export const appState = createObservableStore()');
+            expect(runtime).to.include('export function useFastUISelector');
+            expect(runtime).to.include('useSyncExternalStore');
         });
 
         it('build path emits generated translation files for the default locale and Flutter relative imports', async function () {
@@ -493,11 +727,10 @@ describe('Specs', function () {
             expect(reactTranslations).to.include('const generatedTranslations = {');
             expect(reactTranslations).to.include('"default"');
             expect(reactTranslations).to.include('"waist_collection": "WAIST COLLECTION"');
-            expect(reactTranslations).to.include("locale: 'default'");
-            expect(reactTranslations).to.include("store.load('default', generatedTranslations.default ?? {});");
-            expect(reactTranslations).to.include('replace(/\\s+/g,');
-            expect(reactTranslations).to.include('replace(/\\b\\w/g,');
-            expect(reactService).to.include("import {fastUITranslations} from '../translations/generated.mjs';");
+            expect(reactTranslations).to.include('fastUITranslationStore = createFastUITranslationStore(');
+            expect(reactTranslations).to.include('export function useFastUITranslation');
+            expect(reactTranslations).not.to.include('defaultTranslationText');
+            expect(reactService).to.include("import {fastUITranslationStore} from '../translations/generated.mjs';");
 
             process.env.FASTUI_TEMPLATE = 'flutter';
             const flutterRoot = join(root, 'lib', 'blueprints', 'modules');
@@ -512,11 +745,9 @@ describe('Specs', function () {
             const flutterTranslations = await readFile(join(root, 'lib', 'translations', 'generated.dart'), 'utf8');
             const flutterService = await readFile(join(root, 'lib', 'services', 'translated_build.dart'), 'utf8');
             expect(flutterTranslations).to.include('fastUITranslationsDefault');
-            expect(flutterTranslations).to.include("load('default', fastUITranslationsDefault)");
-            expect(flutterTranslations).to.include('"in_stores": "In Stores"');
+            expect(flutterTranslations).not.to.include('"in_stores"');
             expect(flutterService).to.include("import '../fastui_runtime.dart';");
-            expect(flutterService).to.include("import '../translations/generated.dart';");
-            expect(flutterService).to.include('installFastUITranslations();');
+            expect(flutterService).to.include('fastUITranslationProvider');
             process.env.FASTUI_TEMPLATE = 'reactjs';
         });
 
@@ -529,8 +760,12 @@ describe('Specs', function () {
             expect(packageMap.scripts.start).to.include('fastui specs build ./src/blueprints');
             await readdir(join(root, 'src', 'blueprints'));
             expect(await readFile(join(root, 'src', 'main.jsx'), 'utf8')).to.include('ReactDOM.createRoot');
-            expect(await readFile(join(root, 'src', 'stores', 'observable_store.mjs'), 'utf8')).to.include('BehaviorSubject');
-            expect(await readFile(join(root, 'src', 'stores', 'use_observable.mjs'), 'utf8')).to.include('useSyncExternalStore');
+            const runtime = await readFile(join(root, 'src', 'fastui_runtime.mjs'), 'utf8');
+            expect(runtime).to.include('BehaviorSubject');
+            expect(runtime).to.include('useSyncExternalStore');
+            expect(await readFile(join(root, 'index.html'), 'utf8')).to.include('data-fastui-fonts');
+            expect(await readFile(join(root, 'public', 'fonts', 'figma', 'fastui-fonts.generated.css'), 'utf8')).to.equal('');
+            expect(JSON.parse(await readFile(join(root, 'fastui.config.json'), 'utf8')).resources.fonts).to.deep.equal({});
         });
 
         it('keeps static React components free of state and lifecycle effects', async function () {
@@ -555,7 +790,7 @@ describe('Specs', function () {
                 base: 'image',
                 modifier: {
                     props: {src: 'inputs.loopElement.icon??asset://figma/icon.svg'},
-                    frame: {base: 'column.start', styles: {backgroundImage: 'url("asset://figma/background.png")'}}
+                    frame: {base: 'column.start', current: {backgroundImage: 'url("asset://figma/background.png")'}}
                 }
             }});
             const react = await readFile(join(root, 'src', 'modules', 'loop_image.jsx'), 'utf8');
@@ -567,7 +802,7 @@ describe('Specs', function () {
             await composeCondition({path: reactConditionSpec, projectPath: root, data: {
                 modifier: {
                     left: './loop_image.yml',
-                    frame: {base: 'row.start', styles: {backgroundImage: 'url("asset://figma/condition.png")'}}
+                    frame: {base: 'row.start', current: {backgroundImage: 'url("asset://figma/condition.png")'}}
                 }
             }});
             const reactCondition = await readFile(join(root, 'src', 'modules', 'asset_condition.jsx'), 'utf8');
@@ -632,12 +867,13 @@ describe('Specs', function () {
             process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
-        it('creates missing React observable store support files when generating routing only', async function () {
+        it('creates the React runtime when generating routing only', async function () {
             process.env.FASTUI_TEMPLATE = 'reactjs';
             await ensureAppRouteFileExist({template: 'reactjs', initialId: 'home', pages: [{id: 'home', name: 'home_page', module: 'home'}]});
-            expect(await readFile(join(root, 'src', 'stores', 'observable_store.mjs'), 'utf8')).to.include('export const appState = createObservableStore()');
-            expect(await readFile(join(root, 'src', 'stores', 'use_observable.mjs'), 'utf8')).to.include('useSyncExternalStore');
-            expect(await readFile(join(root, 'src', 'routing.mjs'), 'utf8')).to.include("import {appState} from './stores/observable_store.mjs';");
+            const runtime = await readFile(join(root, 'src', 'fastui_runtime.mjs'), 'utf8');
+            expect(runtime).to.include('export const appState = createObservableStore()');
+            expect(runtime).to.include('useSyncExternalStore');
+            expect(await readFile(join(root, 'src', 'routing.mjs'), 'utf8')).to.include("import {appState} from './fastui_runtime.mjs';");
             process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
@@ -648,6 +884,17 @@ describe('Specs', function () {
             } catch (error) {
                 expect(error.message).to.include('Use reactjs or flutter');
             }
+        });
+
+        it('rejects superseded spec aliases and composition fields', function () {
+            expect(() => normalizeSpecDocument({app: {base: 'container', modifier: {}}}))
+                .to.throw('Unsupported spec root alias');
+            expect(() => normalizeSpecDocument({components: {base: 'container', modifier: {}}}))
+                .to.throw('Unsupported spec root alias');
+            expect(() => normalizeSpecDocument({component: {base: 'container', modifier: {ref: './child.yml'}}}))
+                .to.throw('Unsupported ref composition field');
+            expect(() => normalizeSpecDocument({component: {base: 'container', modifier: {frame: {base: 'row.start', styles: {}}}}}))
+                .to.throw('Unsupported frame.styles');
         });
 
         it('preserves Figma page, dialog, sheet, swap, back, and close semantics', function () {
@@ -737,8 +984,8 @@ describe('Specs', function () {
             const widget = await readFile(join(root, 'lib', 'modules', 'presentation', 'pages', 'itoggle_toggle_button.dart'), 'utf8');
             expect(spec).to.include('variant: toggle');
             expect(spec).to.include('action: state.set');
-            expect(widget).to.include('extends StatefulWidget');
-            expect(widget).to.include("_setStateVariant('selected-variant')");
+            expect(widget).to.include('extends ConsumerStatefulWidget');
+            expect(widget).to.include("_notifier.setField('variant', 'selected-variant')");
         });
 
         it('generates declarative controlled input updates without logic stubs', async function () {
@@ -758,15 +1005,62 @@ describe('Specs', function () {
             process.env.FASTUI_TEMPLATE = 'reactjs';
             await composeComponent({data, path: reactPath, projectPath: root});
             const react = await readFile(join(root, 'src', 'modules', 'controlled_input.jsx'), 'utf8');
-            expect(react).to.include("setValue((event?.target?.value ?? event))");
+            expect(react).to.include('useFastUIControlledInput(value)');
+            expect(react).to.include('componentStore.setField(resolvedInstanceId,"value",(event?.target?.value ?? event)');
+            expect(react).not.to.include('defaultValue=');
+            expect(react).not.to.include('useState');
             expect(react).not.to.include('logics/controlled_input');
 
             const flutterPath = join(root, 'lib', 'blueprints', 'modules', 'controlled_input.yml');
             process.env.FASTUI_TEMPLATE = 'flutter';
             await composeComponent({data, path: flutterPath, projectPath: root});
             const flutter = await readFile(join(root, 'lib', 'modules', 'controlled_input.dart'), 'utf8');
-            expect(flutter).to.include("TextFormField(initialValue: (stateValue ?? '').toString()");
-            expect(flutter).to.include('onChanged: (value) { _setStateValue(value); }');
+            expect(flutter).to.include('late final TextEditingController _controller');
+            expect(flutter).to.include('TextEditingController(text: (ref.read(controlledInputProvider(_providerInstance)).value');
+            expect(flutter).to.include('TextFormField(');
+            expect(flutter).to.include('controller: _controller');
+            expect(flutter).to.include('ref.listen<String>(');
+            expect(flutter).to.include('if (_controller.text == next) return;');
+            expect(flutter).to.include('_controller.value = _controller.value.copyWith(');
+            expect(flutter).to.include('selection: TextSelection.collapsed(offset: offset)');
+            expect(flutter).to.include("_notifier.setField('value', value)");
+            expect(flutter).to.include('_controller.dispose()');
+            expect(flutter).not.to.include('initialValue:');
+            expect(flutter).not.to.include('setState(()');
+        });
+
+        it('updates React input stores before change services and keeps submit separate', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const specPath = join(root, 'src', 'blueprints', 'modules', 'profile_input.yml');
+            await mkdir(dirname(specPath), {recursive: true});
+            const data = {
+                base: 'container',
+                modifier: {
+                    states: {value: 'Joshua'},
+                    props: {
+                        control: 'input',
+                        multiline: true,
+                        value: 'states.value',
+                        onChange: 'services.profile_input_change',
+                        onSubmit: 'services.profile_input_submit',
+                        readOnly: false,
+                        autofill: 'name',
+                    },
+                },
+            };
+            await composeComponent({data, path: specPath, projectPath: root});
+            const generated = await readFile(join(root, 'src', 'modules', 'profile_input.jsx'), 'utf8');
+            expect(generated).to.include('<textarea');
+            expect(generated).to.include('value={value}');
+            expect(generated).to.include('autoComplete={\'name\'}');
+            expect(generated).to.include("if(event.key==='Enter')");
+            const mutation = generated.indexOf('componentStore.setField');
+            const change = generated.indexOf('profile_input_change(component.withArgs');
+            expect(mutation).to.be.greaterThan(-1);
+            expect(change).to.be.greaterThan(mutation);
+            expect(generated.match(/profile_input_change\(component\.withArgs/g)).to.have.length(1);
+            expect(generated.match(/profile_input_submit\(component\.withArgs/g)).to.have.length(1);
+            expect(generated).not.to.include('defaultValue=');
         });
 
         it('groups typed state by module and preserves user-owned services', async function () {
@@ -786,18 +1080,22 @@ describe('Specs', function () {
             process.env.FASTUI_TEMPLATE = 'reactjs';
             await generateCodeFromSpecs({root: join(root, 'src', 'blueprints'), projectPath: root});
             const reactWidget = await readFile(join(root, 'src', 'modules', 'account', 'profile.jsx'), 'utf8');
-            const reactStorePath = join(root, 'src', 'stores', 'account', 'store.mjs');
+            const reactStorePath = join(root, 'src', 'stores', 'account', 'stores.generated.mjs');
             const reactStore = await readFile(reactStorePath, 'utf8');
             const reactModels = await readFile(join(root, 'src', 'stores', 'account', 'models.generated.mjs'), 'utf8');
             expect(reactWidget).to.include("from '../../services/account/profile.mjs'");
-            expect(reactWidget).to.include("useModuleState(\"Profile\"");
-            expect(reactStore).to.include('export function useModuleState');
+            expect(reactWidget).to.include('createFastUIComponentContext');
+            expect(reactWidget).to.include('profileStore');
+            expect(reactStore).to.include('export const profileStore = createFastUIComponentStore');
+            expect(reactStore).to.match(/"signedIn":\s*false/);
+            expect(reactStore).to.include('setSignedIn: (state, value)');
             expect(reactModels).to.include('@typedef {Object} ProfileStateModel');
             expect(reactModels).to.include('@property {boolean} signedIn');
+            expect(reactWidget).not.to.include('signedIn:false');
             expect(await readFile(reactService, 'utf8')).to.equal('export function validateProfile() { return "implemented"; }\n');
             await writeFile(reactStorePath, `${reactStore}\nexport const userControlled = true;\n`);
             await generateCodeFromSpecs({root: join(root, 'src', 'blueprints'), projectPath: root});
-            expect(await readFile(reactStorePath, 'utf8')).to.include('export const userControlled = true;');
+            expect(await readFile(reactStorePath, 'utf8')).not.to.include('export const userControlled = true;');
 
             const flutterSpec = join(root, 'lib', 'blueprints', 'modules', 'account', 'profile.yml');
             await mkdir(join(root, 'lib', 'blueprints', 'modules', 'account'), {recursive: true});
@@ -812,17 +1110,23 @@ describe('Specs', function () {
             process.env.FASTUI_TEMPLATE = 'flutter';
             await generateCodeFromSpecs({root: join(root, 'lib', 'blueprints'), projectPath: root});
             const flutterWidget = await readFile(join(root, 'lib', 'modules', 'account', 'profile.dart'), 'utf8');
-            const flutterStorePath = join(root, 'lib', 'stores', 'account', 'store.dart');
+            const flutterStorePath = join(root, 'lib', 'stores', 'account', 'providers.generated.dart');
             const flutterStore = await readFile(flutterStorePath, 'utf8');
             const flutterModels = await readFile(join(root, 'lib', 'stores', 'account', 'models.generated.dart'), 'utf8');
             expect(flutterWidget).to.include("import '../../services/account/profile.dart';");
-            expect(flutterWidget).to.include('moduleStore.set<FastUIProfileStateModel>');
-            expect(flutterStore).to.include('class FastUIModuleStore');
+            expect(flutterWidget).to.include('ref.watch(profileProvider(_providerInstance))');
+            expect(flutterWidget).to.match(/FastUIProviderInstance<FastUIProfileStateModel>\(\s*id: widget\.instanceId \?\? 'account\/profile'/);
+            expect(flutterStore).to.include('class FastUIProfileNotifier extends AutoDisposeFamilyNotifier');
+            expect(flutterStore).to.include('final profileProvider = NotifierProvider.autoDispose.family');
+            expect(flutterStore).to.include('void setSignedIn(bool? value)');
+            expect(flutterStore).to.include('void setField(String key, dynamic value)');
             expect(flutterModels).to.include('class FastUIProfileStateModel');
-            expect(flutterModels).to.include('final bool signedIn');
+            expect(flutterModels).to.include('final bool? signedIn');
+            expect(flutterWidget).not.to.include('FastUIModuleStore');
+            expect(flutterWidget).not.to.include('_publishState');
             await writeFile(flutterStorePath, `${flutterStore}\nconst userControlled = true;\n`);
             await generateCodeFromSpecs({root: join(root, 'lib', 'blueprints'), projectPath: root});
-            expect(await readFile(flutterStorePath, 'utf8')).to.include('const userControlled = true;');
+            expect(await readFile(flutterStorePath, 'utf8')).not.to.include('const userControlled = true;');
         });
 
         it('removes only stale files recorded by the generated manifest', async function () {
@@ -842,7 +1146,6 @@ describe('Specs', function () {
             expect(manifest.files).to.include(outputPath);
             expect((await stat(unusedStub)).isFile()).to.equal(true);
             expect((await stat(authoredStub)).isFile()).to.equal(true);
-            expect(await readFile(join(root, 'lib', 'services', 'authored.dart'), 'utf8')).to.include('return 1;');
             await writeFile(join(root, '.fastui', 'generated-manifest.json'), JSON.stringify({
                 ...manifest,
                 files: manifest.files.map(file => file.replace('temporary.dart', 'Temporary.dart')),
@@ -859,7 +1162,7 @@ describe('Specs', function () {
             }
         });
 
-        it('tags a spec-file base as __specBase and generates a wrapper that forwards overrides', async function () {
+        it('resolves React spec inheritance before generating a complete component', async function () {
             process.env.FASTUI_TEMPLATE = 'reactjs';
             const sharedRoot = join(root, 'src', 'blueprints', 'shared', 'common');
             const moduleRoot = join(root, 'src', 'blueprints', 'modules', 'example');
@@ -886,20 +1189,17 @@ describe('Specs', function () {
       value: Label
 `);
             const resolved = await specToJSON(labelPath);
-            // base is deleted; __specBase points to the absolute path of the shared spec
-            expect(resolved.component.base).to.equal(undefined);
-            expect(resolved.component.__specBase).to.include('text.yml');
-            expect(resolved.component.__specBaseRelative).to.equal('../../shared/common/text.yml');
-            // local modifier overrides are preserved as-is
-            expect(resolved.component.modifier.styles.color).to.equal('#0000FF');
+            expect(resolved.component.base).to.equal('text');
+            expect(resolved.component).not.to.have.property('__specBase');
+            expect(resolved.component.modifier.styles).to.deep.equal({color: '#0000FF', fontSize: 14});
+            expect(resolved.component.modifier.states).to.deep.equal({value: 'Label'});
             expect(resolved.component.modifier).not.to.have.property('ref');
-            // generator emits a wrapper that imports the base and passes overrides
             await composeComponent({data: resolved.component, path: labelPath, projectPath: root});
             const generated = await readFile(join(root, 'src', 'modules', 'example', 'label.jsx'), 'utf8');
-            expect(generated).to.include('import {Text} from');
-            expect(generated).to.include('overrideStyles=');
-            expect(generated).to.include('overrideProps=');
-            expect(generated).to.include('overrideStates=');
+            expect(generated).to.include('useFastUISelector');
+            expect(generated).to.include('"color":"#0000FF"');
+            expect(generated).not.to.include('overrideStyles');
+            expect(generated).not.to.include('__specBase');
             process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
@@ -921,12 +1221,140 @@ describe('Specs', function () {
   modifier: {}
 `);
             const resolved = await specToJSON(localPath);
-            // base tagged, not merged — local modifier is empty, no extend here
-            expect(resolved.component.__specBaseRelative).to.equal('../../shared/common/group.yml');
-            expect(resolved.component.modifier).to.deep.equal({});
+            expect(resolved.component.base).to.equal('container');
+            expect(resolved.component.modifier.extend).to.deep.equal([
+                '../../shared/common/leaf_one.yml',
+                '../../shared/common/leaf_two.yml',
+            ]);
         });
 
-        it('base component merges overrideStyles, overrideProps, and overrideStates at render time', async function () {
+        it('inherits the primitive type of a shared condition spec', async function () {
+            const sharedRoot = join(root, 'src', 'blueprints', 'shared', 'common');
+            const moduleRoot = join(root, 'src', 'blueprints', 'modules', 'feature');
+            await mkdir(sharedRoot, {recursive: true});
+            await mkdir(moduleRoot, {recursive: true});
+            await writeFile(join(sharedRoot, 'remember_condition.yml'), `condition:
+  modifier:
+    left: ./remembered.yml
+    right: ./forgotten.yml
+    states:
+      condition: false
+`);
+            const instancePath = join(moduleRoot, 'table_checkbox.yml');
+            await writeFile(instancePath, `component:
+  base: ../../shared/common/remember_condition.yml
+  modifier:
+    extend: ./selected_icon.yml
+    props:
+      id: table-checkbox
+`);
+            const resolved = await specToJSON(instancePath);
+            expect(resolved).not.to.have.property('component');
+            expect(resolved.condition.modifier.states.condition).to.equal(false);
+            expect(resolved.condition.modifier.left).to.equal('../../shared/common/remembered.yml');
+            expect(resolved.condition.modifier.extend).to.equal('./selected_icon.yml');
+            expect(resolved.condition.modifier.props.id).to.equal('table-checkbox');
+        });
+
+        it('resolves nested Flutter inheritance with deep merges, rebased paths, and array replacement', async function () {
+            const sharedRoot = join(root, 'flutter-inheritance', 'shared', 'common');
+            const moduleRoot = join(root, 'flutter-inheritance', 'modules', 'feature');
+            await mkdir(sharedRoot, {recursive: true});
+            await mkdir(moduleRoot, {recursive: true});
+            await writeFile(join(sharedRoot, 'base.yml'), `component:
+  base: container
+  modifier:
+    styles:
+      width: 120
+      backgroundColor: '#111111'
+    props:
+      id: inherited-id
+    states:
+      inherited: true
+    extend:
+      - ./base_child.yml
+      - ./second_child.yml
+`);
+            await writeFile(join(sharedRoot, 'middle.yml'), `component:
+  base: ./base.yml
+  modifier:
+    styles:
+      backgroundColor: '#222222'
+    states:
+      middle: true
+`);
+            const inheritedPath = join(moduleRoot, 'inherited.yml');
+            await writeFile(inheritedPath, `component:
+  base: ../../shared/common/middle.yml
+  modifier:
+    styles:
+      height: 48
+    states:
+      local: true
+`);
+            const inherited = (await specToFlutterJSON(inheritedPath)).component;
+            expect(inherited.base).to.equal('container');
+            expect(inherited.modifier.styles).to.deep.equal({
+                width: 120,
+                backgroundColor: '#222222',
+                height: 48,
+            });
+            expect(inherited.modifier.props.id).to.equal('inherited-id');
+            expect(inherited.modifier.states).to.deep.equal({inherited: true, middle: true, local: true});
+            expect(inherited.modifier.extend).to.deep.equal([
+                '../../shared/common/base_child.yml',
+                '../../shared/common/second_child.yml',
+            ]);
+
+            await writeFile(inheritedPath, `component:
+  base: ../../shared/common/middle.yml
+  modifier:
+    extend:
+      - ./local_child.yml
+`);
+            const replaced = (await specToFlutterJSON(inheritedPath)).component;
+            expect(replaced.modifier.extend).to.deep.equal(['./local_child.yml']);
+        });
+
+        it('reports every path in a circular Flutter inheritance chain', async function () {
+            const moduleRoot = join(root, 'flutter-inheritance-cycle');
+            await mkdir(moduleRoot, {recursive: true});
+            const first = join(moduleRoot, 'first.yml');
+            const second = join(moduleRoot, 'second.yml');
+            await writeFile(first, 'component:\n  base: ./second.yml\n  modifier: {}\n');
+            await writeFile(second, 'component:\n  base: ./first.yml\n  modifier: {}\n');
+            let failure;
+            try {
+                await specToFlutterJSON(first);
+            } catch (error) {
+                failure = error;
+            }
+            expect(failure?.message).to.include(first);
+            expect(failure?.message).to.include(second);
+            expect(failure?.message).to.include('Circular Flutter spec inheritance');
+        });
+
+        it('reports every path in a circular React inheritance chain', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const moduleRoot = join(root, 'react-inheritance-cycle');
+            await mkdir(moduleRoot, {recursive: true});
+            const first = join(moduleRoot, 'first.yml');
+            const second = join(moduleRoot, 'second.yml');
+            await writeFile(first, 'component:\n  base: ./second.yml\n  modifier: {}\n');
+            await writeFile(second, 'component:\n  base: ./first.yml\n  modifier: {}\n');
+            let failure;
+            try {
+                await specToJSON(first);
+            } catch (error) {
+                failure = error;
+            }
+            expect(failure?.message).to.include(first);
+            expect(failure?.message).to.include(second);
+            expect(failure?.message).to.include('Circular React spec inheritance');
+            process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
+        it('merges React component styles, props, and states at generation time', async function () {
             process.env.FASTUI_TEMPLATE = 'reactjs';
             const moduleRoot = join(root, 'src', 'blueprints', 'modules', 'overrides');
             await mkdir(moduleRoot, {recursive: true});
@@ -945,14 +1373,10 @@ describe('Specs', function () {
 `);
             await composeComponent({data: (await specToJSON(basePath)).component, path: basePath, projectPath: root});
             const baseGenerated = await readFile(join(root, 'src', 'modules', 'overrides', 'base_card.jsx'), 'utf8');
-            // styles: _baseStyle is the base styles; style merges overrideStyles on top
-            expect(baseGenerated).to.include('_baseStyle');
-            expect(baseGenerated).to.include('...overrideStyles');
-            // props: static id prop followed by {...overrideProps} spread so overrides win
-            expect(baseGenerated).to.include('{...overrideProps}');
-            // states: initial value spreads overrideStates so wrapper can seed different initial state
-            expect(baseGenerated).to.include('...overrideStates');
-            // wrapper component: passes all three as overrides to the base
+            expect(baseGenerated).to.include('"background":"grey"');
+            expect(baseGenerated).to.include('{...initialProps}');
+            expect(baseGenerated).not.to.include('overrideStyles');
+            expect(baseGenerated).not.to.include('Base label');
             const wrapperPath = join(moduleRoot, 'card_variant.yml');
             await writeFile(wrapperPath, `component:
   base: ./base_card.yml
@@ -966,11 +1390,42 @@ describe('Specs', function () {
 `);
             await composeComponent({data: (await specToJSON(wrapperPath)).component, path: wrapperPath, projectPath: root});
             const wrapperGenerated = await readFile(join(root, 'src', 'modules', 'overrides', 'card_variant.jsx'), 'utf8');
-            expect(wrapperGenerated).to.include('import {BaseCard} from');
+            expect(wrapperGenerated).not.to.include('import {BaseCard} from');
             expect(wrapperGenerated).to.include('"background":"#f7f7f7"');
-            expect(wrapperGenerated).to.include('"id":"card-variant"');
-            expect(wrapperGenerated).to.include('"label":"Variant label"');
+            expect(wrapperGenerated).to.include('"width":"200px"');
+            expect(wrapperGenerated).to.include('card-variant');
+            expect(wrapperGenerated).not.to.include('Variant label');
+            expect(wrapperGenerated).not.to.include('overrideStates');
             process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
+        it('keeps Flutter extended-component state defaults in generated providers', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const moduleRoot = join(root, 'lib', 'blueprints', 'modules', 'overrides');
+            await mkdir(moduleRoot, {recursive: true});
+            await writeFile(join(moduleRoot, 'base_card.yml'), `component:
+  base: text
+  modifier:
+    states:
+      label: Base label
+    props:
+      children: states.label
+`);
+            await writeFile(join(moduleRoot, 'card_variant.yml'), `component:
+  base: ./base_card.yml
+  modifier:
+    states:
+      label: Variant label
+`);
+            await generateCodeFromSpecs({root: join(root, 'lib', 'blueprints'), projectPath: root});
+            const wrapper = await readFile(join(root, 'lib', 'modules', 'overrides', 'card_variant.dart'), 'utf8');
+            const providers = await readFile(join(root, 'lib', 'stores', 'overrides', 'providers.generated.dart'), 'utf8');
+            expect(wrapper).to.include('ref.watch(cardVariantProvider(_providerInstance))');
+            expect(wrapper).not.to.include('overrideStyles');
+            expect(wrapper).not.to.include('_buildWithOverride');
+            expect(wrapper).not.to.include('Variant label');
+            expect(providers).to.include('const Map<String, dynamic> fastUICardVariantStateDefaults');
+            expect(providers).to.include('Variant label');
         });
 
         it('composes multiple extend children in frame.base order for React', async function () {
@@ -1028,8 +1483,8 @@ describe('Specs', function () {
             expect(start).to.include("import './child_a.dart';");
             expect(start).to.include("import './child_b.dart';");
             expect(start.indexOf('ChildA(')).to.be.lessThan(start.indexOf('ChildB('));
-            expect(start.indexOf('ChildB(')).to.be.lessThan(start.indexOf("Text('ParentMarker'"));
-            expect(stack).to.include('Stack(children:');
+            expect(start.indexOf('ChildB(')).to.be.lessThan(start.indexOf("'ParentMarker'"));
+            expect(stack).to.match(/Stack\(\s*children:/);
         });
 
         it('keeps fixed-size Flutter children loose inside expanded frame wrappers', async function () {
@@ -1044,7 +1499,7 @@ describe('Specs', function () {
                 modifier: {extend: ['./fixed_child.yml'], frame: {base: 'row.start', next: {flex: 1, background: '#f5f5f5'}}}
             }});
             const generated = await readFile(join(root, 'lib', 'modules', 'flex_composer.dart'), 'utf8');
-            expect(generated).to.include('Expanded(child: Container(decoration: BoxDecoration(color: Color(0xFFF5F5F5)), child: Align(alignment: Alignment.topLeft, heightFactor: 1');
+            expect(generated).to.match(/Expanded\(\s*child:\s*Container\([\s\S]*Color\(0xFFF5F5F5\)[\s\S]*Alignment\.topLeft/);
         });
 
         it('translates a plain Figma frame into a container composer with ordered extend children', async function () {
@@ -1125,7 +1580,7 @@ describe('Specs', function () {
             expect(openSpec).to.include('action: navigation.open');
             expect(openSpec).to.include('type: sheet');
             expect(openSpec).not.to.include('onStart');
-            expect(openWidget).to.include("FastUINavigation.navigate(context, name: 'choices', type: 'sheet'");
+            expect(openWidget).to.match(/FastUINavigation\.navigate\(\s*context,\s*name: 'choices',\s*type: 'sheet'/);
             expect(openWidget).to.include("transition: 'MOVE_IN'");
             expect(openWidget).to.include("direction: 'BOTTOM'");
             expect(openWidget).to.include('durationMs: 250');
@@ -1160,9 +1615,367 @@ describe('Specs', function () {
             expect(sheetSpec).to.include('mode: overlay');
             expect(sheetSpec).to.include('scroll: none');
             const resolvedInstance = await specToJSON(join(srcPath, 'modules', 'presentation', 'pages', 'ilabel_Primary_label.yml'));
-            expect(resolvedInstance.component.__specBase).to.include('ishared_text_Label.yml');
+            expect(resolvedInstance.component).not.to.have.property('__specBase');
+            expect(resolvedInstance.component.base).to.equal('container');
             expect(resolvedInstance.component.modifier).not.to.have.property('ref');
             expect(resolvedInstance.component.modifier.extend).to.equal('./ilabel_copy_Copy_text.yml');
         });
+    });
+});
+
+describe('React observable runtime', function () {
+    let runtime;
+    const runtimePath = resolve('test', 'fastui_runtime.behavior.generated.mjs');
+
+    before(async function () {
+        await writeFile(runtimePath, reactRuntimeSource());
+        runtime = await import(`${pathToFileURL(runtimePath).href}?test=${Date.now()}`);
+    });
+
+    after(async function () {
+        await rm(runtimePath, {force: true});
+    });
+
+    it('isolates instances and skips renders for unrelated selected fields', async function () {
+        const store = runtime.createFastUIComponentStore({
+            componentId: 'profile/name',
+            fields: ['name', 'visits'],
+            createInitialState: () => ({name: 'Joshua', visits: 0}),
+            setters: {
+                setName: (state, name) => ({...state, name}),
+                setVisits: (state, visits) => ({...state, visits}),
+            },
+        });
+        let renders = 0;
+        function Name({instanceId}) {
+            const name = runtime.useFastUISelector(store, instanceId, state => state.name);
+            renders += 1;
+            return React.createElement('span', null, name);
+        }
+        let view;
+        await act(async () => {
+            view = TestRenderer.create(React.createElement(Name, {instanceId: 'first'}));
+        });
+        expect(view.toJSON().children).to.deep.equal(['Joshua']);
+        const initialRenders = renders;
+        await act(async () => store.setVisits('first', 1));
+        expect(renders).to.equal(initialRenders);
+        const context = runtime.createFastUIComponentContext({store, componentId: 'profile/name', instanceId: 'first'});
+        await act(async () => context.setState('name', 'Amina'));
+        expect(view.toJSON().children).to.deep.equal(['Amina']);
+        expect(store.get('second').name).to.equal('Joshua');
+        expect(store.get('second').visits).to.equal(0);
+        await act(async () => view.unmount());
+        await delay(5);
+        expect(store.has('first')).to.equal(false);
+    });
+
+    it('retains initialization across a Strict Mode remount and disposes afterward', async function () {
+        const store = runtime.createFastUIComponentStore({
+            componentId: 'profile/name',
+            fields: ['name'],
+            createInitialState: () => ({name: 'Joshua'}),
+        });
+        let initializations = 0;
+        function Profile() {
+            runtime.useFastUISelector(store, 'shared', state => state.name);
+            React.useEffect(() => {
+                store.initialize('shared', async () => {
+                    initializations += 1;
+                    await Promise.resolve();
+                });
+            }, []);
+            return React.createElement('span');
+        }
+        const element = React.createElement(React.StrictMode, null, React.createElement(Profile));
+        let first;
+        await act(async () => { first = TestRenderer.create(element); });
+        await act(async () => first.unmount());
+        let second;
+        await act(async () => { second = TestRenderer.create(element); });
+        expect(initializations).to.equal(1);
+        await act(async () => second.unmount());
+        await delay(5);
+        expect(store.has('shared')).to.equal(false);
+    });
+
+    it('uses the first mounted seed when explicit instance IDs share state', async function () {
+        const store = runtime.createFastUIComponentStore({
+            componentId: 'shared/name',
+            fields: ['name'],
+            createInitialState: () => ({name: 'Default'}),
+        });
+        const values = [];
+        function Shared({initialState}) {
+            const name = runtime.useFastUISelector(store, 'same', state => state.name, {initialState});
+            values.push(name);
+            return React.createElement('span', null, name);
+        }
+        let view;
+        await act(async () => {
+            view = TestRenderer.create(React.createElement(React.Fragment, null,
+                React.createElement(Shared, {initialState: {name: 'First'}}),
+                React.createElement(Shared, {initialState: {name: 'Second'}}),
+            ));
+        });
+        expect(view.toJSON().map(node => node.children[0])).to.deep.equal(['First', 'First']);
+        expect(store.get('same').name).to.equal('First');
+        await act(async () => view.unmount());
+        await delay(5);
+    });
+
+    it('reacts to locale/catalog changes and falls back to the exact key', async function () {
+        const store = runtime.createFastUITranslationStore({welcome: 'Welcome {name}'});
+        let renders = 0;
+        function Copy() {
+            const value = runtime.useFastUITranslationValue(store, 'welcome', {name: 'Joshua'});
+            renders += 1;
+            return React.createElement('span', null, value);
+        }
+        let view;
+        await act(async () => { view = TestRenderer.create(React.createElement(Copy)); });
+        expect(view.toJSON().children).to.deep.equal(['Welcome Joshua']);
+        store.setLocale('sw');
+        expect(store.translate('missing_key')).to.equal('missing_key');
+        await act(async () => store.load('sw', {welcome: 'Karibu {name}'}));
+        expect(view.toJSON().children).to.deep.equal(['Karibu Joshua']);
+        expect(renders).to.be.greaterThan(1);
+        await act(async () => view.unmount());
+    });
+});
+
+describe('Figma resource reconciliation', function () {
+    let root;
+
+    beforeEach(async () => {
+        root = await mkdtemp(join(tmpdir(), 'fastui-resources-'));
+    });
+
+    afterEach(async () => {
+        await rm(root, {recursive: true, force: true});
+    });
+
+    it('discovers and deduplicates image, vector, and mixed text font variants', function () {
+        const resources = discoverFigmaResources({children: [{
+            id: 'frame', name: 'Frame', fills: [{type: 'IMAGE', imageRef: 'same-image'}], children: [
+                {id: 'image', name: 'Image', fills: [{type: 'IMAGE', imageRef: 'same-image'}]},
+                {id: 'vector', name: 'Arrow Icon', type: 'VECTOR'},
+                {
+                    id: 'text', name: 'Title', type: 'TEXT',
+                    style: {fontFamily: 'Inter', fontWeight: 400},
+                    styleOverrideTable: {
+                        bold: {fontFamily: 'Inter', fontWeight: 700, fontPostScriptName: 'Inter-BoldItalic'},
+                    },
+                },
+            ],
+        }]});
+        expect(resources.images).to.have.length(1);
+        expect(resources.images[0].nodes).to.have.length(2);
+        expect(resources.vectors).to.deep.include({kind: 'vector', nodeId: 'vector', name: 'Arrow_Icon_vector', format: 'svg', nodes: [{id: 'vector', name: 'Arrow Icon'}]});
+        expect(resources.fonts.map(font => `${font.family}|${font.weight}|${font.style}`)).to.deep.equal([
+            'Inter|400|normal',
+            'Inter|700|italic',
+        ]);
+    });
+
+    it('reconciles verified resources and merges manifest-owned Flutter fonts and assets', async function () {
+        await mkdir(join(root, 'design', 'fonts'), {recursive: true});
+        await writeFile(join(root, 'design', 'fonts', 'Brand-Regular.ttf'), Buffer.from('regular-font'));
+        await writeFile(join(root, 'fastui.config.json'), JSON.stringify({resources: {fonts: {
+            'Brand Sans': {files: [
+                {path: 'design/fonts/Brand-Regular.ttf', weight: 400, style: 'normal'},
+                {url: 'https://assets.test/brand-italic.woff2', weight: 400, style: 'italic'},
+            ]},
+        }}}));
+        await writeFile(join(root, 'pubspec.yaml'), `name: resource_fixture
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: User Font
+      fonts:
+        - asset: assets/fonts/user.ttf
+          weight: 500
+`);
+        const document = {children: [
+            {id: 'image-node', name: 'Photo', fills: [{type: 'IMAGE', imageRef: 'image-ref'}]},
+            {id: '2:2', name: 'Arrow Icon', type: 'VECTOR'},
+            {id: 'regular', name: 'Regular', type: 'TEXT', style: {fontFamily: 'Brand Sans', fontWeight: 400}},
+            {id: 'italic', name: 'Italic', type: 'TEXT', style: {fontFamily: 'Brand Sans', fontWeight: 400, italic: true}},
+        ]};
+        let downloadAttempts = 0;
+        const http = {get: async url => {
+            if (url.includes('/files/file-key/images')) return {data: {meta: {images: {'image-ref': 'https://assets.test/photo'}}}};
+            if (url.includes('/v1/images/file-key?')) return {data: {images: {'2:2': 'https://assets.test/arrow'}}};
+            downloadAttempts++;
+            if (url.endsWith('/photo')) return {data: Buffer.from('png-data'), headers: {'content-type': 'image/png', 'content-length': '8'}};
+            if (url.endsWith('/arrow')) return {data: Buffer.from('<svg/>'), headers: {'content-type': 'image/svg+xml', 'content-length': '6'}};
+            if (url.endsWith('.woff2')) return {data: Buffer.from('woff2-font'), headers: {'content-type': 'font/woff2', 'content-length': '10'}};
+            throw new Error(`Unexpected URL ${url}`);
+        }};
+        const first = await reconcileFigmaResources({
+            document, token: 'token', figFile: 'file-key', projectPath: root,
+            template: 'flutter', fresh: true, http, sleepFn: async () => {},
+        });
+        expect(first.summary).to.include({discovered: 4, downloaded: 3, unresolved: 0});
+        expect(downloadAttempts).to.equal(3);
+        await stat(join(root, '.fastui', 'assets', 'figma', 'images', 'image-ref.png'));
+        await stat(join(root, '.fastui', 'assets', 'figma', 'vectors', 'Arrow_Icon_2_2.svg'));
+        await stat(join(root, 'assets', 'images', 'figma', 'image-ref.png'));
+        await stat(join(root, 'assets', 'images', 'figma', 'Arrow_Icon_2_2.svg'));
+        const pubspec = yaml.load(await readFile(join(root, 'pubspec.yaml'), 'utf8'));
+        expect(pubspec.flutter.fonts.find(font => font.family === 'User Font').fonts[0]).to.deep.equal({asset: 'assets/fonts/user.ttf', weight: 500});
+        expect(pubspec.flutter.fonts.find(font => font.family === 'Brand Sans').fonts).to.deep.equal([
+            {asset: 'assets/fonts/figma/Brand_Sans-400-normal.ttf', weight: 400},
+            {asset: 'assets/fonts/figma/Brand_Sans-400-italic.woff2', weight: 400, style: 'italic'},
+        ]);
+        const report = JSON.parse(await readFile(first.reportPath, 'utf8'));
+        expect(report.unresolved).to.deep.equal([]);
+
+        let unexpectedCalls = 0;
+        const cached = await reconcileFigmaResources({
+            document, token: 'token', figFile: 'file-key', projectPath: root,
+            template: 'flutter', fresh: false,
+            http: {get: async () => { unexpectedCalls++; throw new Error('cache should avoid network'); }},
+        });
+        expect(unexpectedCalls).to.equal(0);
+        expect(cached.summary.cached).to.equal(4);
+
+        const stale = await reconcileFigmaResources({document: {children: []}, figFile: 'file-key', projectPath: root, template: 'flutter'});
+        expect(stale.summary.stale).to.equal(4);
+        const cleanedPubspec = yaml.load(await readFile(join(root, 'pubspec.yaml'), 'utf8'));
+        expect(cleanedPubspec.flutter.fonts.map(font => font.family)).to.deep.equal(['User Font']);
+        let generatedFontExists = true;
+        try { await stat(join(root, 'assets', 'fonts', 'figma', 'Brand_Sans-400-normal.ttf')); } catch (_) { generatedFontExists = false; }
+        expect(generatedFontExists).to.equal(false);
+    });
+
+    it('retries transient downloads and preserves verified cache after a failed fresh refresh', async function () {
+        const document = {children: [{id: 'photo', name: 'Photo', fills: [{type: 'IMAGE', imageRef: 'retry-image'}]}]};
+        let attempts = 0;
+        const firstHttp = {get: async url => {
+            if (url.includes('/files/file/images')) return {data: {meta: {images: {'retry-image': 'https://assets.test/retry.png'}}}};
+            attempts++;
+            if (attempts < 3) {
+                const error = new Error('temporary');
+                error.response = {status: 503, headers: {'retry-after': '0'}};
+                throw error;
+            }
+            return {data: Buffer.from('verified'), headers: {'content-type': 'image/png', 'content-length': '8'}};
+        }};
+        const first = await reconcileFigmaResources({
+            document, token: 'token', figFile: 'file', projectPath: root, template: 'reactjs', fresh: true,
+            http: firstHttp, sleepFn: async () => {},
+        });
+        expect(attempts).to.equal(3);
+        expect(first.summary.downloaded).to.equal(1);
+        const cachedFile = join(root, '.fastui', 'assets', 'figma', 'images', 'retry-image.png');
+        expect(await readFile(cachedFile, 'utf8')).to.equal('verified');
+
+        await writeFile(cachedFile, 'corrupt!');
+        const repaired = await reconcileFigmaResources({
+            document, token: 'token', figFile: 'file', projectPath: root, template: 'reactjs',
+            http: {get: async url => url.includes('/files/file/images')
+                ? {data: {meta: {images: {'retry-image': 'https://assets.test/retry.png'}}}}
+                : {data: Buffer.from('repaired'), headers: {'content-type': 'image/png', 'content-length': '8'}}},
+        });
+        expect(repaired.summary.updated).to.equal(1);
+        expect(await readFile(cachedFile, 'utf8')).to.equal('repaired');
+
+        let failedAttempts = 0;
+        const failedHttp = {get: async url => {
+            if (url.includes('/files/file/images')) return {data: {meta: {images: {'retry-image': 'https://assets.test/retry.png'}}}};
+            failedAttempts++;
+            const error = new Error('still unavailable');
+            error.response = {status: 500, headers: {}};
+            throw error;
+        }};
+        const originalWarn = console.warn;
+        console.warn = () => {};
+        let refreshed;
+        try {
+            refreshed = await reconcileFigmaResources({
+                document, token: 'token', figFile: 'file', projectPath: root, template: 'reactjs', fresh: true,
+                http: failedHttp, sleepFn: async () => {},
+            });
+        } finally {
+            console.warn = originalWarn;
+        }
+        expect(failedAttempts).to.equal(4);
+        expect(refreshed.summary.cached).to.equal(1);
+        expect(refreshed.summary.unresolved).to.equal(1);
+        expect(await readFile(cachedFile, 'utf8')).to.equal('repaired');
+        expect((await readdir(dirname(cachedFile))).some(file => file.includes('.tmp-'))).to.equal(false);
+    });
+
+    it('generates one React font integration and falls back to one entry import without usable HTML', async function () {
+        await mkdir(join(root, 'design'), {recursive: true});
+        await mkdir(join(root, 'src'), {recursive: true});
+        await writeFile(join(root, 'design', 'Inter.otf'), Buffer.from('font-data'));
+        await writeFile(join(root, 'fastui.config.json'), JSON.stringify({resources: {fonts: {
+            Inter: {files: [{path: 'design/Inter.otf', weightRange: [300, 700], style: 'normal'}]},
+        }}}));
+        await writeFile(join(root, 'index.html'), '<!doctype html><html><head><meta name="kept" content="yes"></head><body></body></html>');
+        await writeFile(join(root, 'src', 'main.jsx'), "import React from 'react';\n");
+        const document = {children: [{id: 'copy', name: 'Copy', type: 'TEXT', style: {fontFamily: 'Inter', fontWeight: 600}}]};
+        await reconcileFigmaResources({document, figFile: 'file', projectPath: root, template: 'reactjs'});
+        await reconcileFigmaResources({document, figFile: 'file', projectPath: root, template: 'reactjs'});
+        const html = await readFile(join(root, 'index.html'), 'utf8');
+        expect(html.match(/data-fastui-fonts/g)).to.have.length(1);
+        expect(html).to.include('<meta name="kept" content="yes">');
+        const css = await readFile(join(root, 'public', 'fonts', 'figma', 'fastui-fonts.generated.css'), 'utf8');
+        expect(css).to.include('font-family: "Inter"');
+        expect(css).to.include('font-weight: 600');
+        expect(css).to.include('format("opentype")');
+
+        await writeFile(join(root, 'index.html'), 'not an html integration point');
+        await reconcileFigmaResources({document, figFile: 'file', projectPath: root, template: 'reactjs'});
+        await reconcileFigmaResources({document, figFile: 'file', projectPath: root, template: 'reactjs'});
+        const entry = await readFile(join(root, 'src', 'main.jsx'), 'utf8');
+        expect(entry.match(/fastui-fonts\.generated\.css/g)).to.have.length(1);
+        await stat(join(root, 'src', 'styles', 'fastui-fonts.generated.css'));
+    });
+
+    it('resolves explicitly configured Google Fonts variants through the Web Fonts API', async function () {
+        await writeFile(join(root, 'fastui.config.json'), JSON.stringify({resources: {fonts: {Inter: {source: 'google'}}}}));
+        await writeFile(join(root, 'index.html'), '<html><head></head><body></body></html>');
+        const document = {children: [{id: 'google-copy', name: 'Google copy', type: 'TEXT', style: {fontFamily: 'Inter', fontWeight: 700, italic: true}}]};
+        const previousKey = process.env.GOOGLE_FONTS_API_KEY;
+        process.env.GOOGLE_FONTS_API_KEY = 'test-key';
+        let metadataRequests = 0;
+        try {
+            const result = await reconcileFigmaResources({
+                document, figFile: 'file', projectPath: root, template: 'reactjs', fresh: true,
+                http: {get: async url => {
+                    if (url.includes('googleapis.com/webfonts')) {
+                        metadataRequests++;
+                        return {data: {items: [{family: 'Inter', files: {'700italic': 'https://fonts.test/inter-700-italic.ttf'}}]}};
+                    }
+                    return {data: Buffer.from('google-font'), headers: {'content-type': 'font/ttf', 'content-length': '11'}};
+                }},
+            });
+            expect(result.summary.unresolved).to.equal(0);
+            expect(metadataRequests).to.equal(1);
+            expect(await readFile(join(root, 'public', 'fonts', 'figma', 'fastui-fonts.generated.css'), 'utf8')).to.include('font-style: italic');
+        } finally {
+            if (previousKey === undefined) delete process.env.GOOGLE_FONTS_API_KEY;
+            else process.env.GOOGLE_FONTS_API_KEY = previousKey;
+        }
+    });
+
+    it('warns with node context and continues when an exact font variant is unavailable', async function () {
+        await writeFile(join(root, 'fastui.config.json'), JSON.stringify({resources: {fonts: {Inter: {files: []}}}}));
+        const document = {children: [{id: 'missing-font-node', name: 'Price label', type: 'TEXT', style: {fontFamily: 'Inter', fontWeight: 700}}]};
+        const originalWarn = console.warn;
+        console.warn = () => {};
+        let result;
+        try {
+            result = await reconcileFigmaResources({document, figFile: 'file', projectPath: root, template: 'reactjs'});
+        } finally {
+            console.warn = originalWarn;
+        }
+        expect(result.summary.unresolved).to.equal(1);
+        expect(result.unresolved[0].nodes).to.deep.equal([{id: 'missing-font-node', name: 'Price label'}]);
+        expect(result.unresolved[0].reason).to.equal('No exact configured font variant');
+        expect(await readFile(join(root, 'src', 'styles', 'fastui-fonts.generated.css'), 'utf8')).to.equal('');
     });
 });

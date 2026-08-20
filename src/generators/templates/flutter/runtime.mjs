@@ -1,8 +1,51 @@
 export function flutterRuntimeSource() {
     return `import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'stores/observable_store.dart';
+import 'translations/generated.dart';
+
+class FastUIProviderInstance<S> {
+  const FastUIProviderInstance({
+    required this.id,
+    this.initialOverrides = const <String, dynamic>{},
+  });
+  final String id;
+  final Map<String, dynamic> initialOverrides;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is FastUIProviderInstance<S> && other.id == id;
+
+  @override
+  int get hashCode => Object.hash(S, id);
+}
+
+class FastUIComponentContext<S, N> {
+  const FastUIComponentContext({
+    required this.context,
+    required this.ref,
+    required this.state,
+    required this.notifier,
+    required this.inputs,
+    required this.args,
+    required this.componentId,
+    required void Function(String, dynamic) setState,
+  }) : _setState = setState;
+
+  final BuildContext context;
+  final WidgetRef ref;
+  final S state;
+  final N notifier;
+  final Map<String, dynamic> inputs;
+  final List<dynamic> args;
+  final String componentId;
+  final void Function(String, dynamic) _setState;
+
+  void setState(String key, dynamic value) => _setState(key, value);
+  T read<T>(ProviderListenable<T> provider) => ref.read(provider);
+}
 
 typedef FastUISurfaceBuilder = Widget Function();
 typedef FastUINavigationGuard = Future<FastUINavigationDecision> Function(FastUINavigationIntent intent);
@@ -139,12 +182,6 @@ class FastUINavigation {
 
   static void _publishRoute(FastUIRouteRef? route, [BuildContext? context]) {
     currentRoute.value = route;
-    if (context == null || route == null) return;
-    try {
-      FastUIStateScope.read(context).set(<String, dynamic>{
-        'route': <String, dynamic>{'name': route.name, 'type': route.type, 'params': route.params},
-      });
-    } catch (_) {}
   }
 
   static FastUIRouterDelegate createRouter({
@@ -351,13 +388,8 @@ class FastUINavigation {
   }
 }
 
-/// Shared style utilities used by every generated widget that needs to apply
-/// CSS-flavoured style maps (background, width/height with px suffix, named
-/// colours, etc.) at runtime — e.g. when a parent spec passes overrideStyles.
-///
-/// Keeping the parsing logic here means the generated widget files stay clean:
-/// they call FastUIStyleHelper.buildBox(baseStyles, overrideStyles, child: ...)
-/// and nothing else.
+/// Runtime parser retained only for hand-authored service-computed style maps.
+/// Static YAML and Figma styles are emitted as typed Flutter properties.
 class FastUIStyleHelper {
   FastUIStyleHelper._();
 
@@ -414,11 +446,10 @@ class FastUIStyleHelper {
   /// box model: background, dimensions, padding, margin, border, border-radius,
   /// box-shadow, opacity, overflow-clipping, and min/max constraints.
   static Widget buildBox(
-    Map<String, dynamic> base,
-    Map<String, dynamic> overrides, {
+    Map<String, dynamic> styles, {
     Widget? child,
   }) {
-    final s = Map<String, dynamic>.from(base)..addAll(overrides);
+    final s = Map<String, dynamic>.from(styles);
 
     // Color
     final color = parseColor(s['backgroundColor'] ?? s['background']);
@@ -581,10 +612,10 @@ class FastUIStyleHelper {
     final fit = bgSize?.toString().toLowerCase() == 'contain'
         ? BoxFit.contain
         : BoxFit.cover;
-    final ImageProvider provider =
+    final ImageProvider<Object> provider =
         RegExp(r'^https?://', caseSensitive: false).hasMatch(src)
-            ? NetworkImage(src)
-            : AssetImage(src.replaceFirst(RegExp(r'^/'), ''));
+            ? NetworkImage(src) as ImageProvider<Object>
+            : AssetImage(src.replaceFirst(RegExp(r'^/'), '')) as ImageProvider<Object>;
     return DecorationImage(image: provider, fit: fit);
   }
 
@@ -598,53 +629,77 @@ class FastUIStyleHelper {
   }
 }
 
-/// Global translations store for FastUI.
-///
-/// Usage in generated service stubs:
-///   dynamic t(Map<String, dynamic> data) =>
-///       FastUITranslations.instance.t(data['args']?[0] as String? ?? '');
-///
-/// Populate translations at app start (e.g. in main.dart):
-///   FastUITranslations.instance.load('en', {'hello': 'Hello', ...});
-///   FastUITranslations.instance.load('sw', {'hello': 'Habari', ...});
-///   FastUITranslations.instance.setLocale('en'); // default language
-class FastUITranslations {
-  FastUITranslations._();
-  static final FastUITranslations instance = FastUITranslations._();
+class FastUITranslationState {
+  const FastUITranslationState({
+    this.locale = 'default',
+    this.catalogs = const <String, Map<String, String>>{
+      'default': fastUITranslationsDefault,
+    },
+  });
+  final String locale;
+  final Map<String, Map<String, String>> catalogs;
 
-  String _locale = 'en';
-  final Map<String, Map<String, String>> _translations = {};
-
-  /// Load or merge a translations map for [locale].
-  void load(String locale, Map<String, String> entries) {
-    _translations[locale] = {...(_translations[locale] ?? {}), ...entries};
-  }
-
-  /// Switch the active language. All subsequent calls to [t] use this locale.
-  void setLocale(String locale) {
-    _locale = locale;
-  }
-
-  String get locale => _locale;
-
-  static String humanizeKey(String key) {
-    final value = key.replaceAll(RegExp(r'[_-]+'), ' ').trim();
-    if (value.isEmpty) return key;
-    return value
-        .split(RegExp(r'\s+'))
-        .map((part) => part.isEmpty ? part : part[0].toUpperCase() + part.substring(1))
-        .join(' ');
-  }
-
-  /// Resolve [key] in the current locale, falling back to 'en', then [fallback],
-  /// then a humanized version of [key].
-  String t(String key, {String? fallback}) {
-    return _translations[_locale]?[key]
-        ?? _translations['en']?[key]
-        ?? fallback
-        ?? humanizeKey(key);
+  String translate(String key, {Map<String, dynamic> args = const {}}) {
+    var value = catalogs[locale]?[key]
+        ?? catalogs['default']?[key]
+        ?? key;
+    for (final entry in args.entries) {
+      value = value.replaceAll('{\${entry.key}}', entry.value?.toString() ?? '');
+    }
+    return value;
   }
 }
+
+class FastUITranslationNotifier extends Notifier<FastUITranslationState> {
+  @override
+  FastUITranslationState build() => const FastUITranslationState();
+
+  void setLocale(String locale) => state = FastUITranslationState(
+        locale: locale,
+        catalogs: state.catalogs,
+      );
+
+  void load(String locale, Map<String, String> entries) {
+    state = FastUITranslationState(
+      locale: state.locale,
+      catalogs: <String, Map<String, String>>{
+        ...state.catalogs,
+        locale: <String, String>{...?state.catalogs[locale], ...entries},
+      },
+    );
+  }
+}
+
+final fastUITranslationProvider =
+    NotifierProvider<FastUITranslationNotifier, FastUITranslationState>(
+  FastUITranslationNotifier.new,
+);
+
+class FastUITranslationRequest {
+  const FastUITranslationRequest({
+    required this.key,
+    this.args = const <String, dynamic>{},
+  });
+  final String key;
+  final Map<String, dynamic> args;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FastUITranslationRequest &&
+          other.key == key &&
+          mapEquals(other.args, args);
+
+  @override
+  int get hashCode => Object.hash(key, Object.hashAll(args.entries));
+}
+
+final fastUITranslateProvider = Provider.family<String, FastUITranslationRequest>(
+  (ref, request) => ref.watch(fastUITranslationProvider).translate(
+        request.key,
+        args: request.args,
+      ),
+);
 
 class FastUIImage extends StatelessWidget {
   const FastUIImage({super.key, required this.source, this.width, this.height, this.fit});

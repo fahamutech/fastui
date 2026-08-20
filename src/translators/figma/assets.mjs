@@ -4,9 +4,9 @@
  * cache and the project's own image folders before ever hitting the network.
  */
 import axios from 'axios';
-import {copyFile, readdir, stat} from 'node:fs/promises';
+import {readdir, stat} from 'node:fs/promises';
 import {createWriteStream} from 'node:fs';
-import {dirname, join, resolve} from 'node:path';
+import {extname, join, resolve} from 'node:path';
 import {ensureFileExist, ensurePathExist} from '../../shared/fs.mjs';
 
 function formatRetryAfter(value) {
@@ -32,16 +32,18 @@ const downloadState = {
     enabled: false,
     disabledForRun: false,
     warningWritten: false,
+    projectPath: process.cwd(),
 };
 
 /**
  * @param enabled {boolean} whether this translation run is allowed to hit the
  * network for missing assets (the `--fresh` / downloadAssets flag).
  */
-export function configureAssetDownloads(enabled) {
+export function configureAssetDownloads(enabled, projectPath = process.cwd()) {
     downloadState.enabled = enabled;
     downloadState.disabledForRun = false;
     downloadState.warningWritten = false;
+    downloadState.projectPath = projectPath;
 }
 
 async function downloadImage(imageUrl, imageRef, filePath) {
@@ -88,20 +90,23 @@ export async function getFigmaImagePath({token, figFile, srcPath, imageRef, chil
         return undefined;
     }
     const nodeId = child?.id;
-    const folderPath = resolve(join(process.cwd(), '.fastui', 'assets', 'figma'));
+    const folderPath = resolve(join(downloadState.projectPath, '.fastui', 'assets', 'figma'));
     await ensurePathExist(folderPath);
     try {
         const candidateFolders = [
+            resolve(join(folderPath, 'images')),
+            resolve(join(folderPath, 'vectors')),
             folderPath,
-            resolve(join(process.cwd(), 'assets', 'images', 'figma')),
-            resolve(join(process.cwd(), 'public', 'images', 'figma')),
+            resolve(join(downloadState.projectPath, 'assets', 'images', 'figma')),
+            resolve(join(downloadState.projectPath, 'public', 'images', 'figma')),
         ];
         let imagePath;
         let file;
         for (const candidate of candidateFolders) {
             try {
                 const files = await readdir(candidate);
-                file = files.find(value => value.trim().startsWith(imageRef));
+                const expected = `${imageRef}`.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'resource';
+                file = files.find(value => value.slice(0, -(extname(value).length || 0)) === expected);
                 if (file) {
                     imagePath = join(candidate, file);
                     break;
@@ -110,11 +115,12 @@ export async function getFigmaImagePath({token, figFile, srcPath, imageRef, chil
             }
         }
         await stat(imagePath);
-        if (dirname(imagePath) !== folderPath) await copyFile(imagePath, join(folderPath, file));
         return `asset://figma/${file}`;
     } catch (e) {
-        if (!downloadState.enabled || !token) return undefined;
-        if (downloadState.disabledForRun) return undefined;
+        const expected = `${imageRef}`.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'resource';
+        const fallback = `asset://figma/${expected}.${format ?? 'png'}`;
+        if (!downloadState.enabled || !token) return fallback;
+        if (downloadState.disabledForRun) return fallback;
         try {
             const url = await fetchFigmaImagesUrl({token, format, figFile, nodeId, imageRef});
             if (url) {
@@ -132,6 +138,6 @@ export async function getFigmaImagePath({token, figFile, srcPath, imageRef, chil
                 downloadState.warningWritten = true;
             }
         }
-        return undefined;
+        return fallback;
     }
 }

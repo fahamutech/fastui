@@ -27,151 +27,22 @@ generateSpecFile(specPath)
 
 Output: `.jsx` file at `src/modules/<module>/<spec-name>.jsx`
 
-### Component
-
-```yaml
-# ihero_card.yml
-component:
-  base: container
-  modifier:
-    styles:
-      width: 100%
-      height: 280px
-      backgroundColor: '#ffffff'
-      borderRadius: 12px
-      overflow: hidden
-      cursor: pointer
-    props:
-      id: hero-card
-      onClick:
-        action: navigation.open
-        name: detail
-        type: push
-    states:
-      isHovered: false
-    extend:
-      - ./icard_image.yml
-      - ./icard_content.yml
-    frame:
-      base: column.start
-      current:
-        width: 100%
-        height: 280px
-      next:
-        width: 100%
-```
-
-**Generated output:**
+State defaults are emitted only in `src/stores/<module>/stores.generated.mjs`. Generated JSX selects only the fields it renders:
 
 ```jsx
-import { useCallback } from 'react';
-import { useModuleState } from '../../stores/home/store.mjs';
-import { navigate } from '../../AppRoute.jsx';
-import { CardImage } from './icard_image.jsx';
-import { CardContent } from './icard_content.jsx';
-
-export function HeroCard({ states: parentStates, setState: setParentState, inputs }) {
-  const [states, setState] = useModuleState('HeroCard', { isHovered: false });
-
-  const handleClick = useCallback(() => {
-    navigate({ name: 'detail', type: 'push' });
-  }, []);
-
-  return (
-    <div
-      id="hero-card"
-      onClick={handleClick}
-      style={{
-        width: '100%',
-        height: 280,
-        backgroundColor: '#ffffff',
-        borderRadius: 12,
-        overflow: 'hidden',
-        cursor: 'pointer',
-      }}
-    >
-      <div style={{ width: '100%' }}>
-        <CardImage states={states} setState={setState} inputs={inputs} />
-      </div>
-      <div style={{ width: '100%' }}>
-        <CardContent states={states} setState={setState} inputs={inputs} />
-      </div>
-    </div>
-  );
-}
+export const ProfileName = React.memo(function ProfileName({instanceId, initialState = {}, initialProps = {}}) {
+  const resolvedInstanceId = instanceId ?? 'profile/profile_name';
+  const stateSeed = {inputs: {}, initialState};
+  const name = useFastUISelector(profileNameStore, resolvedInstanceId, state => state.name, stateSeed);
+  return <div {...initialProps}>{name}</div>;
+});
 ```
 
-### Condition
+Every component accepts `instanceId`, `initialState`, and `initialProps`. Extended children and loop items receive deterministic derived IDs. Equal explicit IDs share a store instance; the first mounted seed wins. Stores dispose after the last subscriber unmounts, with a deferred cleanup that is safe under React Strict Mode.
 
-```yaml
-# iauth_gate.yml
-condition:
-  modifier:
-    states:
-      condition: false
-    left: ./iloggedin.yml
-    right: ./iloggedout.yml
-    styles:
-      width: 100%
-      flex: 1
-```
+Conditions select `condition`; loops select `data`; controlled inputs select their value and update the same store before invoking `*_change`. Programmatic store changes update the controlled value without invoking change services.
 
-**Generated output:**
-
-```jsx
-export function AuthGate({ states: parentStates, setState: setParentState, inputs }) {
-  const [states, setState] = useModuleState('AuthGate', { condition: false });
-
-  return (
-    <div style={{ width: '100%', flex: 1 }}>
-      {states.condition
-        ? <LoggedIn states={states} setState={setState} inputs={inputs} />
-        : <LoggedOut states={states} setState={setState} inputs={inputs} />}
-    </div>
-  );
-}
-```
-
-### Loop
-
-```yaml
-# iproduct_list.yml
-loop:
-  modifier:
-    states:
-      data: []
-    feed: ./iproduct_item.yml
-    props:
-      id: product-list
-      scroll: vertical
-    styles:
-      width: 100%
-      flex: 1
-```
-
-**Generated output:**
-
-```jsx
-export function ProductList({ states: parentStates, setState: setParentState, inputs }) {
-  const [states, setState] = useModuleState('ProductList', { data: [] });
-
-  return (
-    <div
-      id="product-list"
-      style={{ width: '100%', flex: 1, overflowY: 'auto' }}
-    >
-      {states.data.map((loopElement, loopIndex) => (
-        <ProductItem
-          key={loopElement._key ?? loopIndex}
-          inputs={{ loopElement, loopIndex, ...inputs }}
-          states={states}
-          setState={setState}
-        />
-      ))}
-    </div>
-  );
-}
-```
+Translation bindings use `useFastUITranslation(key, args)`. Locale and catalog updates rerender translation consumers, with resolution `active → default → exact key`. Pure components have no store, effect, or translation hooks.
 
 ---
 
@@ -201,7 +72,8 @@ class _HeroCardState extends State<HeroCard> {
   Map<String, dynamic> states = {'isHovered': false};
 
   void setStateValue(Map<String, dynamic> patch) {
-    setState(() { states = {...states, ...patch}; });
+    // Flutter components watch generated Riverpod providers. Services and
+    // actions update the corresponding generated notifier.
   }
 
   @override
@@ -284,10 +156,13 @@ dynamic computeCardStyle(Map<String, dynamic> data) {
 styles: logics.computeCardStyle
 ```
 
-The generator imports and calls the function, passing:
+The generator imports and calls the function with a generated component context:
 
 ```js
-{ component: { states, inputs }, args: [] }
+context.state
+context.inputs
+context.args
+context.setState('field', value)
 ```
 
 ---
@@ -300,43 +175,41 @@ A store is generated for every **module** that contains at least one stateful sp
 
 ### React store
 
-**`src/stores/<module>/store.mjs`** — auto-generated once, never overwritten:
+**`src/stores/<module>/stores.generated.mjs`** — regenerated on every build:
 
 ```js
-import { createObservableStore } from '../../stores/observable_store.mjs';
-import { useObservable } from '../../stores/use_observable.mjs';
-
-export const moduleStore = createObservableStore();
-
-export function useModuleState(componentName, initialState) {
-  // Returns [state, setState] scoped to this component instance.
-  // Each mounted instance gets its own slot — siblings never share state.
-}
+export const heroCardStore = createFastUIComponentStore({
+  componentId: 'home/hero_card',
+  fields: ['isHovered'],
+  createInitialState: () => ({isHovered: false}),
+  setters: {setIsHovered: (state, value) => ({...state, isHovered: value})},
+});
 ```
 
 **`src/stores/<module>/models.generated.mjs`** — regenerated on every build:
 
 ```js
 /**
+ * @readonly
  * @typedef {Object} HeroCardStateModel
  * @property {boolean} isHovered
  */
 ```
 
-### Flutter store
+### Flutter providers
 
-**`lib/stores/<module>/store.dart`** — auto-generated once, never overwritten:
+**`lib/stores/<module>/providers.generated.dart`** — regenerated on every build:
 
 ```dart
-class FastUIModuleStore extends ChangeNotifier {
-  final Map<Type, Map<String, Object>> _values = {};
-
-  Map<String, T> values<T extends Object>() => …;
-  void set<T extends Object>(String instanceId, T value) { … notifyListeners(); }
-  void remove<T extends Object>(String instanceId) { … }
+class FastUIHeroCardNotifier extends AutoDisposeFamilyNotifier<
+    FastUIHeroCardStateModel,
+    FastUIProviderInstance<FastUIHeroCardStateModel>> {
+  @override
+  FastUIHeroCardStateModel build(FastUIProviderInstance<FastUIHeroCardStateModel> argument) =>
+      argument.initialState;
 }
 
-final moduleStore = FastUIModuleStore();
+final heroCardProvider = NotifierProvider.autoDispose.family<…>(…);
 ```
 
 **`lib/stores/<module>/models.generated.dart`** — regenerated on every build:
@@ -344,7 +217,7 @@ final moduleStore = FastUIModuleStore();
 ```dart
 class FastUIHeroCardStateModel {
   const FastUIHeroCardStateModel({required this.isHovered});
-  final bool isHovered;
+  final bool? isHovered;
 }
 ```
 

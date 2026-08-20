@@ -45,9 +45,9 @@ Selects the renderer primitive **or** wraps an existing spec component.
 | `container` | Generic box. Use for layout wrappers, groups, buttons. |
 | `text` | Text node. `modifier.props.children` is the text content. |
 | `image` | Image node. `modifier.props.src` is the URL. `modifier.props.alt` is the label. |
-| `./path/to/spec.yml` | **Component reuse** — imports the referenced component and renders it, forwarding local `modifier.styles`, `modifier.props`, and `modifier.states` as override props. The base component owns its own shape; this spec is a thin wrapper. |
+| `./path/to/spec.yml` | Inherits a referenced spec. Both targets resolve and merge it during generation. |
 
-> **Component reuse is not inheritance.** No deep-merge happens at build time. The generator emits a wrapper component that imports the base and passes local modifier fields as `overrideStyles`, `overrideProps`, and `overrideStates` named parameters. The base component accepts and merges them at render time.
+Flutter and React recursively deep-merge object modifiers, replace arrays and scalar values, and rebase inherited composition paths. Generated components are complete widgets rather than runtime inheritance wrappers.
 
 **Component reuse example** (instance wrapping a shared component):
 
@@ -66,49 +66,15 @@ component:
         type: push
 ```
 
-**Generated React wrapper:**
+**Generated React result:**
 
 ```jsx
-import {PrimaryButton} from '../../shared/common/primary_button.jsx';
-
-export function LoginButton({loopIndex, loopElement}) {
-    return (
-        <PrimaryButton
-            loopIndex={loopIndex}
-            loopElement={loopElement}
-            overrideStyles={{"backgroundColor": "#e53935"}}
-            overrideProps={{"id": "login-button", "onClick": {...}}}
-            overrideStates={{}}
-        />
-    );
-}
+export const LoginButton = React.memo(function LoginButton({instanceId, initialState = {}, initialProps = {}}) {
+  return <div id="login-button" style={{backgroundColor: '#e53935'}} {...initialProps} />;
+});
 ```
 
-**Generated Flutter wrapper:**
-
-```dart
-import 'package:flutter/material.dart';
-import '../../shared/common/primary_button.dart';
-
-class FastUILoginButton extends StatelessWidget {
-  const FastUILoginButton({super.key, this.loopIndex, this.loopElement});
-  final dynamic loopIndex;
-  final dynamic loopElement;
-
-  @override
-  Widget build(BuildContext context) {
-    return FastUIPrimaryButton(
-      loopIndex: loopIndex,
-      loopElement: loopElement,
-      overrideStyles: {'backgroundColor': '#e53935'},
-      overrideProps: {'id': 'login-button'},
-      overrideStates: {},
-    );
-  }
-}
-```
-
-Every generated **base component** automatically accepts `overrideStyles`, `overrideProps`, and `overrideStates` and merges them with its own defaults at render time.
+Both targets generate `LoginButton` directly from the merged specification. No runtime style override map is emitted.
 
 ---
 
@@ -230,6 +196,20 @@ states:
 
 State values are referenced in props or children as `'states.<name>'`.  
 State changes happen via `state.set` actions on event props.
+
+Flutter state is generated as an immutable Riverpod model plus an auto-disposed family notifier. YAML values seed the provider; generated services receive `FastUIComponentContext` and update the same provider with `context.setState(key, value)`.
+
+Localized text uses an explicit binding and reacts to locale changes without becoming component state:
+
+```yaml
+props:
+  children:
+    translation:
+      key: welcome
+      fallback: Welcome
+```
+
+The fallback value seeds the generated `default` catalog but is not embedded in UI code. Resolution is active locale, `default` catalog, then the exact translation key.
 
 ---
 

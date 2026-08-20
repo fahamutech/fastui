@@ -16,6 +16,7 @@ import {
     parseLogicReference,
 } from '../../modifier.mjs';
 import {analyzeBehavior} from '../../behavior.mjs';
+import {referencedInputKeys} from '../../bindings.mjs';
 import {flutterRuntimeSource} from './runtime.mjs';
 import {ensureServiceFile, relativeImport, specStructure} from '../../project-structure.mjs';
 
@@ -25,7 +26,14 @@ const dartIdentifier = value => `${value ?? ''}`
     .replace(/[^a-zA-Z0-9_]/g, '_')
     .replace(/^[^a-zA-Z_]/, '_$&');
 
-const stateIdentifier = value => `state${firstUpperCase(dartIdentifier(value))}`;
+const stateIdentifier = value => `state.${dartIdentifier(value)}`;
+
+const providerIdentifier = specPath => {
+    const name = specStructure(specPath, 'flutter').componentName;
+    return `${name[0].toLowerCase()}${name.slice(1)}Provider`;
+};
+
+const notifierName = specPath => `FastUI${specStructure(specPath, 'flutter').componentName}Notifier`;
 
 const dartFileStem = value => `${value}`.split(sep).pop().replace(/\.ya?ml$/i, '')
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
@@ -98,16 +106,15 @@ function flutterLogicCallExpression(
 ) {
     const logic = parseLogicReference(value);
 
-    if (!logic?.isCall) {
+    if (!logic) {
         return null;
     }
 
     const args =
         `${logic.argsSource ?? ''}`.trim() === ''
             ? 'const []'
-            : `[${logic.argsSource}]`;
-
-    return `${logic.name}(_componentContext(${contextRef}, ${args}))`;
+            : `[${logic.argsSource}]`.replaceAll('$', '\\$');
+    return `${logic.name}(_componentContext(${contextRef}, ref, ${args}))`;
 }
 
 function valueExpression(value) {
@@ -159,28 +166,9 @@ function valueExpression(value) {
 function collectInputs(data = {}) {
     const found = new Set([
         'loopElement',
-        'loopIndex'
+        'loopIndex',
+        ...referencedInputKeys(data),
     ]);
-
-    const visit = value => {
-        if (typeof value === 'string') {
-            const matches = value.matchAll(
-                /inputs\.([a-zA-Z_][a-zA-Z0-9_]*)/g
-            );
-
-            for (const match of matches) {
-                found.add(match[1]);
-            }
-        } else if (
-            value &&
-            typeof value === 'object'
-        ) {
-            Object.values(value).forEach(visit);
-        }
-    };
-
-    visit(data);
-
     return [...found].map(dartIdentifier);
 }
 
@@ -1004,6 +992,11 @@ function containerExpression(
         );
     }
 
+    const shadow = boxShadowExpression(styles);
+    if (shadow) {
+        decoration.push(`boxShadow: <BoxShadow>[${shadow}]`);
+    }
+
     const radius =
         borderRadius(styles);
 
@@ -1106,11 +1099,19 @@ function containerExpression(
             )`
         );
 
+    const styledContainer = applyOpacityWrap(
+        styles,
+        applyOverflowClip(
+            styles,
+            applyConstraintBox(styles, container)
+        )
+    );
+
     if (
         !fillWidth &&
         !fillHeight
     ) {
-        return container;
+        return styledContainer;
     }
 
     const fallbackWidth =
@@ -1152,7 +1153,7 @@ function containerExpression(
                     : ${fallbackHeight}`
             : '',
 
-        `child: ${container}`,
+        `child: ${styledContainer}`,
     ]
         .filter(Boolean)
         .join(', ');
@@ -1177,9 +1178,7 @@ function textExpression(data) {
     const children =
         getChildren(data);
 
-    const rawChildren =
-        data?.modifier?.props?.children ??
-        '';
+    const rawChildren = data?.modifier?.props?.children ?? '';
 
     const style = [];
 
@@ -1288,13 +1287,24 @@ function textExpression(data) {
             ? `, style: TextStyle(${style.join(', ')})`
             : '';
 
+    const translation = children?.type === 'translation' ? children.value : null;
+    const translationArgs = translation?.args && typeof translation.args === 'object'
+        ? `{${Object.entries(translation.args).map(([key, value]) => `${dartString(key)}: ${valueExpression(value)}`).join(', ')}}`
+        : 'const <String, dynamic>{}';
+    const translationRequest = translation
+        ? translation?.args && Object.keys(translation.args).length > 0
+            ? `FastUITranslationRequest(key: ${dartString(translation.key)}, args: ${translationArgs})`
+            : `const FastUITranslationRequest(key: ${dartString(translation.key)})`
+        : null;
     const expression =
-        children?.type === 'logic'
+        translation
+            ? `ref.watch(fastUITranslateProvider(${translationRequest}))`
+            : children?.type === 'logic'
             ? flutterLogicCallExpression(
                 children?.value
             )
             : valueExpression(
-                rawChildren
+                typeof rawChildren === 'string' ? rawChildren.replaceAll('$', '\\$') : rawChildren
             );
 
     const nullable =
@@ -1417,6 +1427,7 @@ function logicCall(
     return `${name}(
         _componentContext(
             context,
+            ref,
             ${argument}
         )
     )`;
@@ -1511,11 +1522,7 @@ function interactionStatement(
                     action.value
                 );
 
-        return `_set${firstUpperCase(
-            stateIdentifier(
-                action.target
-            )
-        )}(${value})`;
+        return `_notifier.setField(${dartString(action.target)}, ${value})`;
     }
 
     return '';
@@ -1607,13 +1614,8 @@ function inputExpression(data) {
 
     const args = [];
 
-    if (
-        props.value !== undefined &&
-        props.value !== null
-    ) {
-        args.push(
-            `initialValue: (${valueExpression(props.value)} ?? '').toString()`
-        );
+    if (props.value !== undefined && props.value !== null) {
+        args.push('controller: _controller');
     }
 
     if (
@@ -1621,9 +1623,14 @@ function inputExpression(data) {
             `${props.onChange ?? ''}`
         )
     ) {
+        const stateMatch = typeof props.value === 'string'
+            ? props.value.match(/^states\.([a-zA-Z_][a-zA-Z0-9_]*)$/i)
+            : null;
         args.push(
-            `onChanged: (value) =>
-                ${logicCall(props.onChange, 'value')}`
+            `onChanged: (value) {
+                ${stateMatch ? `_notifier.setField(${dartString(stateMatch[1])}, value);` : ''}
+                ${logicCall(props.onChange, 'value')};
+            }`
         );
     } else if (
         props.onChange &&
@@ -1645,8 +1652,11 @@ function inputExpression(data) {
     if (
         props.placeholder
     ) {
+        const placeholder = props.placeholder?.translation;
         decoration.push(
-            `hintText: ${valueExpression(props.placeholder)}`
+            `hintText: ${placeholder
+                ? `ref.watch(fastUITranslateProvider(const FastUITranslationRequest(key: ${dartString(placeholder.key)})))`
+                : valueExpression(props.placeholder)}`
         );
     }
 
@@ -1755,6 +1765,10 @@ function inputExpression(data) {
         args.push(
             'obscureText: true'
         );
+    }
+
+    if (/^(?:logics|services)\./i.test(`${props.onSubmit ?? ''}`)) {
+        args.push(`onFieldSubmitted: (value) => ${logicCall(props.onSubmit, 'value')}`);
     }
 
     const field =
@@ -1869,14 +1883,13 @@ function componentBody(data) {
     ) {
         const styles =
             getStyles(data);
-
-        const baseStyleLiteral =
-            dartLiteral(styles);
-
-        return `_buildWithOverride(
-            ${baseStyleLiteral},
-            child: ${textExpression(data)}
-        )`;
+        if (typeof styles === 'string') {
+            return `FastUIStyleHelper.buildBox(
+              ${flutterLogicCallExpression(styles)},
+              child: ${textExpression(data)}
+            )`;
+        }
+        return containerExpression(styles, textExpression(data));
     }
 
     if (
@@ -1906,9 +1919,6 @@ function componentBody(data) {
 
     const styles =
         getStyles(data);
-
-    const baseStyleLiteral =
-        dartLiteral(styles);
 
     const children =
         getChildren(data);
@@ -1957,11 +1967,13 @@ function componentBody(data) {
             `, child: ${childExpr}`;
     }
 
-    const body =
-        `_buildWithOverride(
-            ${baseStyleLiteral}
-            ${childArg}
-        )`;
+    const child = childArg ? childArg.replace(/^, child:\s*/, '') : 'null';
+    const body = typeof styles === 'string'
+        ? `FastUIStyleHelper.buildBox(
+            ${flutterLogicCallExpression(styles)},
+            child: ${child}
+          )`
+        : containerExpression(styles, child);
 
     return applyInteractions(
         data,
@@ -2390,8 +2402,7 @@ const LAYOUT_ONLY_KEYS =
         'flexDirection',
         'flex',
         'fallbackWidth',
-        'fallbackHeight',
-        'childDirection'
+        'fallbackHeight'
     ]);
 
 function stripLayoutKeys(styles) {
@@ -2538,9 +2549,9 @@ function composeFrame(
 
     const nextWidgets =
         extendRefs.map(
-            ref => {
+            (ref, index) => {
                 const child =
-                    widgetInvocation(ref);
+                    widgetInvocation(ref, '', `${index}`);
 
                 const widget =
                     hasNextWrapper
@@ -3079,14 +3090,24 @@ async function serviceImportAndStubs(
             servicePath:
             structure.servicePath,
 
-            legacyPath:
-            structure.legacyServicePath,
-
             functions:
             names,
 
             template:
-                'flutter'
+                'flutter',
+
+            flutterReturns: (() => {
+                const styleLogic = parseLogicReference(data?.modifier?.styles);
+                return styleLogic ? {[dartIdentifier(styleLogic.name)]: 'Map<String, dynamic>'} : {};
+            })(),
+
+            flutterContext: Object.keys(getStates(data)).length > 0 ? {
+                runtimePath: resolve(flutterLibRoot(specPath), 'fastui_runtime.dart'),
+                modelsPath: structure.storeModelsPath,
+                providersPath: structure.storePath,
+                model: stateModelName(specPath),
+                notifier: notifierName(specPath),
+            } : undefined,
         });
 
     return `import '${
@@ -3164,7 +3185,8 @@ function referencedWidgets(
 
 function widgetInvocation(
     ref,
-    extra = ''
+    extra = '',
+    slot = 'child'
 ) {
     if (!ref) {
         return 'const SizedBox.shrink()';
@@ -3172,7 +3194,8 @@ function widgetInvocation(
 
     return `${ref.className}(
         loopIndex: widget.loopIndex,
-        loopElement: widget.loopElement
+        loopElement: widget.loopElement,
+        instanceId: '\${widget.instanceId ?? 'root'}/${slot}/${ref.className}'
         ${extra}
     )`;
 }
@@ -3181,28 +3204,6 @@ function widgetInvocation(
 // -----------------------------------------------------------------------------
 // STATE
 // -----------------------------------------------------------------------------
-
-function stateMembers(data) {
-    return Object.keys(
-        getStates(data)
-    )
-        .map(
-            key =>
-                `late dynamic ${stateIdentifier(key)};`
-        )
-        .join('\n  ');
-}
-
-function stateInitializers(data) {
-    return Object.entries(
-        getStates(data)
-    )
-        .map(
-            ([key, value]) =>
-                `${stateIdentifier(key)} = ${valueExpression(value)};`
-        )
-        .join('\n    ');
-}
 
 function stateModelName(
     specPath
@@ -3215,153 +3216,11 @@ function stateModelName(
     }StateModel`;
 }
 
-function stateModelExpression(
-    data,
-    specPath
-) {
-    const fields =
-        Object.keys(
-            getStates(data)
-        )
-            .map(
-                key =>
-                    `${dartIdentifier(key)}: ${stateIdentifier(key)}`
-            )
-            .join(', ');
-
-    return `${stateModelName(specPath)}(
-        ${fields}
-    )`;
-}
-
-function stateStoreMembers(
-    data,
-    specPath
-) {
-    if (
-        Object.keys(
-            getStates(data)
-        ).length === 0
-    ) {
-        return '';
-    }
-
-    const mutationTargets =
-        new Set();
-
-    const collectTargets =
-        value => {
-            if (
-                Array.isArray(value)
-            ) {
-                return value.forEach(
-                    collectTargets
-                );
-            }
-
-            if (
-                !value ||
-                typeof value !==
-                'object'
-            ) {
-                return;
-            }
-
-            if (
-                value.action ===
-                'state.set' &&
-                value.target
-            ) {
-                mutationTargets.add(
-                    value.target
-                );
-            }
-
-            Object.values(value)
-                .forEach(
-                    collectTargets
-                );
-        };
-
-    collectTargets(data);
-
-    if (
-        collectLogicNames(data)
-            .length > 0
-    ) {
-        Object.keys(
-            getStates(data)
-        ).forEach(
-            key =>
-                mutationTargets.add(
-                    key
-                )
-        );
-    }
-
-    const setters =
-        [...mutationTargets]
-            .filter(
-                key =>
-                    key in getStates(data)
-            )
-            .map(
-                key => {
-                    const field =
-                        stateIdentifier(key);
-
-                    return `void _set${firstUpperCase(field)}(
-                        dynamic value
-                    ) {
-                        setState(
-                            () =>
-                                ${field} = value
-                        );
-                        _publishState();
-                    }`;
-                }
-            )
-            .join('\n\n  ');
-
-    return `
-      late final String _storeId;
-
-      void _publishState() =>
-          moduleStore.set<
-              ${stateModelName(specPath)}
-          >(
-              _storeId,
-              ${stateModelExpression(
-        data,
-        specPath
-    )}
-          );
-
-      ${setters}
-    `;
-}
-
 function contextMembers(
     data,
-    inputs
+    inputs,
+    specPath
 ) {
-    const stateEntries =
-        Object.keys(
-            getStates(data)
-        )
-            .flatMap(
-                key => [
-                    `${dartString(key)}: ${stateIdentifier(key)}`,
-
-                    `${dartString(
-                        `set${firstUpperCase(key)}`
-                    )}: (dynamic value) =>
-                        _set${firstUpperCase(
-                        stateIdentifier(key)
-                    )}(value)`
-                ]
-            );
-
     const inputEntries =
         inputs
             .filter(
@@ -3374,29 +3233,46 @@ function contextMembers(
                     `${dartString(input)}: widget.${input}`
             );
 
-    return `Map<String, dynamic> _componentContext(
+    const hasState = Object.keys(getStates(data)).length > 0;
+    if (!hasState) {
+        return `FastUIComponentContext<Map<String, dynamic>, Object?> _componentContext(
         BuildContext context,
+        WidgetRef ref,
         [
             dynamic argument
         ]
-    ) => {
-        'context': context,
-
-        'states': {
-            ${stateEntries.join(', ')}
-        },
-
-        'inputs': {
-            ${inputEntries.join(', ')}
-        },
-
-        'args':
-            argument == null
-                ? <dynamic>[]
-                : argument is List
-                    ? List<dynamic>.from(argument)
-                    : <dynamic>[argument],
-    };`;
+    ) => FastUIComponentContext<Map<String, dynamic>, Object?>(
+      context: context,
+      ref: ref,
+      state: const <String, dynamic>{},
+      notifier: null,
+      inputs: <String, dynamic>{${inputEntries.join(', ')}},
+      args: argument == null ? <dynamic>[] : argument is core.List ? core.List<dynamic>.from(argument) : <dynamic>[argument],
+      componentId: widget.instanceId ?? ${dartString(specPath)},
+      setState: (key, value) => throw StateError('This component has no state'),
+    );`;
+    }
+    const model = stateModelName(specPath);
+    const notifier = notifierName(specPath);
+    const provider = providerIdentifier(specPath);
+    return `FastUIComponentContext<${model}, ${notifier}> _componentContext(
+        BuildContext context,
+        WidgetRef ref,
+        [dynamic argument]
+    ) {
+      final instance = _providerInstance;
+      final notifier = ref.read(${provider}(instance).notifier);
+      return FastUIComponentContext<${model}, ${notifier}>(
+        context: context,
+        ref: ref,
+        state: ref.read(${provider}(instance)),
+        notifier: notifier,
+        inputs: <String, dynamic>{${inputEntries.join(', ')}},
+        args: argument == null ? <dynamic>[] : argument is core.List ? core.List<dynamic>.from(argument) : <dynamic>[argument],
+        componentId: instance.id,
+        setState: notifier.setField,
+      );
+    }`;
 }
 
 function effectsInit(data) {
@@ -3415,7 +3291,7 @@ function effectsInit(data) {
                         body
                     )
                 )
-                    ? `${logicCall(body)};`
+                    ? `await ${logicCall(body)};`
                     : '';
             }
         )
@@ -3427,27 +3303,6 @@ function effectsInit(data) {
 // -----------------------------------------------------------------------------
 // WIDGET WRITER
 // -----------------------------------------------------------------------------
-
-function buildWithOverrideMethod(
-    isStateClass = false
-) {
-    const overrideRef =
-        isStateClass
-            ? 'widget.overrideStyles'
-            : 'overrideStyles';
-
-    return `Widget _buildWithOverride(
-        Map<String, dynamic> baseStyles,
-        {
-            Widget? child
-        }
-    ) =>
-        FastUIStyleHelper.buildBox(
-            baseStyles,
-            ${overrideRef},
-            child: child
-        );`;
-}
 
 function buildMetaMethod(
     data,
@@ -3553,7 +3408,7 @@ async function writeWidget({
     }
 
     const overrideParams =
-        `this.overrideStyles = const {},
+        `this.instanceId,
          this.overrideProps = const {},
          this.overrideStates = const {}`;
 
@@ -3575,14 +3430,11 @@ async function writeWidget({
                     `final dynamic ${input};`
             ),
 
-            `final Map<String, dynamic> overrideStyles;`,
+            `final String? instanceId;`,
             `final Map<String, dynamic> overrideProps;`,
             `final Map<String, dynamic> overrideStates;`,
         ]
             .join('\n  ');
-
-    const stateFields =
-        stateMembers(data);
 
     const hasState =
         Object.keys(
@@ -3611,34 +3463,24 @@ import '${
             }';`
             : '';
 
-    const storeMembers =
-        stateStoreMembers(
-            data,
-            specPath
-        );
+    const provider = hasState ? providerIdentifier(specPath) : '';
+    const model = hasState ? stateModelName(specPath) : '';
+    const providerMembers = hasState
+        ? `FastUIProviderInstance<${model}> get _providerInstance => FastUIProviderInstance<${model}>(
+      id: widget.instanceId ?? ${dartString(structure.specId)},
+      initialOverrides: widget.overrideStates,
+    );`
+        : '';
 
-    const stateInit =
-        hasState
-            ? Object.entries(
-                getStates(data)
-            )
-                .map(
-                    ([key, value]) =>
-                        `${stateIdentifier(key)}
-                            =
-                        (
-                            widget.overrideStates[
-                                ${dartString(key)}
-                            ]
-                            ??
-                            ${valueExpression(value)}
-                        )
-                        as dynamic;`
-                )
-                .join('\n    ')
-            : stateInitializers(
-                data
-            );
+    const props = data?.modifier?.props ?? {};
+    const controlledStateMatch = typeof props.value === 'string' ? props.value.match(/^states\.([a-zA-Z_][a-zA-Z0-9_]*)$/i) : null;
+    const controlledStateKey = props.control === 'input' && controlledStateMatch ? controlledStateMatch[1] : null;
+    const hasController = Boolean(controlledStateKey);
+    const controllerInit = hasController
+        ? `_controller = TextEditingController(text: (ref.read(${provider}(_providerInstance)).${dartIdentifier(controlledStateKey)} ?? '').toString());`
+        : '';
+    const controllerMember = hasController ? 'late final TextEditingController _controller;' : '';
+    const controllerDispose = hasController ? '_controller.dispose();' : '';
 
     const effects =
         effectsInit(data);
@@ -3667,11 +3509,6 @@ import '${
             )
             : composedFrame;
 
-    const usesOverrideContainer =
-        composedContent.includes(
-            '_buildWithOverride('
-        );
-
     const usesMeta =
         getProps(data).id !==
         undefined &&
@@ -3682,43 +3519,26 @@ import '${
 
     const runtimeImport =
         (
-            usesOverrideContainer ||
             usesMeta ||
             `${data?.base}`
                 .toLowerCase() ===
             'image' ||
-            behavior.hasNavigation
+            behavior.hasNavigation ||
+            behavior.hasTranslation ||
+            hasState ||
+            hasLogic
         )
             ? `import '${runtimeImportPath}';`
             : '';
+
 
     const contextSource =
         hasLogic
             ? contextMembers(
                 data,
-                inputs
+                inputs,
+                specPath
             )
-            : '';
-
-    const storeComponentName =
-        structure.componentName;
-
-    const overrideHelperStateful =
-        usesOverrideContainer
-            ? `\n\n  ${
-                buildWithOverrideMethod(
-                    true
-                )
-            }`
-            : '';
-
-    const overrideHelperStateless =
-        usesOverrideContainer
-            ? `\n\n  ${
-                buildWithOverrideMethod(
-                    false
-                )
-            }`
             : '';
 
     const metaHelperStateful =
@@ -3755,8 +3575,38 @@ import '${
               )`
             : composedContent;
 
+    const usesStateValue = composedContent.includes('state.');
+    const usesNotifier = composedContent.includes('_notifier');
+    const stateBuild = hasState
+        ? `${usesStateValue ? `final state = ref.watch(${provider}(_providerInstance));` : `ref.watch(${provider}(_providerInstance));`}
+    ${usesNotifier ? `final _notifier = ref.read(${provider}(_providerInstance).notifier);` : ''}`
+        : '';
+    const controllerListen = hasController
+        ? `ref.listen<String>(
+      ${provider}(_providerInstance).select((value) => (value.${dartIdentifier(controlledStateKey)} ?? '').toString()),
+      (previous, next) {
+        if (_controller.text == next) return;
+        final offset = _controller.selection.isValid
+            ? _controller.selection.baseOffset.clamp(0, next.length)
+            : next.length;
+        _controller.value = _controller.value.copyWith(
+          text: next,
+          selection: TextSelection.collapsed(offset: offset),
+          composing: TextRange.empty,
+        );
+      },
+    );`
+        : '';
+    const effectSchedule = effects
+        ? `WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ${hasState ? `ref.read(${provider}(_providerInstance).notifier).initialize(() async { ${effects} })` : `Future<void>.sync(() async { ${effects} })`}.catchError((Object error, StackTrace stackTrace) {
+        FlutterError.reportError(FlutterErrorDetails(exception: error, stack: stackTrace, library: 'FastUI service initialization'));
+      });
+    });`
+        : '';
     const stateful =
-        `class ${name} extends StatefulWidget {
+        `class ${name} extends ConsumerStatefulWidget {
   const ${name}({
     super.key,
     ${constructorFields}
@@ -3767,57 +3617,31 @@ import '${
   ${fieldDeclarations}
 
   @override
-  State<${name}> createState() =>
+  ConsumerState<${name}> createState() =>
       _${name}State();
 }
 
 class _${name}State
-    extends State<${name}> {
+    extends ConsumerState<${name}> {
 
-  ${stateFields}
+  ${controllerMember}
 
-  ${storeMembers}
+  ${providerMembers}
 
   @override
   void initState() {
     super.initState();
-
-    ${
-            hasState
-                ? `_storeId =
-                '${storeComponentName}:\${identityHashCode(this)}';`
-                : ''
-        }
-
-    ${stateInit}
-
-    ${
-            hasState
-                ? '_publishState();'
-                : ''
-        }
-
-    ${effects}
+    ${controllerInit}
+    ${effectSchedule}
   }
 
-  ${
-            hasState
-                ? `@override
+  ${hasController ? `@override
   void dispose() {
-    moduleStore.remove<
-        ${stateModelName(specPath)}
-    >(
-        _storeId
-    );
-
+    ${controllerDispose}
     super.dispose();
-  }`
-                : ''
-        }
+  }` : ''}
 
   ${contextSource}
-
-  ${overrideHelperStateful}
 
   ${metaHelperStateful}
 
@@ -3825,13 +3649,16 @@ class _${name}State
   Widget build(
       BuildContext context
   ) {
+    ${stateBuild}
+    ${controllerListen}
     return ${buildReturnStateful};
   }
 }`;
 
+    const needsConsumer = hasLogic || behavior.hasTranslation;
     const stateless =
         `class ${name}
-    extends StatelessWidget {
+    extends ${needsConsumer ? 'ConsumerWidget' : 'StatelessWidget'} {
 
   const ${name}({
     super.key,
@@ -3846,13 +3673,11 @@ class _${name}State
 
   ${contextSource}
 
-  ${overrideHelperStateless}
-
   ${metaHelperStateless}
 
   @override
   Widget build(
-      BuildContext context
+      BuildContext context${needsConsumer ? ', WidgetRef ref' : ''}
   ) {
     return ${buildReturnStateless};
   }
@@ -3867,7 +3692,10 @@ class _${name}State
             : '';
 
     const content =
-        `import 'package:flutter/material.dart';
+        `import 'dart:core';
+import 'dart:core' as core;
+import 'package:flutter/material.dart';
+${behavior.requiresFlutterStatefulWidget || needsConsumer ? "import 'package:flutter_riverpod/flutter_riverpod.dart';" : ''}
 ${blurImport}
 ${runtimeImport}
 ${imports}
@@ -3875,7 +3703,7 @@ ${storeImport}
 ${serviceImport}
 
 ${
-            behavior.requiresFlutterStatefulWidget
+            hasState || behavior.hasEffects || hasController
                 ? stateful
                 : stateless
         }
@@ -3899,137 +3727,6 @@ ${
 // SPEC BASE
 // -----------------------------------------------------------------------------
 
-async function composeFlutterSpecBaseWrapper({
-                                                 data,
-                                                 specPath
-                                             }) {
-    const outputPath =
-        generatedPath(
-            specPath
-        );
-
-    const name =
-        classNameFromPath(
-            specPath
-        );
-
-    const baseClass =
-        classNameFromPath(
-            data.__specBase
-        );
-
-    const layoutMetadata =
-        layoutMetadataMembers(
-            data,
-            baseClass
-        );
-
-    let baseImportPath =
-        relative(
-            dirname(outputPath),
-            generatedPath(
-                data.__specBase
-            )
-        )
-            .split(sep)
-            .join('/');
-
-    if (
-        !baseImportPath
-            .startsWith('.')
-    ) {
-        baseImportPath =
-            `./${baseImportPath}`;
-    }
-
-    const overrideStyles =
-        dartLiteral(
-            getStyles(data)
-        );
-
-    const overrideProps =
-        dartLiteral(
-            Object.fromEntries(
-                Object.entries(
-                    getProps(data)
-                )
-                    .filter(
-                        ([, value]) =>
-                            value !== undefined &&
-                            value !== null
-                    )
-            )
-        );
-
-    const overrideStates =
-        dartLiteral(
-            getStates(data)
-        );
-
-    const inputs =
-        collectInputs(data);
-
-    const constructorFields =
-        inputs
-            .map(
-                input =>
-                    `this.${input}`
-            )
-            .join(', ');
-
-    const fieldDeclarations =
-        inputs
-            .map(
-                input =>
-                    `final dynamic ${input};`
-            )
-            .join('\n  ');
-
-    const content =
-        `import 'package:flutter/material.dart';
-
-import '${baseImportPath}';
-
-class ${name}
-    extends StatelessWidget {
-
-  const ${name}({
-    super.key,
-    ${constructorFields}
-  });
-
-  ${layoutMetadata}
-
-  ${fieldDeclarations}
-
-  @override
-  Widget build(
-      BuildContext context
-  ) {
-    return ${baseClass}(
-      loopIndex: loopIndex,
-      loopElement: loopElement,
-      overrideStyles:
-          ${overrideStyles},
-      overrideProps:
-          ${overrideProps},
-      overrideStates:
-          ${overrideStates},
-    );
-  }
-}`;
-
-    await ensurePathExist(
-        dirname(outputPath)
-    );
-
-    await writeFile(
-        outputPath,
-        content
-    );
-}
-
-
 // -----------------------------------------------------------------------------
 // PUBLIC COMPONENT GENERATOR
 // -----------------------------------------------------------------------------
@@ -4040,15 +3737,6 @@ export async function composeFlutterComponent({
                                               }) {
     if (!data) {
         return;
-    }
-
-    if (
-        data.__specBase
-    ) {
-        return composeFlutterSpecBaseWrapper({
-            data,
-            specPath
-        });
     }
 
     await writeWidget({
@@ -4094,12 +3782,16 @@ export async function composeFlutterCondition({
 
                 const left =
                     widgetInvocation(
-                        refs.left
+                        refs.left,
+                        '',
+                        'left'
                     );
 
                 const right =
                     widgetInvocation(
-                        refs.right
+                        refs.right,
+                        '',
+                        'right'
                     );
 
                 const branch =
@@ -4175,7 +3867,7 @@ function loopExpression(
         );
 
     const items =
-        `List<dynamic>.from(
+        `core.List<dynamic>.from(
             ${stateIdentifier('data')}
             ??
             const []
@@ -4220,7 +3912,8 @@ function loopExpression(
                 loopElement:
                     loopItems[
                         ${indexExpr}
-                    ]
+                    ],
+                instanceId: '\${widget.instanceId ?? 'root'}/\${loopItems[${indexExpr}] is Map ? (loopItems[${indexExpr}]['_key'] ?? loopItems[${indexExpr}]['id'] ?? loopItems[${indexExpr}]['key'] ?? ${indexExpr}) : ${indexExpr}}'
             )`;
 
     const rowChildren =

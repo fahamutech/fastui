@@ -14,6 +14,7 @@ import {
     ensureWatchFileExist
 } from './scaffold.mjs';
 import {flutterRuntimeSource} from '../generators/templates/flutter/generator.mjs';
+import {reactRuntimeSource} from '../generators/templates/reactjs/runtime.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,7 +34,18 @@ async function writeIfMissing(path, content) {
 }
 
 async function writeTemplateConfig(template) {
-    await writeFile(resolve('fastui.config.json'), JSON.stringify({template, specVersion: 2}, null, 2));
+    const configPath = resolve('fastui.config.json');
+    let existing = {};
+    try { existing = JSON.parse(await readFile(configPath, 'utf8')); } catch (_) {}
+    await writeFile(configPath, JSON.stringify({
+        ...existing,
+        template,
+        specVersion: 2,
+        resources: {
+            ...existing.resources,
+            fonts: existing.resources?.fonts ?? {},
+        },
+    }, null, 2));
 }
 
 async function ensureReactProject() {
@@ -68,7 +80,17 @@ async function ensureReactProject() {
             ...packageMap.devDependencies
         }
     }, null, 2));
-    await writeIfMissing(resolve('index.html'), '<!doctype html>\n<html><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>\n');
+    await writeIfMissing(resolve('index.html'), '<!doctype html>\n<html>\n<head>\n  <link data-fastui-fonts rel="stylesheet" href="/fonts/figma/fastui-fonts.generated.css">\n</head>\n<body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body>\n</html>\n');
+    await writeIfMissing(resolve('public', 'fonts', 'figma', 'fastui-fonts.generated.css'), '');
+    const indexPath = resolve('index.html');
+    let indexSource = await readFile(indexPath, 'utf8');
+    if (!/data-fastui-fonts/.test(indexSource)) {
+        const link = '<link data-fastui-fonts rel="stylesheet" href="/fonts/figma/fastui-fonts.generated.css">';
+        indexSource = /<\/head>/i.test(indexSource)
+            ? indexSource.replace(/<\/head>/i, `  ${link}\n</head>`)
+            : indexSource.replace(/<html([^>]*)>/i, `<html$1>\n<head>\n  ${link}\n</head>`);
+        await writeFile(indexPath, indexSource);
+    }
     await writeIfMissing(resolve('src', 'AppRoute.jsx'), "export function AppRoute() {\n  return <></>;\n}\n");
     await writeIfMissing(resolve('src', 'App.jsx'), "import {AppRoute} from './AppRoute.jsx';\n\nexport default function App() {\n  return <AppRoute />;\n}\n");
     await writeIfMissing(resolve('src', 'main.jsx'), "import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport App from './App.jsx';\n\nReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);\n");
@@ -82,33 +104,13 @@ html, body, #root { margin: 0; padding: 0; }
         await writeFile(mainPath, `import './fastui.css';\n${mainSource}`);
     }
     await writeIfMissing(resolve('vite.config.js'), "import {defineConfig} from 'vite';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({plugins: [react()]});\n");
-    await writeIfMissing(resolve('src', 'stores', 'observable_store.mjs'), `import {BehaviorSubject} from 'rxjs';
+    await writeIfMissing(resolve('src', 'fastui_runtime.mjs'), reactRuntimeSource());
+    await writeIfMissing(resolve('src', 'translations', 'generated.mjs'), `import {createFastUITranslationStore, useFastUITranslationValue} from '../fastui_runtime.mjs';
 
-export function createObservableStore(initialState = {}) {
-  const subject = new BehaviorSubject(Object.freeze({...initialState}));
-  return {
-    state$: subject.asObservable(),
-    get value() { return subject.value; },
-    set(patch) { subject.next(Object.freeze({...subject.value, ...patch})); },
-    update(reducer) { subject.next(Object.freeze(reducer(subject.value))); },
-    subscribe(observer) { return subject.subscribe(observer); },
-    dispose() { subject.complete(); },
-  };
-}
+export const fastUITranslationStore = createFastUITranslationStore({});
 
-export const appState = createObservableStore();
-`);
-    await writeIfMissing(resolve('src', 'stores', 'use_observable.mjs'), `import {useSyncExternalStore} from 'react';
-
-export function useObservable(store, selector = value => value) {
-  return useSyncExternalStore(
-    listener => {
-      const subscription = store.subscribe(listener);
-      return () => subscription.unsubscribe();
-    },
-    () => selector(store.value),
-    () => selector(store.value),
-  );
+export function useFastUITranslation(key, args = {}) {
+  return useFastUITranslationValue(fastUITranslationStore, key, args);
 }
 `);
 }
@@ -131,7 +133,7 @@ async function ensureFlutterProject(runCommand = execFileAsync) {
     await writeFile(pubspecPath, yaml.dump({
         ...pubspec,
         environment: {sdk: '>=3.0.0 <4.0.0', ...pubspec.environment},
-        dependencies: {flutter: {sdk: 'flutter'}, flutter_svg: '^2.3.0', ...pubspec.dependencies},
+        dependencies: {flutter: {sdk: 'flutter'}, flutter_svg: '^2.3.0', flutter_riverpod: '^2.6.1', ...pubspec.dependencies},
         flutter: {...flutter, 'uses-material-design': flutter['uses-material-design'] ?? true, assets}
     }, {lineWidth: -1}));
     const analysisPath = resolve('analysis_options.yaml');
@@ -152,74 +154,34 @@ async function ensureFlutterProject(runCommand = execFileAsync) {
         }
     }, {lineWidth: -1}));
     await ensurePathExist(resolve('assets', 'images', 'figma'));
+    await ensurePathExist(resolve('assets', 'fonts', 'figma'));
+    await writeIfMissing(
+        resolve('lib', 'translations', 'generated.dart'),
+        'const Map<String, String> fastUITranslationsDefault = <String, String>{};\n'
+    );
     await writeIfMissing(resolve('lib', 'fastui_runtime.dart'), flutterRuntimeSource());
     await writeIfMissing(resolve('lib', 'app_route.dart'), "import 'package:flutter/material.dart';\nimport 'fastui_runtime.dart';\n\nclass FastUIAppRoute extends StatelessWidget {\n  const FastUIAppRoute({super.key});\n\n  @override\n  Widget build(BuildContext context) => MaterialApp(\n    theme: FastUIStyleHelper.lightTheme(),\n    darkTheme: FastUIStyleHelper.darkTheme(),\n    themeMode: ThemeMode.system,\n    home: const Scaffold(body: SizedBox.shrink()),\n  );\n}\n");
-    await writeIfMissing(resolve('lib', 'stores', 'observable_store.dart'), `import 'package:flutter/widgets.dart';
-
-class ObservableStore extends ChangeNotifier {
-  ObservableStore([Map<String, dynamic>? initialState])
-      : _state = Map.unmodifiable(initialState ?? const <String, dynamic>{});
-
-  Map<String, dynamic> _state;
-  Map<String, dynamic> get value => _state;
-  T? select<T>(String key) => _state[key] as T?;
-
-  void set(Map<String, dynamic> patch) {
-    _state = Map.unmodifiable(<String, dynamic>{..._state, ...patch});
-    notifyListeners();
-  }
-
-  void update(Map<String, dynamic> Function(Map<String, dynamic>) reducer) {
-    _state = Map.unmodifiable(reducer(_state));
-    notifyListeners();
-  }
-}
-
-class FastUIStateScope extends InheritedNotifier<ObservableStore> {
-  const FastUIStateScope({super.key, required ObservableStore store, required super.child})
-      : super(notifier: store);
-
-  static ObservableStore watch(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<FastUIStateScope>()!.notifier!;
-
-  static ObservableStore read(BuildContext context) =>
-      context.getInheritedWidgetOfExactType<FastUIStateScope>()!.notifier!;
-}
-`);
-    const observableStorePath = resolve('lib', 'stores', 'observable_store.dart');
-    try {
-        const observableStore = await readFile(observableStorePath, 'utf8');
-        if (observableStore.startsWith("import 'package:flutter/foundation.dart';\nimport 'package:flutter/widgets.dart';")) {
-            await writeFile(observableStorePath, observableStore.replace("import 'package:flutter/foundation.dart';\n", ''));
-        }
-    } catch (_) {}
-    const observableMain = "import 'package:flutter/material.dart';\nimport 'app_route.dart';\nimport 'stores/observable_store.dart';\n\nfinal appState = ObservableStore();\n\nvoid main() => runApp(FastUIStateScope(store: appState, child: const FastUIAppRoute()));\n";
+    const riverpodMain = "import 'package:flutter/material.dart';\nimport 'package:flutter_riverpod/flutter_riverpod.dart';\nimport 'app_route.dart';\n\nvoid main() => runApp(const ProviderScope(child: FastUIAppRoute()));\n";
     const mainPath = resolve('lib', 'main.dart');
     if (created) {
-        await writeFile(mainPath, observableMain);
+        await writeFile(mainPath, riverpodMain);
         await ensurePathExist(resolve('test'));
         await writeFile(resolve('test', 'widget_test.dart'), `import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:${pubspec.name}/app_route.dart';
 
 void main() {
   testWidgets('FastUI application starts', (tester) async {
-    await tester.pumpWidget(const FastUIAppRoute());
+    await tester.pumpWidget(const ProviderScope(child: FastUIAppRoute()));
     expect(find.byType(FastUIAppRoute), findsOneWidget);
   });
 }
 `);
     } else {
         try {
-            const main = await readFile(mainPath, 'utf8');
-            const isGeneratedBootstrap = main.includes("import 'app_route.dart';")
-                && main.includes('runApp(const FastUIAppRoute())');
-            const isGeneratedObservableBootstrap = main.includes('final appState = ObservableStore()')
-                && main.includes('FastUIStateScope(store: appState');
-            if ((isGeneratedBootstrap && !main.includes('FastUIStateScope')) || isGeneratedObservableBootstrap) {
-                await writeFile(mainPath, observableMain);
-            }
+            await stat(mainPath);
         } catch (_) {
-            await writeFile(mainPath, observableMain);
+            await writeFile(mainPath, riverpodMain);
         }
     }
 }

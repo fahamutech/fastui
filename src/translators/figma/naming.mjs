@@ -15,7 +15,38 @@ import {firstUpperCaseRestSmall, justString} from '../../shared/fn.mjs';
  * @return {string}
  */
 export function generatedNodeName(node, id = node?.id) {
-    return `i${id}_${firstUpperCaseRestSmall(node?.name)}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
+    const stateText = node?.type === 'TEXT' ? textStateBinding(node) : null;
+    const sourceName = stateText?.descriptiveName ?? node?.name;
+    return `i${id}_${firstUpperCaseRestSmall(sourceName)}`.replaceAll(/[^a-zA-Z0-9]/ig, '_');
+}
+
+/** A deterministic, collision-safe filename stem for exported vector nodes. */
+export function vectorResourceName(node) {
+    return `${node?.name || 'vector'}_${node?.id || 'unknown'}`
+        .replace(/[^a-zA-Z0-9._-]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'vector';
+}
+
+/**
+ * A Figma TEXT layer may end in `_$field` (or be named exactly `$field`) to
+ * declare component-local reactive text. The visible Figma characters remain
+ * the initial value, keeping the design canvas free of binding syntax.
+ */
+export function textStateBinding(node) {
+    if (node?.type !== 'TEXT') return null;
+    const name = `${node?.figmaName ?? node?.name ?? ''}`.trim();
+    const match = name.match(/(?:^|_)\$([^$]*)$/);
+    if (!match) return null;
+    const key = match[1];
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+        throw new Error(
+            `Invalid state-backed Figma TEXT layer "${name}" (${node?.id ?? 'unknown id'}). ` +
+            'Use $name or DescriptiveName_$name with a Dart-safe state key.'
+        );
+    }
+    const prefix = name.slice(0, match.index).replace(/_+$/g, '').trim();
+    const descriptiveName = prefix || `${key[0].toUpperCase()}${key.slice(1)}_text`;
+    return {key, descriptiveName};
 }
 
 /**

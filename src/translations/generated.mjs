@@ -38,5 +38,3 @@ export function installFastUITranslations(target = globalThis) {
   target.fastUITranslations = store;
   return store;
 }
-
-export const fastUITranslations = installFastUITranslations();

@@ -16,8 +16,7 @@ function actionKind(action) {
 }
 
 /**
- * Converts both current Figma NODE actions and legacy transitionNodeID data
- * to a platform-neutral route instruction.
+ * Converts current Figma NODE actions to a platform-neutral route instruction.
  * @param child {*} the Figma node carrying `.interactions`
  * @param routeLookup {Record<string, *>} Figma node id -> route metadata,
  * built once per translation run by translators/figma/tree.mjs while walking
@@ -34,7 +33,7 @@ export function resolvePrototypeRoute(child, routeLookup = {}) {
     if (kind === 'BACK') return {type: 'back'};
     if (kind === 'CLOSE' || kind === 'CLOSE_OVERLAY') return {type: 'close'};
 
-    const destinationId = action?.destinationId ?? action?.transitionNodeID ?? child?.transitionNodeID;
+    const destinationId = action?.destinationId;
     const target = destinationId ? routeLookup[destinationId] : undefined;
     if (!target) return {type: 'close'};
 

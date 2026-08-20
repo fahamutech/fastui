@@ -22,11 +22,12 @@ Running `fastui init` without a framework name prints an error and exits.
 
 **What it does:**
 
-- Creates `fastui.config.json` with `{ template, specVersion: 2 }`.
+- Creates `fastui.config.json` with `{ template, specVersion: 2, resources: { fonts: {} } }`.
 - Scaffolds `src/blueprints/modules/` (React) or `lib/blueprints/modules/` (Flutter).
 - Links `fastui.schema.json` so editors show YAML validation and autocompletion.
 - Writes entry files (`App.jsx`, `main.jsx`, `AppRoute.jsx` for React; `main.dart` scaffold for Flutter).
 - Writes `src/fastui.css` baseline reset (React only).
+- Creates the generated font stylesheet/link for React or the Figma font asset folder for Flutter.
 - Runs `npm install` (React) or `flutter pub get` (Flutter) if dependencies are missing.
 
 **Framework selection:**
@@ -68,17 +69,13 @@ fastui specs build src/blueprints/modules/home
 
 **What it does (in order):**
 
-1. **Sync Figma assets** — copies `.fastui/assets/figma/` to `public/images/figma/` or `assets/images/figma/`.
-2. **Remove duplicate legacy state** — deletes old `src/state/` files if identical to `src/stores/`.
-3. **Write Flutter runtime** — generates `lib/fastui_runtime.dart` (Flutter only).
-4. **Migrate legacy services** — copies old `blueprints/modules/*/logics/` files to `services/` if not already there.
-5. **Generate each spec** — for every `.yml` file found under `[path]`:
-   - Reads and resolves the spec.
-   - Normalizes to the current composition shape.
-   - Writes the output `.jsx` / `.dart` file.
-   - Creates/updates the service stub.
-6. **Write module stores** — generates `store.mjs`/`store.dart` and `models.generated.*` for every stateful module.
-7. **Update manifest** — writes `.fastui/generated-manifest.json` and deletes stale generated files.
+1. **Sync Figma assets** into the target project.
+2. **Read and normalize specs**, including compile-time inheritance and binding analysis.
+3. **Generate models and stores/providers** for every stateful module.
+4. **Generate the reactive runtime and default translation catalog.**
+5. **Append missing user-service hooks** without replacing existing implementations.
+6. **Generate components and routing.**
+7. **Update the manifest** and delete only stale manifest-owned generated files.
 
 ---
 
@@ -151,6 +148,7 @@ Writes a `watch.mjs` (React) or `watch.dart` (Flutter) file that watches the blu
 |---|---|---|
 | `FIGMA_TOKEN` | — | Figma REST API personal access token |
 | `FIGMA_FILE` | — | Figma file key |
+| `GOOGLE_FONTS_API_KEY` | — | Google Web Fonts API key, required only for families configured with `source: "google"` |
 | `FASTUI_TEMPLATE` | `reactjs` | Template selection (`reactjs` or `flutter`) |
 | `TEMPLATE` | — | Alias for `FASTUI_TEMPLATE` (lower priority) |
 
@@ -163,7 +161,12 @@ Written by `fastui init`. Read by every command to determine template.
 ```json
 {
   "template": "reactjs",
-  "specVersion": 2
+  "specVersion": 2,
+  "resources": {
+    "fonts": {
+      "Inter": {"source": "google"}
+    }
+  }
 }
 ```
 
@@ -171,6 +174,7 @@ Written by `fastui init`. Read by every command to determine template.
 |---|---|---|
 | `template` | `reactjs` \| `flutter` | Target platform |
 | `specVersion` | `2` | Spec format version (always 2 for new projects) |
+| `resources.fonts` | object | Licensed local, public HTTPS, or Google font sources keyed by the exact Figma family name |
 
 ---
 

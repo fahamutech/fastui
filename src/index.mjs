@@ -176,7 +176,9 @@ try {
                         srcPath,
                         token,
                         figFile,
-                        downloadAssets: fresh
+                        downloadAssets: fresh,
+                        template,
+                        projectPath: process.cwd()
                     });
 
                     info('Writing routing file…');
@@ -186,6 +188,11 @@ try {
                         template
                     });
 
+                    const resourceSummary = translation.resources?.summary;
+                    if (resourceSummary) {
+                        info(`Resources: ${resourceSummary.discovered} discovered, ${resourceSummary.downloaded} downloaded, ${resourceSummary.updated} updated, ${resourceSummary.cached} cached, ${resourceSummary.stale} stale, ${resourceSummary.unresolved} unresolved`);
+                        info(`Resource report: ${c.dim(translation.resources.reportPath)}`);
+                    }
                     ok(`Figma → specs complete  (${translation.pages?.length ?? 0} pages written)`);
                     break;
                 }
