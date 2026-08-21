@@ -35,7 +35,7 @@ Figma Design File
 │  GENERATOR  src/generators/                                     │
 │                                                                 │
 │  spec-to-code.mjs    ← public entry point                       │
-│  ├── specs/reader.mjs     read + resolve base inheritance       │
+│  ├── specs/reader.mjs     read specs; preserve reuse references │
 │  ├── spec-normalizer.mjs  normalize extend/frame shapes         │
 │  ├── modifier.mjs         typed accessors over modifier fields  │
 │  ├── component.mjs        dispatch to template generator        │
@@ -64,7 +64,7 @@ specPath (.yml)
     │
     ▼  specs/reader.mjs → specToJSON()
 Resolved document (JS object)
-    │  base: path?  ── resolves & deep-merges the referenced spec
+    │  base: path?  ── imports and calls the referenced component
     │
     ▼  spec-normalizer.mjs → normalizeSpecDocument()
 Normalized document
@@ -98,10 +98,9 @@ Behaviour-augmented document
 | Export | Purpose |
 |---|---|
 | `readSpecs(root)` | Globs all `.yml`/`.yaml` under root, returns path array |
-| `specToJSON(path)` | Loads YAML, resolves `base: ./path.yml` inheritance recursively, deep-merges modifier overrides, rebases all composition paths to the final file's directory |
+| `specToJSON(path)` | Loads YAML and preserves spec-file `base` references for direct component reuse |
 
-**Inheritance chain:**  
-If `component.base` is a `.yml` path, `reader.mjs` loads that file first, then deep-merges the local `modifier` on top. Circular chains throw. `modifier.extend`, `modifier.left`, `modifier.right`, and `modifier.feed` paths are rebased relative to the consuming spec so callers never need to know where the parent came from.
+If `component.base` is a `.yml` path, the generators import and render that generated component. Materialized Figma descendants are passed through `modifier.overrides.children` slot replacements.
 
 ---
 

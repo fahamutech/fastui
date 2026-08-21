@@ -218,20 +218,24 @@ export async function createFrameComponent({filename, child, routeLookup}) {
 }
 
 /**
- * A Figma INSTANCE: reuses its shared MAIN COMPONENT spec via `base`, and
- * composes its own overriding child (if any) via `extend` so the instance's
- * local override replaces the shared definition's own child in that slot.
+ * A Figma INSTANCE reuses its shared MAIN COMPONENT spec via `base`.
+ * Materialized instance children are slot overrides, not `extend` children:
+ * they replace the corresponding child rendered by the shared component
+ * without changing the instance's parent/child composition.
  * @param sharedComponentMap {Record<string, {name: string}>}
  * @param routeLookup {Record<string, *>}
  */
 export async function createInstanceComponent({filename, child, srcPath, sharedComponentMap, routeLookup}) {
     const behavior = interactionBehavior(child, routeLookup);
-    const override = child?.children?.[child?.children?.length - 1];
+    const childOverrides = Object.fromEntries((child?.children ?? [])
+        .map((item, index) => [`${index}`, `./${item?.name}.yml`]));
     const yamlData = yaml.dump({
         component: {
             base: sharedComponentBasePath({filename, child, srcPath, sharedComponentMap}),
             modifier: {
-                extend: override ? `./${override?.name}.yml` : undefined,
+                overrides: Object.keys(childOverrides).length > 0
+                    ? {children: childOverrides}
+                    : undefined,
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
                     onClick: behavior.onClick,

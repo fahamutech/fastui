@@ -47,7 +47,7 @@ Selects the renderer primitive **or** wraps an existing spec component.
 | `image` | Image node. `modifier.props.src` is the URL. `modifier.props.alt` is the label. |
 | `./path/to/spec.yml` | Inherits a referenced spec. Both targets resolve and merge it during generation. |
 
-Flutter and React recursively deep-merge object modifiers, replace arrays and scalar values, and rebase inherited composition paths. Generated components are complete widgets rather than runtime inheritance wrappers.
+Flutter and React treat a spec-file `base` as direct component reuse. The generated wrapper calls the referenced component and forwards local props, styles, states, and child-slot overrides.
 
 **Component reuse example** (instance wrapping a shared component):
 

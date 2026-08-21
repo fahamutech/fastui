@@ -70,7 +70,7 @@ fastui specs build src/blueprints/modules/home
 **What it does (in order):**
 
 1. **Sync Figma assets** into the target project.
-2. **Read and normalize specs**, including compile-time inheritance and binding analysis.
+2. **Read and normalize specs**, preserving component-reuse paths and analyzing bindings.
 3. **Generate models and stores/providers** for every stateful module.
 4. **Generate the reactive runtime and default translation catalog.**
 5. **Append missing user-service hooks** without replacing existing implementations.

@@ -25,7 +25,7 @@ import {getColor} from '../services/test_comp.mjs';
 import {createFastUIComponentContext} from '../../src/fastui_runtime.mjs';
 
 // eslint-disable-next-line react/prop-types
-export const TestComp = React.memo(function TestComp({loopElement, loopIndex, instanceId, initialState={}, initialProps={}}) {
+export const TestComp = React.memo(function TestComp({loopElement, loopIndex, instanceId, initialState={}, initialProps={}, componentOverrides={}, ...reuseProps}) {
     const resolvedInstanceId = instanceId ?? "test_comp";
     const inputs = {loopElement, loopIndex};
     const componentStore = null;
@@ -41,7 +41,7 @@ export const TestComp = React.memo(function TestComp({loopElement, loopIndex, in
         "color": getColor(component.withArgs([]))
     };
     return (
-        <div style={style} {...initialProps}></div>
+        <div {...reuseProps} {...initialProps} style={{...style,...(reuseProps.style??{}),...(initialProps.style??{})}}></div>
     );
 });
     

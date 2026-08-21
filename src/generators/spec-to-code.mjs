@@ -22,6 +22,13 @@ async function syncTranslatedAssets(projectPath) {
         ? resolve(projectPath, 'assets', 'images', 'figma')
         : resolve(projectPath, 'public', 'images', 'figma');
     await mkdir(target, {recursive: true});
+    // The on-demand Figma downloader writes to the cache root, while resource
+    // reconciliation uses images/ and vectors/. Deploy both cache layouts.
+    let rootFiles = [];
+    try { rootFiles = await readdir(source, {withFileTypes: true}); } catch (_) {}
+    for (const file of rootFiles) {
+        if (file.isFile()) await copyFile(join(source, file.name), join(target, file.name));
+    }
     for (const resourceType of ['images', 'vectors']) {
         const folder = join(source, resourceType);
         let files = [];

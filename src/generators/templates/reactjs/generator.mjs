@@ -102,6 +102,18 @@ function extendImportSpecs(data) {
     });
 }
 
+function reuseChildImportSpecs(data) {
+    const children = data?.modifier?.overrides?.children ?? {};
+    return Object.entries(children)
+        .filter(([, path]) => typeof path === 'string' && /\.ya?ml$/i.test(path))
+        .map(([slot, path]) => ({
+            slot,
+            path,
+            name: firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(path))),
+            specId: `${path}`.replace(/^\.\//, '').replace(/\.ya?ml$/i, ''),
+        }));
+}
+
 /**
  * Renders the top-down composition for one primitive: this node's own view
  * (styled by `frame.current`) plus one wrapper per `modifier.extend` child
@@ -147,11 +159,12 @@ export function composeFrame(data, frame, ownView, extraProps = '') {
     const hasNextWrapper = hasMeaningfulStyleEntries(frame?.next ?? {});
     const hasOwnView = `${ownView ?? ''}`.trim() !== '';
     const current = hasCurrentWrapper
-        ? `<div ${frameWrapperProps(frame?.id, extraProps)} style=${frameCurrentStyleString(frame)}>${ownView}</div>`
+        ? `<div ${frameWrapperProps(frame?.id, extraProps)} style={{...${JSON.stringify(reactStyleAssets(frame?.current ?? {}))},...(reuseProps.style??{}),...(initialProps.style??{})}}>${ownView}</div>`
         : ownView;
     const nextStyle = `{${JSON.stringify(reactStyleAssets(frame?.next ?? {}))}}`;
     const nextViews = extend.map(({alias, specId}, index) => {
-        const child = `<${alias} loopIndex={loopIndex} loopElement={loopElement} instanceId={\`${'${resolvedInstanceId}'}\/${index}\/${specId}\`}/>`;
+        const fallback = `<${alias} loopIndex={loopIndex} loopElement={loopElement} instanceId={\`${'${resolvedInstanceId}'}\/${index}\/${specId}\`} componentOverrides={componentOverrides?.descendants?.[${index}]??{}}/>`;
+        const child = `{componentOverrides?.children?.[${index}]??${fallback}}`;
         return hasNextWrapper
             ? `<div id={'${frame?.id ?? ''}_next_${index}'} style=${nextStyle}>${child}</div>`
             : child;
@@ -178,17 +191,17 @@ export function composeFrame(data, frame, ownView, extraProps = '') {
         const layers = ordered
             .map(item => `<div style={{gridArea:'1 / 1'}}>${item}</div>`)
             .join('');
-        return `<div ${frameWrapperProps(baseId, baseProps)} style={${JSON.stringify({
+        return `<div ${frameWrapperProps(baseId, baseProps)} style={{...${JSON.stringify({
             display: 'grid',
             ...extraBaseStyles
-        })}}>${layers}</div>`;
+        })},...(reuseProps.style??{}),...(initialProps.style??{})}}>${layers}</div>`;
     }
-    const baseStyle = `{${JSON.stringify({
+    const baseStyle = JSON.stringify({
         display: 'flex',
         flexDirection: frameDirection(base),
         ...extraBaseStyles,
-    })}}`;
-    return `<div ${frameWrapperProps(baseId, baseProps)} style=${baseStyle}>${ordered.join('')}</div>`;
+    });
+    return `<div ${frameWrapperProps(baseId, baseProps)} style={{...${baseStyle},...(reuseProps.style??{}),...(initialProps.style??{})}}>${ordered.join('')}</div>`;
 }
 
 /**
@@ -533,7 +546,16 @@ export function getComponentsImportStatement(data) {
         return `import {${specifier}} from '${importPath.replace('.yml', '.jsx')}';`;
     });
 
-    return [...singleImports, ...extendImports].join('\n');
+    const reuseImports = [];
+    if (typeof data?.base === 'string' && /\.ya?ml$/i.test(data.base)) {
+        const name = firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(data.base)));
+        reuseImports.push(`import {${name}} from '${data.base.replace(/\.ya?ml$/i, '.jsx')}';`);
+    }
+    for (const {path, name} of reuseChildImportSpecs(data)) {
+        reuseImports.push(`import {${name}} from '${path.replace(/\.ya?ml$/i, '.jsx')}';`);
+    }
+
+    return [...new Set([...singleImports, ...extendImports, ...reuseImports])].join('\n');
 }
 
 function getStyleMap(style) {
@@ -601,7 +623,7 @@ function reactComponentPrelude(data, path) {
     const structure = specStructure(path, 'reactjs');
     const storeful = hasComponentStore(data);
     const needsContext = containsLogicReference(data) || Object.keys(getEffects(data)).length > 0;
-    const needsIdentity = storeful || needsContext || getExtendList(data).length > 0 || Boolean(getFeed(data)) || Boolean(getLeft(data)) || Boolean(getRight(data));
+    const needsIdentity = storeful || needsContext || getExtendList(data).length > 0 || /\.ya?ml$/i.test(`${data?.base ?? ''}`) || Boolean(getFeed(data)) || Boolean(getLeft(data)) || Boolean(getRight(data));
     const inputs = inputNames(data);
     const lines = [];
     if (needsIdentity) lines.push(`const resolvedInstanceId=instanceId??${JSON.stringify(structure.specId)};`);
@@ -626,7 +648,7 @@ function reactRuntimeImportStatement(data, path, projectPath) {
 
 function reactFunctionProps(data) {
     const inputs = getInputsStatement(data);
-    return `${inputs ? `${inputs},` : ''}instanceId,initialState={},initialProps={}`;
+    return `${inputs ? `${inputs},` : ''}instanceId,initialState={},initialProps={},componentOverrides={},...reuseProps`;
 }
 
 // This node's own leaf element; frame wrapping/composition happens in
@@ -649,13 +671,13 @@ function componentOwnWrapperProps(data) {
         delete propsData.modifier.props.scroll;
     }
     const propsString = getPropsStatement(propsData);
-    return [propsString, '{...initialProps}'].filter(Boolean).join('\n\t\t\t');
+    return [propsString, '{...reuseProps}', '{...initialProps}'].filter(Boolean).join('\n\t\t\t');
 }
 
 function componentOwnView(data) {
     const base = getBase(data);
     const propsString = getPropsStatement(data);
-    const styleProp = hasMeaningfulStyleEntries(getStyles(data)) ? 'style={style}' : '';
+    const styleProp = hasMeaningfulStyleEntries(getStyles(data)) ? 'style={{...style,...(reuseProps.style??{}),...(initialProps.style??{})}}' : '';
     const children = getChildren(data);
     const childContent = children?.type === 'state' || children?.type === 'input'
         ? `{${children?.value}}`
@@ -668,19 +690,49 @@ function componentOwnView(data) {
                 : `{${JSON.stringify(children.value)}}`;
     if (base === 'input' || base === 'textarea' || base === 'img') return `
         <${base}
-            ${styleProp}
             ${base === 'input' || base === 'textarea' ? 'ref={inputRef}' : ''}
             ${propsString}
+            {...reuseProps}
             {...initialProps}
+            ${styleProp}
         />
     `;
     return `
         <${base}
-            ${styleProp}
             ${propsString}
+            {...reuseProps}
             {...initialProps}
+            ${styleProp}
         >${childContent}</${base}>
     `;
+}
+
+function reuseComponentOwnView(data) {
+    const name = firstUpperCase(snakeToCamel(getFilenameFromBlueprintPath(data.base)));
+    const propsString = getPropsStatement(data);
+    const frameStyles = reactStyleAssets(getFrame(data).baseStyles ?? {});
+    const localStyle = hasMeaningfulStyleEntries(getStyles(data)) ? '...style,' : '';
+    const styleProp = localStyle || hasMeaningfulStyleEntries(frameStyles)
+        ? `style={{${localStyle}...${JSON.stringify(frameStyles)}}}`
+        : '';
+    const children = reuseChildImportSpecs(data);
+    const childEntries = children.map(({slot, name: childName, specId}) =>
+        `${JSON.stringify(slot)}:<${childName} loopIndex={loopIndex} loopElement={loopElement} instanceId={\`${'${resolvedInstanceId}'}/override/${slot}/${specId}\`}/>`
+    ).join(',');
+    const overrideProp = children.length
+        ? `componentOverrides={{...componentOverrides,children:{...(componentOverrides.children??{}),${childEntries}}}}`
+        : 'componentOverrides={componentOverrides}';
+    return `<${name}
+        loopIndex={loopIndex}
+        loopElement={loopElement}
+        instanceId={resolvedInstanceId}
+        initialState={{...${JSON.stringify(getStates(data))},...initialState}}
+        initialProps={initialProps}
+        ${overrideProp}
+        ${propsString}
+        ${styleProp}
+        {...reuseProps}
+    />`;
 }
 
 /**
@@ -690,6 +742,8 @@ function componentOwnView(data) {
  * @return {Promise<void>}
  */
 export async function composeReactComponent({data, path, projectPath}) {
+    const reuseData = data;
+    const isReuse = typeof data?.base === 'string' && /\.ya?ml$/i.test(data.base);
     const statesInString = getStatesStatement(data, path)
     const effectsString = getEffectsStatement(data);
 
@@ -705,8 +759,10 @@ export async function composeReactComponent({data, path, projectPath}) {
 
     const styleStatement = hasMeaningfulStyleEntries(getStyles(data)) ? getStyleStatement(data) : '';
     const frame = getFrame(data);
-    const ownView = componentHasPlaceholderOwnView(data) ? '' : componentOwnView(data);
-    const ownProps = componentHasPlaceholderOwnView(data) ? componentOwnWrapperProps(data) : '';
+    const ownView = isReuse
+        ? reuseComponentOwnView(reuseData)
+        : componentHasPlaceholderOwnView(data) ? '' : componentOwnView(data);
+    const ownProps = isReuse ? '' : componentHasPlaceholderOwnView(data) ? componentOwnWrapperProps(data) : '';
 
     const prelude = reactComponentPrelude(data, path);
     const translationBindings = getTranslationStatements(data);

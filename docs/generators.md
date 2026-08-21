@@ -9,7 +9,7 @@ FastUI generators read normalized spec documents and emit platform source code. 
 ```
 generateSpecFile(specPath)
     │
-    ├─ specToJSON()           resolve base inheritance, get flat document
+    ├─ specToJSON()           load specs and preserve component-reuse bases
     ├─ normalizeSpecDocument() identify primitive kind
     ├─ prepareBehavior()       add implicit state defaults
     │

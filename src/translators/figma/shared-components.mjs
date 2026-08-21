@@ -54,9 +54,8 @@ export function collectSharedComponents(document, components = {}, sharedCompone
 /**
  * The `base:` path a Figma INSTANCE spec should point at to reuse its
  * already-generated shared MAIN COMPONENT spec, relative to the spec file
- * being written. `specs/reader.mjs` resolves this the same way it resolves
- * any other `base` spec-file reference: the shared spec's shape is read
- * first, then this instance's own `modifier` is deep-merged on top.
+ * being written. Both generators preserve this reference and call the
+ * generated shared component directly.
  * @return {string|undefined}
  */
 export function sharedComponentBasePath({filename, child, srcPath, sharedComponentMap = {}}) {

@@ -172,6 +172,12 @@ function valueExpression(value) {
     return dartLiteral(value);
 }
 
+function dartMapLiteral(values = {}) {
+    return `<String, dynamic>{${Object.entries(values)
+        .map(([key, value]) => `${dartString(key)}: ${typeof value === 'string' ? valueExpression(value) : JSON.stringify(value)}`)
+        .join(', ')}}`;
+}
+
 function collectInputs(data = {}) {
     const found = new Set([
         'loopElement',
@@ -1276,8 +1282,12 @@ function textExpression(data) {
             .toLowerCase()
         ];
 
+    const resolvedExpression = `widget.overrideProps.containsKey('children')
+            ? widget.overrideProps['children']
+            : ${nullable ? `(${expression} ?? '')` : expression}`;
+
     return `Text(
-        ${nullable ? `(${expression} ?? '')` : expression}.toString()
+        (${resolvedExpression}).toString()
         ${alignment ? `, textAlign: TextAlign.${alignment}` : ''}
         ${textStyle}
     )`;
@@ -1352,11 +1362,9 @@ function imageExpression(data) {
         );
 
     return `FastUIImage(
-        source: ${
-        nullable
-            ? `(${expression} ?? '')`
-            : expression
-    }.toString()
+        source: (widget.overrideProps.containsKey('src')
+            ? widget.overrideProps['src']
+            : ${nullable ? `(${expression} ?? '')` : expression}).toString()
         ${args.length ? `, ${args.join(', ')}` : ''}
     )`;
 }
@@ -2339,8 +2347,11 @@ function layoutMetadataMembers(
         `static const String fastUIScroll = ${scrollExpr};`,
         `static const String fastUIWidthMode = ${widthModeExpr};`,
         `static const String fastUIHeightMode = ${heightModeExpr};`,
-        `static const fastUIFixedWidth = ${fixedWidthExpr};`,
-        `static const fastUIFixedHeight = ${fixedHeightExpr};`,
+        // These values are consumed by layout code as `double?`. Without an
+        // explicit type, whole-number Figma dimensions infer `int`, which
+        // makes generated horizontal loop code fail to compile.
+        `static const double? fastUIFixedWidth = ${fixedWidthExpr};`,
+        `static const double? fastUIFixedHeight = ${fixedHeightExpr};`,
         `static const int fastUIFlex = ${flexExpr};`,
     ].join('\n  ');
 }
@@ -2506,8 +2517,7 @@ function composeFrame(
     const nextWidgets =
         extendRefs.map(
             (ref, index) => {
-                const child =
-                    widgetInvocation(ref, '', `${index}`);
+                const child = `widget.childOverrides[${index}] ?? ${widgetInvocation(ref, '', `${index}`)}`;
 
                 const widget =
                     hasNextWrapper
@@ -2585,6 +2595,28 @@ function composeFrame(
         applyScroll
             ? data?.modifier?.props?.scroll
             : undefined;
+
+    // A scrolling viewport deliberately gives its child unbounded space on
+    // the scroll axis. Keeping a `100%` container dimension around that child
+    // makes containerExpression fall back to zero, collapsing forms such as
+    // the login/register panels. The frame below retains the exported Figma
+    // fallback size and is therefore the correct owner of this dimension.
+    const normalizedFrameScroll =
+        `${scroll ?? 'none'}`
+            .trim()
+            .toLowerCase();
+    if (
+        normalizedFrameScroll === 'vertical' ||
+        normalizedFrameScroll === 'both'
+    ) {
+        delete baseContainerStyles.height;
+    }
+    if (
+        normalizedFrameScroll === 'horizontal' ||
+        normalizedFrameScroll === 'both'
+    ) {
+        delete baseContainerStyles.width;
+    }
 
     if (
         `${base ?? ''}`
@@ -2978,6 +3010,12 @@ function referencedWidgets(
     specPath
 ) {
     const refs = {
+        base: typeof data?.base === 'string' && /\.ya?ml$/i.test(data.base)
+            ? referenceImport(specPath, data.base)
+            : null,
+        overrideChildren: Object.entries(data?.modifier?.overrides?.children ?? {})
+            .map(([slot, path]) => ({slot, ref: referenceImport(specPath, path)}))
+            .filter(item => item.ref),
         extendList:
             getExtendList(data)
                 .map(
@@ -3009,6 +3047,8 @@ function referencedWidgets(
     };
 
     const allRefs = [
+        refs.base,
+        ...refs.overrideChildren.map(item => item.ref),
         ...refs.extendList,
         refs.left,
         refs.right,
@@ -3197,9 +3237,6 @@ async function writeWidget({
             specPath
         );
 
-    const layoutMetadata =
-        layoutMetadataMembers(data);
-
     const inputs =
         collectInputs(data);
 
@@ -3217,6 +3254,14 @@ async function writeWidget({
         referencedWidgets(
             data,
             specPath
+        );
+
+    // A spec-file base is direct component reuse. Its layout contract is what
+    // the parent frame must use unless this instance explicitly changes it.
+    const layoutMetadata =
+        layoutMetadataMembers(
+            data,
+            refs.base?.className
         );
 
     const serviceImport =
@@ -3269,7 +3314,8 @@ async function writeWidget({
     const overrideParams =
         `this.instanceId,
          this.overrideProps = const {},
-         this.overrideStates = const {}`;
+         this.overrideStates = const {},
+         this.childOverrides = const {}`;
 
     const constructorFields =
         [
@@ -3292,6 +3338,7 @@ async function writeWidget({
             `final String? instanceId;`,
             `final Map<String, dynamic> overrideProps;`,
             `final Map<String, dynamic> overrideStates;`,
+            `final Map<int, Widget> childOverrides;`,
         ]
             .join('\n  ');
 
@@ -3592,6 +3639,40 @@ export async function composeFlutterComponent({
                                                   path: specPath
                                               }) {
     if (!data) {
+        return;
+    }
+
+    if (typeof data?.base === 'string' && /\.ya?ml$/i.test(data.base)) {
+        await writeWidget({
+            data,
+            specPath,
+            buildExpression: refs => {
+                const base = refs.base;
+                if (!base) return 'const SizedBox.shrink()';
+                const props = Object.fromEntries(Object.entries(getProps(data))
+                    .filter(([, value]) => value !== undefined && value !== null));
+                const states = getStates(data);
+                const childOverrides = refs.overrideChildren.map(({slot, ref}) =>
+                    `${Number(slot)}: ${ref.className}(
+                      loopIndex: widget.loopIndex,
+                      loopElement: widget.loopElement,
+                      instanceId: '\${widget.instanceId ?? 'root'}/override/${slot}/${ref.className}',
+                    )`
+                ).join(', ');
+                const reused = `${base.className}(
+                  loopIndex: widget.loopIndex,
+                  loopElement: widget.loopElement,
+                  instanceId: widget.instanceId,
+                  overrideProps: <String, dynamic>{...${dartMapLiteral(props)}, ...widget.overrideProps},
+                  overrideStates: <String, dynamic>{...${dartMapLiteral(states)}, ...widget.overrideStates},
+                  childOverrides: <int, Widget>{...widget.childOverrides, ${childOverrides}},
+                )`;
+                const styled = hasMeaningfulStyles(getStyles(data))
+                    ? containerExpression(getStyles(data), reused)
+                    : reused;
+                return applyInteractions(data, styled);
+            },
+        });
         return;
     }
 

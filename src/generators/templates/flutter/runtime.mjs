@@ -784,20 +784,59 @@ class FastUIImage extends StatelessWidget {
   final double? height;
   final BoxFit? fit;
 
+  IconData get _fallbackIcon {
+    final assetName = source.toLowerCase();
+    if (assetName.contains('back')) return Icons.arrow_back;
+    if (assetName.contains('forward')) return Icons.arrow_forward;
+    return Icons.info_outline;
+  }
+
+  Widget _assetFallback() => SizedBox(
+        width: width,
+        height: height,
+        child: Center(
+          child: Icon(_fallbackIcon, size: width ?? height ?? 24),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final normalizedSource = source.replaceFirst(RegExp(r'^asset://figma/'), 'assets/images/figma/');
     final isSvg = Uri.tryParse(normalizedSource)?.path.toLowerCase().endsWith('.svg') == true;
     if (normalizedSource.startsWith('http://') || normalizedSource.startsWith('https://')) {
       if (isSvg) {
-        return SvgPicture.network(normalizedSource, width: width, height: height, fit: fit ?? BoxFit.contain);
+        return SvgPicture.network(
+          normalizedSource,
+          width: width,
+          height: height,
+          fit: fit ?? BoxFit.contain,
+          errorBuilder: (_, __, ___) => _assetFallback(),
+        );
       }
-      return Image.network(normalizedSource, width: width, height: height, fit: fit);
+      return Image.network(
+        normalizedSource,
+        width: width,
+        height: height,
+        fit: fit,
+        errorBuilder: (_, __, ___) => _assetFallback(),
+      );
     }
     if (isSvg) {
-      return SvgPicture.asset(normalizedSource.replaceFirst(RegExp(r'^/'), ''), width: width, height: height, fit: fit ?? BoxFit.contain);
+      return SvgPicture.asset(
+        normalizedSource.replaceFirst(RegExp(r'^/'), ''),
+        width: width,
+        height: height,
+        fit: fit ?? BoxFit.contain,
+        errorBuilder: (_, __, ___) => _assetFallback(),
+      );
     }
-    return Image.asset(normalizedSource.replaceFirst(RegExp(r'^/'), ''), width: width, height: height, fit: fit);
+    return Image.asset(
+      normalizedSource.replaceFirst(RegExp(r'^/'), ''),
+      width: width,
+      height: height,
+      fit: fit,
+      errorBuilder: (_, __, ___) => _assetFallback(),
+    );
   }
 }
 `;

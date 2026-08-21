@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "FastUI Spec Schema — v2 (top-down composition model).\n\n## PRIMITIVES\nEvery spec file has exactly one root key that selects its primitive:\n\n  component   A renderable UI node (container, text, image, …).\n              This is the most common primitive.\n\n  condition   A two-branch conditional node. Renders `modifier.left`\n              (true branch) or `modifier.right` (false branch) based\n              on `modifier.states.condition`. Both branches are paths\n              to sibling specs.\n\n  loop        A repeating list node. Driven by `modifier.states.data`\n              (an array). Each iteration renders the template spec\n              referenced by `modifier.feed`. The template receives\n              `inputs.loopElement` and `inputs.loopIndex`.\n\n  surface     A full-screen surface (page or overlay). Describes\n              navigation metadata — route name, presentation mode, etc.\n\n## COMPOSITION MODEL (top-down)\nComposition flows **downward** from parent to children.\n\n  1. A composer spec sets `modifier.extend` to an ordered array of\n     relative paths to its child specs. The generator renders each\n     child inside the composer's layout according to `modifier.frame`.\n\n  2. `modifier.frame` controls how the composer positions its own\n     content alongside each extended child:\n       base    — layout axis + direction + overlay mode.\n                 Format: '<axis>.<direction>[.stack]'\n                 axis      : row | column\n                 direction : start | end\n                 .stack    : optional — children overlap (z-stack)\n       id      — optional identifier used when there are multiple\n                 composers at the same level referencing each other.\n       current — CSS styles applied to this node's own rendered view.\n       next    — CSS styles applied uniformly to every extended child\n                 wrapper.\n\n  3. A spec can inherit another spec by setting `base` to a relative\n     path ending in `.yml`. The resolved spec's `base` (primitive) and\n     `modifier.styles` are inherited; the local `modifier` overrides\n     and merges on top. INSTANCE specs always point `base` at their\n     shared MAIN COMPONENT spec path.\n\n## BASE TYPES\nWhen `base` is a string primitive (not a path), it selects the\nrenderer:\n\n  container   A generic box. Default for frames, groups, sections.\n              Supports all CSS layout styles.\n\n  text        A text node. Requires `modifier.props.children`.\n              Supports typography CSS styles.\n\n  image       An image node. Requires `modifier.props.src`.\n              Supports size + objectFit styles.\n\n## STYLES\n`modifier.styles` (and `frame.current` / `frame.next`) accept either:\n  - A CSS object (all standard CSS properties are valid — see $defs.css).\n  - A logic reference string:  'logics.<functionName>'  resolved at\n    runtime by the generated service file.\n\n## ACTIONS\n`modifier.props.onClick` (and other event props) accept an action\nobject:\n  { action: 'state.set', target: '<stateName>', value: <any> }\n  { action: 'navigation.open', name: '<routeName>', type: 'push'|'replace'|'sheet'|'dialog' }\n  { action: 'navigation.back' }\n  { action: 'navigation.close' }\n\n## SURFACE\nUsed by the surface root to describe a page or overlay navigation\nsurface. Not rendered directly.\n\n## EXAMPLE — multi-child column composer\n```yaml\ncomponent:\n  base: container\n  modifier:\n    extend:\n      - ./header.yml\n      - ./body.yml\n      - ./footer.yml\n    frame:\n      base: column.start\n      current:\n        width: 100%\n        height: 100%\n        backgroundColor: '#ffffff'\n      next:\n        width: 100%\n```\n\n## EXAMPLE — instance reusing shared spec\n```yaml\ncomponent:\n  base: ../../shared/common/iprimary_button.yml\n  modifier:\n    styles:\n      backgroundColor: '#0066ff'\n    props:\n      id: my-button\n```\n\n## EXAMPLE — condition\n```yaml\ncondition:\n  modifier:\n    states:\n      condition: false\n    left: ./logged_in_view.yml\n    right: ./logged_out_view.yml\n```\n\n## EXAMPLE — loop\n```yaml\nloop:\n  modifier:\n    states:\n      data: []\n    feed: ./list_item.yml\n    props:\n      scroll: vertical\n```",
+  "$comment": "FastUI Spec Schema — v2 (top-down composition and direct reuse). A primitive component.base selects a renderer. A relative .yml/.yaml component.base imports and calls that generated component directly; local props, styles, states, and modifier.overrides are passed to that instance. modifier.extend remains exclusively the ordered parent-child UI composition mechanism.",
   "title": "FastUI Spec",
   "description": "FastUI component/condition/loop/surface spec file",
   "type": "object",
@@ -326,6 +326,17 @@
           "$comment": "COMPOSITION: ordered list of child spec paths this component renders\nas top-down children. The composer passes its state and view context\ndown to each child. Children's own prop contracts are unchanged.\nA single path or an array of paths is accepted.",
           "$ref": "#/$defs/local_path_or_array"
         },
+        "overrides": {
+          "$comment": "Overrides passed into a component referenced by a spec-file base. children maps zero-based shared-component child slots to materialized replacement specs.",
+          "type": "object",
+          "properties": {
+            "children": {
+              "type": "object",
+              "additionalProperties": {"$ref": "#/$defs/local_path"}
+            }
+          },
+          "additionalProperties": false
+        },
         "styles": {
           "$comment": "Visual styles for this node's own rendered container/widget.",
           "$ref": "#/$defs/styles_value"
@@ -353,7 +364,7 @@
       "additionalProperties": false
     },
     "component_root": {
-      "$comment": "A renderable UI node. The most common spec primitive.\n\nMandatory: base (string primitive OR relative .yml path)\nMandatory: modifier (even if empty: {})\n\n--- Primitives ---\n  base: container  Generic box/frame. Use for layout wrappers and groups.\n                   Use with modifier.extend + modifier.frame to compose children.\n\n  base: text       Text node. modifier.props.children is the text content.\n                   Content may be a literal, a 'states.<name>' reference,\n                   or an 'inputs.<name>' reference (for loop templates).\n\n  base: image      Image node. modifier.props.src is the image URL.\n                   modifier.props.alt is the accessible label.\n\n--- Shared spec inheritance ---\n  base: ../../shared/common/iprimary_button.yml\n                   Inherits that spec's primitive and styles. Local modifier\n                   overrides and merges on top. Used for INSTANCE nodes that\n                   reuse a shared MAIN COMPONENT spec.",
+      "$comment": "A renderable UI node. The most common spec primitive.\n\nMandatory: base (string primitive OR relative .yml path)\nMandatory: modifier (even if empty: {})\n\nA primitive base selects the renderer. A .yml/.yaml base directly reuses the generated component from that spec. Local props, styles, states, and materialized child-slot overrides are passed to that component instance.",
       "type": "object",
       "required": ["base", "modifier"],
       "properties": {
@@ -367,7 +378,7 @@
             },
             {
               "$ref": "#/$defs/local_path",
-              "description": "Relative path to a shared spec to inherit from."
+              "description": "Relative path to a generated component to reuse directly."
             }
           ]
         },

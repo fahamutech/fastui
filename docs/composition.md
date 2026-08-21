@@ -363,7 +363,7 @@ component:
 
 ## Component reuse (`base: ./path.yml`)
 
-Component reuse is different from composition. When `base` points to a spec file, both Flutter and React recursively resolve and deep-merge the specification during generation.
+Component reuse is different from composition. When `base` points to a spec file, Flutter and React import and call the generated component directly. Local modifier values are passed into that instance as overrides.
 
 ```yaml
 # src/blueprints/modules/auth/login_button.yml
@@ -386,12 +386,27 @@ component:
 
 ```jsx
 export const LoginButton = React.memo(function LoginButton({instanceId, initialState = {}, initialProps = {}}) {
-  // Complete generated component: inherited fields are already merged.
-  return <div id="login-button" style={{backgroundColor: '#e53935'}} {...initialProps} />;
+  return <PrimaryButton
+    instanceId={instanceId}
+    initialState={{label: 'Sign in', ...initialState}}
+    id="login-button"
+    style={{backgroundColor: '#e53935'}}
+  />;
 });
 ```
 
-Both targets emit a complete `LoginButton`. Object fields merge with local values winning, arrays replace inherited arrays, inherited child paths are rebased to the derived spec, and inheritance cycles report every participating path.
+Both targets emit a lightweight reuse wrapper. The referenced component keeps its own implementation and child composition.
+
+Figma materialized children are represented as slot overrides rather than `extend`:
+
+```yaml
+modifier:
+  overrides:
+    children:
+      '0': ./instance_supporting_text.yml
+```
+
+The shared component renders this replacement in child slot `0`; without an override it renders its original child.
 
 ---
 
