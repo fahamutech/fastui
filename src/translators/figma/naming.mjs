@@ -22,7 +22,9 @@ export function generatedNodeName(node, id = node?.id) {
 
 /** A deterministic, collision-safe filename stem for exported vector nodes. */
 export function vectorResourceName(node) {
-    return `${node?.name || 'vector'}_${node?.id || 'unknown'}`
+    const name = node?.figmaName ?? node?.name ?? 'vector';
+
+    return `${name}_${node?.id || 'unknown'}`
         .replace(/[^a-zA-Z0-9._-]+/g, '_')
         .replace(/^_+|_+$/g, '') || 'vector';
 }

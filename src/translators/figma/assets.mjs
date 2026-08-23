@@ -4,26 +4,11 @@
  * cache and the project's own image folders before ever hitting the network.
  */
 import axios from 'axios';
-import {readdir, stat} from 'node:fs/promises';
+import {readdir} from 'node:fs/promises';
 import {createWriteStream} from 'node:fs';
 import {extname, join, resolve} from 'node:path';
 import {ensureFileExist, ensurePathExist} from '../../shared/fs.mjs';
-
-function formatRetryAfter(value) {
-    const seconds = Number(value);
-    if (!Number.isFinite(seconds) || seconds < 0) return value;
-    const totalSeconds = Math.floor(seconds);
-    const days = Math.floor(totalSeconds / 86400);
-    const hours = Math.floor((totalSeconds % 86400) / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const remainingSeconds = totalSeconds % 60;
-    const parts = [];
-    if (days > 0) parts.push(`${days}d`);
-    if (hours > 0 || days > 0) parts.push(`${hours}h`);
-    if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
-    parts.push(`${remainingSeconds}s`);
-    return parts.join(' ');
-}
+import {formatRetryAfter} from './utils.mjs';
 
 // Download state for the current translation run. Reset via
 // configureAssetDownloads() at the start of every getPagesAndTraverseChildren
@@ -85,59 +70,190 @@ async function fetchFigmaImagesUrl({token, figFile, nodeId, format, imageRef}) {
  * preferring assets already cached on disk over a network round-trip.
  * @return {Promise<string|undefined>}
  */
-export async function getFigmaImagePath({token, figFile, srcPath, imageRef, child, format}) {
+// export async function getFigmaImagePath({token, figFile, srcPath, imageRef, child, format}) {
+//     if (!imageRef) {
+//         return undefined;
+//     }
+//     const nodeId = child?.id;
+//     const folderPath = resolve(join(downloadState.projectPath, '.fastui', 'assets', 'figma'));
+//     await ensurePathExist(folderPath);
+//     try {
+//         const candidateFolders = [
+//             resolve(join(folderPath, 'images')),
+//             resolve(join(folderPath, 'vectors')),
+//             folderPath,
+//             resolve(join(downloadState.projectPath, 'assets', 'images', 'figma')),
+//             resolve(join(downloadState.projectPath, 'public', 'images', 'figma')),
+//         ];
+//         let imagePath;
+//         let file;
+//         for (const candidate of candidateFolders) {
+//             try {
+//                 const files = await readdir(candidate);
+//                 const expected = `${imageRef}`.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'resource';
+//                 file = files.find(value => value.slice(0, -(extname(value).length || 0)) === expected);
+//                 if (file) {
+//                     imagePath = join(candidate, file);
+//                     break;
+//                 }
+//             } catch (_) {
+//             }
+//         }
+//         await stat(imagePath);
+//         return `asset://figma/${file}`;
+//     } catch (e) {
+//         const expected = `${imageRef}`.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'resource';
+//         const fallback = `asset://figma/${expected}.${format ?? 'png'}`;
+//         if (!downloadState.enabled || !token) return fallback;
+//         if (downloadState.disabledForRun) return fallback;
+//         try {
+//             const url = await fetchFigmaImagesUrl({token, format, figFile, nodeId, imageRef});
+//             if (url) {
+//                 const {contentExtension} = await downloadImage(url, imageRef, folderPath);
+//                 const imageName = `${imageRef}.${contentExtension ?? 'png'}`;
+//                 return `asset://figma/${imageName}`;
+//             }
+//         } catch (error) {
+//             if (error?.response?.status === 429) downloadState.disabledForRun = true;
+//             if (!downloadState.warningWritten) {
+//                 const status = error?.response?.status;
+//                 const retryAfter = error?.response?.headers?.['retry-after'];
+//                 const formattedRetryAfter = retryAfter ? formatRetryAfter(retryAfter) : undefined;
+//                 console.warn(`WARN : Figma asset download unavailable${status ? ` (HTTP ${status})` : ''}${status === 429 && formattedRetryAfter ? `; retry after ${formattedRetryAfter}` : ''}; continuing with cached assets and specs.`);
+//                 downloadState.warningWritten = true;
+//             }
+//         }
+//         return fallback;
+//     }
+// }
+
+export async function getFigmaImagePath({
+                                            token,
+                                            figFile,
+                                            srcPath,
+                                            imageRef,
+                                            child,
+                                            format
+                                        }) {
     if (!imageRef) {
         return undefined;
     }
+
     const nodeId = child?.id;
-    const folderPath = resolve(join(downloadState.projectPath, '.fastui', 'assets', 'figma'));
+
+    const folderPath = resolve(
+        join(
+            downloadState.projectPath,
+            '.fastui',
+            'assets',
+            'figma'
+        )
+    );
+
     await ensurePathExist(folderPath);
-    try {
+
+    const expected = `${imageRef}`
+        .replace(/[^a-zA-Z0-9._-]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'resource';
+
+    const expectedExtension = format ?? 'png';
+
+    /*
+     * IMPORTANT:
+     * Cache is only used when this is NOT a fresh asset run.
+     */
+    if (!downloadState.enabled) {
         const candidateFolders = [
             resolve(join(folderPath, 'images')),
             resolve(join(folderPath, 'vectors')),
             folderPath,
-            resolve(join(downloadState.projectPath, 'assets', 'images', 'figma')),
-            resolve(join(downloadState.projectPath, 'public', 'images', 'figma')),
+            resolve(
+                join(
+                    downloadState.projectPath,
+                    'assets',
+                    'images',
+                    'figma'
+                )
+            ),
+            resolve(
+                join(
+                    downloadState.projectPath,
+                    'public',
+                    'images',
+                    'figma'
+                )
+            ),
         ];
-        let imagePath;
-        let file;
+
         for (const candidate of candidateFolders) {
             try {
                 const files = await readdir(candidate);
-                const expected = `${imageRef}`.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'resource';
-                file = files.find(value => value.slice(0, -(extname(value).length || 0)) === expected);
+
+                const file = files.find(value => {
+                    const extension = extname(value)
+                        .slice(1)
+                        .toLowerCase();
+
+                    const basename = value.slice(
+                        0,
+                        -(extname(value).length || 0)
+                    );
+
+                    return (
+                        basename === expected &&
+                        extension === expectedExtension
+                    );
+                });
+
                 if (file) {
-                    imagePath = join(candidate, file);
-                    break;
+                    return `asset://figma/${file}`;
                 }
             } catch (_) {
+                // directory does not exist
+                // console.warn(_);
             }
         }
-        await stat(imagePath);
-        return `asset://figma/${file}`;
-    } catch (e) {
-        const expected = `${imageRef}`.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'resource';
-        const fallback = `asset://figma/${expected}.${format ?? 'png'}`;
-        if (!downloadState.enabled || !token) return fallback;
-        if (downloadState.disabledForRun) return fallback;
-        try {
-            const url = await fetchFigmaImagesUrl({token, format, figFile, nodeId, imageRef});
-            if (url) {
-                const {contentExtension} = await downloadImage(url, imageRef, folderPath);
-                const imageName = `${imageRef}.${contentExtension ?? 'png'}`;
-                return `asset://figma/${imageName}`;
-            }
-        } catch (error) {
-            if (error?.response?.status === 429) downloadState.disabledForRun = true;
-            if (!downloadState.warningWritten) {
-                const status = error?.response?.status;
-                const retryAfter = error?.response?.headers?.['retry-after'];
-                const formattedRetryAfter = retryAfter ? formatRetryAfter(retryAfter) : undefined;
-                console.warn(`WARN : Figma asset download unavailable${status ? ` (HTTP ${status})` : ''}${status === 429 && formattedRetryAfter ? `; retry after ${formattedRetryAfter}` : ''}; continuing with cached assets and specs.`);
-                downloadState.warningWritten = true;
-            }
-        }
-        return fallback;
+
+        return `asset://figma/${expected}.${expectedExtension}`;
     }
+
+    /*
+     * Fresh mode.
+     */
+    if (!token || downloadState.disabledForRun) {
+        return `asset://figma/${expected}.${expectedExtension}`;
+    }
+
+    try {
+        const url = await fetchFigmaImagesUrl({
+            token,
+            format,
+            figFile,
+            nodeId,
+            imageRef
+        });
+
+        if (!url) {
+            return `asset://figma/${expected}.${expectedExtension}`;
+        }
+
+        const {contentExtension} = await downloadImage(
+            url,
+            expected,
+            folderPath
+        );
+
+        return `asset://figma/${expected}.${contentExtension}`;
+    } catch (error) {
+        if (error?.response?.status === 429) downloadState.disabledForRun = true;
+        if (!downloadState.warningWritten) {
+            const status = error?.response?.status;
+            const retryAfter = error?.response?.headers?.['retry-after'];
+            const formattedRetryAfter = retryAfter ? formatRetryAfter(retryAfter) : undefined;
+            console.warn(`WARN : Figma asset download unavailable${status ? ` (HTTP ${status})` : ''}${status === 429 && formattedRetryAfter ? `; retry after ${formattedRetryAfter}` : ''}; continuing with cached assets and specs.`);
+            downloadState.warningWritten = true;
+        }
+    }
+
+    return `asset://figma/${expected}.${expectedExtension}`;
 }

@@ -6,22 +6,7 @@ import axios from 'axios';
 import {dirname, join, resolve} from 'node:path';
 import {readFile, writeFile} from 'node:fs/promises';
 import {ensurePathExist} from '../../shared/fs.mjs';
-
-function formatRetryAfter(value) {
-    const seconds = Number(value);
-    if (!Number.isFinite(seconds) || seconds < 0) return value;
-    const totalSeconds = Math.floor(seconds);
-    const days = Math.floor(totalSeconds / 86400);
-    const hours = Math.floor((totalSeconds % 86400) / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const remainingSeconds = totalSeconds % 60;
-    const parts = [];
-    if (days > 0) parts.push(`${days}d`);
-    if (hours > 0 || days > 0) parts.push(`${hours}h`);
-    if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
-    parts.push(`${remainingSeconds}s`);
-    return parts.join(' ');
-}
+import {formatRetryAfter} from "./utils.mjs";
 
 export function getFigmaCachePath(figFile, cachePath) {
     if (cachePath) return resolve(cachePath);
@@ -33,6 +18,9 @@ export function getFigmaCachePath(figFile, cachePath) {
  * Downloads (or reads back from the local cache) the Figma file document.
  * @param token {string}
  * @param figFile {string}
+ * @param fresh
+ * @param cachePath
+ * @param fetcher
  * @return {Promise<any>}
  */
 export async function fetchFigmaFile({token, figFile, fresh = false, cachePath, fetcher = axios.get}) {

@@ -911,21 +911,58 @@ function loopItemIdentityExpression(data) {
 async function getLoopEstimate(data, path) {
     const isHorizontal = getIsLoopHorizontal(data);
     const axis = isHorizontal ? 'width' : 'height';
-    const fallbackAxis = isHorizontal ? 'fallbackWidth' : 'fallbackHeight';
-    const estimateFrom = spec => Number(getFrame(spec)?.baseStyles?.[axis]) || Number(getFrame(spec)?.baseStyles?.[fallbackAxis]) || Number(getStyles(spec)?.[axis]);
-    const directEstimate = estimateFrom(data);
-    if (directEstimate) return directEstimate;
+    const fallbackAxis = isHorizontal
+        ? 'fallbackWidth'
+        : 'fallbackHeight';
+
+    const estimateFrom = spec => {
+        const frame = getFrame(spec);
+
+        return (
+            Number(frame?.baseStyles?.[axis]) ||
+            Number(frame?.baseStyles?.[fallbackAxis]) ||
+            Number(getStyles(spec)?.[axis]) ||
+            undefined
+        );
+    };
+
+    /*
+     * IMPORTANT:
+     * Do not estimate an item from the LOOP itself.
+     */
     const feedPath = getFeed(data);
-    if (!feedPath || !path) return isHorizontal ? 240 : 80;
-    try {
-        const absoluteFeedPath = pathResolve(pathDirname(path), feedPath);
-        const feedSource = await readFile(absoluteFeedPath, 'utf8');
-        const feedSpec = yaml.load(feedSource) ?? {};
-        const feedData = feedSpec.component ?? feedSpec.condition ?? feedSpec.loop ?? {};
-        return estimateFrom(feedData) || (isHorizontal ? 240 : 80);
-    } catch (_) {
-        return isHorizontal ? 240 : 80;
+
+    if (feedPath && path) {
+        try {
+            const absoluteFeedPath = pathResolve(
+                pathDirname(path),
+                feedPath
+            );
+
+            const feedSource = await readFile(
+                absoluteFeedPath,
+                'utf8'
+            );
+
+            const feedSpec = yaml.load(feedSource) ?? {};
+
+            const feedData =
+                feedSpec.component ??
+                feedSpec.condition ??
+                feedSpec.loop ??
+                {};
+
+            const feedEstimate = estimateFrom(feedData);
+
+            if (feedEstimate) {
+                return feedEstimate;
+            }
+        } catch (_) {
+            // Fall through to default estimate.
+        }
     }
+
+    return isHorizontal ? 240 : 80;
 }
 
 function loopOwnView(data) {
@@ -1013,30 +1050,122 @@ export async function composeReactLoop({data, path, projectPath}) {
     const scroll = getLoopScrollProp(data);
     const isHorizontal = getIsLoopHorizontal(data);
     const estimate = await getLoopEstimate(data, path);
+    const loopGap = Number(getFrame(data)?.baseStyles?.spaceValue) || 0;
+
     const virtualization = scroll && scroll !== 'horizontal'
-        ? `const listRef = React.useRef(null);
-    const [viewport,setViewport]=React.useState({offset:0,size:0});
-    const estimateSize=${estimate};
-    const items=Array.isArray(data)?data:[];
-    const isHorizontal=${isHorizontal};
-    React.useLayoutEffect(()=>{
-        const node=listRef.current;
-        if(!node) return;
-        const update=()=>setViewport({offset:isHorizontal?node.scrollLeft:node.scrollTop,size:isHorizontal?node.clientWidth:node.clientHeight});
-        update();
-        node.addEventListener('scroll',update,{passive:true});
-        window.addEventListener('resize',update);
-        return ()=>{
-            node.removeEventListener('scroll',update);
-            window.removeEventListener('resize',update);
-        };
-    },[isHorizontal,items.length]);
-    const overscan=3;
-    const startIndex=Math.max(0,Math.floor(viewport.offset/estimateSize)-overscan);
-    const endIndex=Math.min(items.length,Math.ceil((viewport.offset+viewport.size)/estimateSize)+overscan);
-    const visibleItems=items.slice(startIndex,endIndex).map((item,offset)=>({item,index:startIndex+offset}));
-    const virtualInnerStyle=isHorizontal?{position:'relative',width:items.length*estimateSize,height:'100%'}:{position:'relative',height:items.length*estimateSize};
-    const virtualItemStyle=index=>isHorizontal?{position:'absolute',left:index*estimateSize,top:0,width:estimateSize}:{position:'absolute',top:index*estimateSize,left:0,right:0};`
+        ? `
+const listRef=React.useRef(null);
+const [viewport,setViewport]=React.useState({
+    offset:0,
+    size:0
+});
+
+const estimateSize=${estimate};
+const itemGap=${loopGap};
+const itemStride=estimateSize+itemGap;
+
+const items=Array.isArray(data)?data:[];
+const isHorizontal=${isHorizontal};
+
+React.useLayoutEffect(()=>{
+    const node=listRef.current;
+
+    if(!node) return;
+
+    const update=()=>setViewport({
+        offset:isHorizontal
+            ? node.scrollLeft
+            : node.scrollTop,
+
+        size:isHorizontal
+            ? node.clientWidth
+            : node.clientHeight
+    });
+
+    update();
+
+    node.addEventListener(
+        'scroll',
+        update,
+        {passive:true}
+    );
+
+    window.addEventListener(
+        'resize',
+        update
+    );
+
+    return ()=>{
+        node.removeEventListener(
+            'scroll',
+            update
+        );
+
+        window.removeEventListener(
+            'resize',
+            update
+        );
+    };
+},[isHorizontal,items.length]);
+
+const overscan=3;
+
+const startIndex=Math.max(
+    0,
+    Math.floor(
+        viewport.offset / itemStride
+    ) - overscan
+);
+
+const endIndex=Math.min(
+    items.length,
+    Math.ceil(
+        (viewport.offset + viewport.size) /
+        itemStride
+    ) + overscan
+);
+
+const visibleItems=items
+    .slice(startIndex,endIndex)
+    .map((item,offset)=>({
+        item,
+        index:startIndex+offset
+    }));
+
+const totalSize=
+    items.length === 0
+        ? 0
+        : (
+            items.length * estimateSize +
+            (items.length - 1) * itemGap
+        );
+
+const virtualInnerStyle=isHorizontal
+    ? {
+        position:'relative',
+        width:totalSize,
+        height:'100%'
+    }
+    : {
+        position:'relative',
+        height:totalSize
+    };
+
+const virtualItemStyle=index=>isHorizontal
+    ? {
+        position:'absolute',
+        left:index*itemStride,
+        top:0,
+        width:estimateSize
+    }
+    : {
+        position:'absolute',
+        top:index*itemStride,
+        left:0,
+        right:0,
+        height:estimateSize
+    };
+`
         : '';
 
     const content = `

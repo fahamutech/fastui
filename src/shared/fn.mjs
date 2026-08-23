@@ -38,10 +38,10 @@ export const ifDoElse = (fn, fn1, fn2) => (arg) =>
         ? fn1(arg)
         : fn2(arg);
 
-const objectConstructor = ({}).constructor;
-export const justObject = ifDoElse(x => x && x.constructor === objectConstructor, x => x, _ => ({}));
+// const objectConstructor = ({}).constructor;
+// export const justObject = ifDoElse(x => x && x.constructor === objectConstructor, x => x, _ => ({}));
 
-export const itOrEmptyList = list => Array.isArray(list) ? list : [list];
+export const itOrEmptyList = list => Array.isArray(list) ? list : [];
 
 export const justList = it => Array.isArray(it) ? it : [it];
 

@@ -98,6 +98,7 @@ function getBorderStyles(child) {
     if (itOrEmptyList(child?.strokes).length === 0) {
         return {};
     }
+    if (itOrEmptyList(child?.strokeDashes).length > 0)console.log(child?.strokeDashes,);
     return {
         borderTopWidth: child?.individualStrokeWeights?.top ?? child?.strokeWeight,
         borderLeftWidth: child?.individualStrokeWeights?.left ?? child?.strokeWeight,
