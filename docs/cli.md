@@ -79,13 +79,14 @@ fastui specs build src/blueprints/modules/home
 
 ---
 
-### `fastui specs automate [template] [--fresh]`
+### `fastui specs automate [template] [--fresh] [--node <id[,id…]>]`
 
 Full Figma → specs → code pipeline.
 
 ```bash
 fastui specs automate reactjs
 fastui specs automate flutter --fresh
+fastui specs automate reactjs --fresh --node 12:34
 ```
 
 **Steps:**
@@ -93,9 +94,9 @@ fastui specs automate flutter --fresh
 1. Ensures blueprint folder exists.
 2. Loads `.env` from the project root.
 3. Reads `FIGMA_FILE`; reads `FIGMA_TOKEN` only for `--fresh` network access.
-4. Reads the keyed local Figma document cache, or downloads it only with `--fresh`.
-5. Translates all frames/components to YAML specs.
-6. Writes routing file (`AppRoute.jsx` or `app_route.dart`).
+4. Reads the keyed local Figma document cache, or downloads it only with `--fresh`. With `--node`, it instead downloads and caches only the selected node subtree/subtrees.
+5. Translates all frames/components, or creates one generated page per selected node. Groups and their nested items are preserved.
+6. Writes routing file (`AppRoute.jsx` or `app_route.dart`). A full-file run reconciles the complete route registry; a selected-node run updates only its selected routes.
 
 **Required environment variables:**
 
@@ -103,12 +104,14 @@ fastui specs automate flutter --fresh
 |---|---|
 | `FIGMA_TOKEN` | Figma personal access token. Required only with `--fresh`. |
 | `FIGMA_FILE` | Figma file key. Visible in the URL: `figma.com/design/<FILE_KEY>/…` |
+| `FIGMA_NODE` | Optional comma-separated node IDs. Equivalent to `--node`. |
 
 `.env` file example:
 
 ```env
 FIGMA_TOKEN=figd_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 FIGMA_FILE=AbCdEfGhIjKlMnOpQrStUv
+FIGMA_NODE=12:34,56:78
 ```
 
 **`--fresh` flag:**
@@ -116,6 +119,12 @@ FIGMA_FILE=AbCdEfGhIjKlMnOpQrStUv
 Without `--fresh`, automation is strictly cache-only. It reads `.fastui/figma/<FIGMA_FILE>.json` and never contacts Figma. If that cache does not exist, the command warns, leaves existing specs/routing unchanged, and exits successfully. This prevents an ordinary regeneration from failing because of Figma rate limits.
 
 With `--fresh`, automation downloads and validates the document, fonts, image fills, and vector assets. This is the only mode that requires `FIGMA_TOKEN`; HTTP 429 and other download failures remain actionable errors while the last verified resource cache is preserved where possible.
+
+**`--node <id[,id…]>`:**
+
+Downloads only the supplied Figma node IDs using Figma's node endpoint. Each selected node becomes a standalone FastUI page, including all descendants inside a group or frame. This avoids fetching the full Figma document. Pass either an API-style ID such as `12:34` or a full Figma layer link; link IDs such as `12-34` are normalized automatically. Multiple IDs or links can be comma-separated. Links that contain a file key are checked against `FIGMA_FILE`, and a mismatch stops the command before download.
+
+The first `--node` run can bootstrap `.fastui/generated-routes.json`, which is useful for very large Figma files. Thereafter, node runs replace or add routes by Figma node ID while retaining routes for all other selected nodes. A later full-file run becomes authoritative and reconciles the complete route list.
 
 ---
 
@@ -139,6 +148,7 @@ Writes a `watch.mjs` (React) or `watch.dart` (Flutter) file that watches the blu
 | `--version` | `-v` | Print version string and exit |
 | `--help` | `-h` | Show help message and exit |
 | `--fresh` | | (automate) Force re-download of Figma document and assets |
+| `--node <id[,id…]>` | | (automate) Download and generate only selected Figma nodes |
 | `--template <name>` | | Explicitly select `reactjs` or `flutter` |
 
 ---

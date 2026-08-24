@@ -30,46 +30,48 @@ export async function ensureWatchFileExist(blueprintRoot = join('src', 'blueprin
     await writeFile(filePath, `import {watch} from 'node:fs'
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {exec} from 'node:child_process';
+import {spawn} from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const blueprintRoot = ${JSON.stringify(blueprintRoot.split('\\').join('/'))};
 
-let calledTimes = 0;
-const changes = {};
+const debounceMs = 500;
 let timeout;
+let buildRunning = false;
+let buildQueued = false;
 
-function getTimeout() {
-    return setTimeout(() => {
-        for (const filename of Object.values(changes)) {
-            if (!\`\${filename}\`.endsWith('.yml') || \`\${filename}\`.endsWith('~')) {
-                return;
-            }
-            const file = \`./\${blueprintRoot}/\${filename}\`;
-            delete changes[filename];
-            calledTimes-=1;
-            exec(\`fastui specs build \${file}\`, {
-                cwd: __dirname
-            }, (error, stdout, stderr) => {
-            });
+function buildBlueprints() {
+    if (buildRunning) {
+        buildQueued = true;
+        return;
+    }
+
+    buildRunning = true;
+    const child = spawn('fastui', ['specs', 'build', \`./\${blueprintRoot}\`], {
+        cwd: __dirname,
+        stdio: 'inherit'
+    });
+    child.on('error', error => console.error('[fastui] Specs build failed to start:', error.message));
+    child.on('close', () => {
+        buildRunning = false;
+        if (buildQueued) {
+            buildQueued = false;
+            buildBlueprints();
         }
-    }, calledTimes > 0 ? 2000 : 100);
+    });
+}
+
+function scheduleBuild() {
+    clearTimeout(timeout);
+    timeout = setTimeout(buildBlueprints, debounceMs);
 }
 
 watch(join(__dirname, ...blueprintRoot.split('/')), {recursive: true}, (event, filename) => {
-    if (!\`\${filename}\`.endsWith('.yml') || \`\${filename}\`.endsWith('~')) {
+    const name = \`\${filename ?? ''}\`;
+    if (!/\\.ya?ml$/i.test(name) || name.endsWith('~')) {
         return;
     }
-    if (calledTimes > 0) {
-        clearTimeout(timeout);
-        changes[filename]=filename;
-        timeout = getTimeout();
-        calledTimes += 1;
-        return;
-    }
-    calledTimes = 1;
-    changes[filename]=filename;
-    timeout = getTimeout();
+    scheduleBuild();
 });
 `);
 }

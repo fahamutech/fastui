@@ -52,7 +52,7 @@ Figma layer names control how FastUI classifies and names nodes.
 | `_loop` or `_repeat` | Repeating list | `loop` |
 | `_button` | Clickable container | `component` (with `cursor: pointer`) |
 | `_input` | Text input | `component` (with `control: input`) |
-| `_image` | Image fill | `component` (with `base: image`) |
+| `_image` | Explicit image-component fallback | `component` (with `base: image`) |
 | *(none)* | Container / text / vector | `component` (base inferred from Figma type) |
 
 ### Text localization and state
@@ -74,7 +74,7 @@ For a `_loop` or `_repeat` frame, every visible repeated child contributes a com
 
 - `_key` is the repeated child node ID.
 - Every nested `TEXT` layer contributes its visible characters as a string.
-- Every nested `_image` rectangle contributes its resolved deterministic asset reference.
+- Every nested native image node or rectangle with an image fill contributes its resolved deterministic asset reference.
 - Every nested vector contributes its SVG asset reference.
 - Binding keys use the same normalized names consumed by `inputs.loopElement.<field>`.
 
@@ -131,8 +131,10 @@ component:
 | `TEXT` | ordinary | `component: { base: text }` with a translation binding |
 | `TEXT` | `_$<stateKey>` | `component: { base: text }` bound to component-local state |
 | `RECTANGLE` | `_input` | `component: { base: container, props: { control: input } }` |
-| `RECTANGLE` | `_image` | `component: { base: image }` |
+| `IMAGE` | (any) | `component: { base: image }` |
+| `RECTANGLE` | image fill or `_image` fallback | `component: { base: image }` |
 | `RECTANGLE` | (other) | `component: { base: container }` with background image fill |
+| `FRAME` / `COMPONENT` | image fill | `component: { base: container }` with background image fill and its children |
 | `VECTOR` | (any) | `component: { base: image }` rendered as SVG |
 | `FRAME` / `COMPONENT` | `_loop` / `_repeat` | `loop` |
 | `FRAME` / `COMPONENT` | `_condition` | `condition` |

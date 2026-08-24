@@ -2966,6 +2966,14 @@ async function serviceImportAndStubs(
             'flutter'
         );
 
+    const flutterServiceBody = action => {
+        const actions = action?.action === 'sequence' ? action.actions ?? [] : [action];
+        return actions.map(item => {
+            if (`${item?.action ?? ''}`.startsWith('navigation.')) return `${navigationCall(item).replace(/\bcontext,/, 'context.context,')};`;
+            if (item?.action === 'state.set' && item.target) return `context.setState(${dartString(item.target)}, ${dartLiteral(item.value)});`;
+            return '';
+        }).filter(Boolean).join('\n  ');
+    };
     const servicePath =
         await ensureServiceFile({
             servicePath:
@@ -2987,6 +2995,12 @@ async function serviceImportAndStubs(
                 const initName = parseLogicReference(data?.modifier?.effects?.onInit?.body)?.name;
                 return initName && Array.isArray(sample) ? {[initName]: {data: sample}} : {};
             })(),
+
+            flutterBodiesByFunction: Object.fromEntries(Object.entries(data?.modifier?.metadata?.figmaServiceActions ?? {})
+                .map(([name, action]) => [name, flutterServiceBody(action)])
+                .filter(([, body]) => body)),
+
+            flutterRuntimePath: resolve(flutterLibRoot(specPath), 'fastui_runtime.dart'),
 
             flutterContext: Object.keys(getStates(data)).length > 0 ? {
                 runtimePath: resolve(flutterLibRoot(specPath), 'fastui_runtime.dart'),

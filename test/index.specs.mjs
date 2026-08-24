@@ -9,12 +9,15 @@ import {composeCondition} from "../src/generators/condition.mjs";
 import {composeLoop} from "../src/generators/loop.mjs";
 import {ensureAppRouteFileExist} from "../src/generators/routing.mjs";
 import {ensureBlueprintFolderExist, ensureWatchFileExist} from "../src/tooling/scaffold.mjs";
+import {parseEnvFile} from "../src/tooling/env.mjs";
 import {initializeProject} from "../src/tooling/project.mjs";
 import {routeFromSurfaceName} from "../src/shared/routing.mjs";
-import {fetchFigmaFile, getDesignDocument, getPagesAndTraverseChildren, resolvePrototypeRoute, walkFrameChildren} from "../src/translators/figma/index.mjs";
+import {fetchFigmaFile, fetchFigmaNodes, getDesignDocument, getFigmaFileKeysFromNodeReferences, getNodeDesignDocument, getPagesAndTraverseChildren, normalizeFigmaNodeIds, resolvePrototypeRoute, walkFrameChildren} from "../src/translators/figma/index.mjs";
+import {configureAssetDownloads, getFigmaImagePath} from "../src/translators/figma/assets.mjs";
 import {loopScrollDirection} from "../src/translators/figma/layout.mjs";
-import {generatedNodeName} from "../src/translators/figma/naming.mjs";
+import {generatedNodeName, sanitizedNameForLoopElement} from "../src/translators/figma/naming.mjs";
 import {generateCodeFromSpecs} from '../src/generators/spec-to-code.mjs';
+import {translateFigmaToSpecs} from '../src/translators/figma-to-spec.mjs';
 import {createFrameComponent, createTextComponent} from '../src/translators/figma/spec-writer.mjs';
 import {discoverFigmaResources, reconcileFigmaResources} from '../src/translators/figma/resources.mjs';
 import {reactRuntimeSource} from '../src/generators/templates/reactjs/runtime.mjs';
@@ -28,6 +31,13 @@ import {specFile, logicFile} from './data.mjs'
 const delay = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
 
 describe('Specs', function () {
+    it('preserves equals signs in .env values such as Figma node URLs', function () {
+        expect(Object.fromEntries(parseEnvFile(
+            'FIGMA_NODE=https://www.figma.com/design/file/Example?node-id=9-7744&t=token\n'
+        ))).to.deep.equal({
+            FIGMA_NODE: 'https://www.figma.com/design/file/Example?node-id=9-7744&t=token'
+        });
+    });
     before(() => {
         // console.log(process.cwd(),'++++++CWD+++++')
     })
@@ -76,7 +86,9 @@ describe('Specs', function () {
             await ensureWatchFileExist();
             const file = await readFile(resolve(join('watch.mjs')));
             expect(file.toString()).to.include('const blueprintRoot = "src/blueprints"');
-            expect(file.toString()).to.include('fastui specs build');
+            expect(file.toString()).to.include("'specs', 'build'");
+            expect(file.toString()).to.include('const debounceMs = 500');
+            expect(file.toString()).to.include("spawn('fastui', ['specs', 'build', `./${blueprintRoot}`]");
         }
         it('should create a watch file', async function () {
             await _fn();
@@ -314,6 +326,29 @@ describe('Specs', function () {
             expect(spec.component.modifier.styles).to.equal(undefined);
             expect(spec.component.modifier.frame.base.type).to.equal('column.start');
             expect(spec.component.modifier.frame.base.styles).to.deep.include({paddingTop: 12, backgroundColor: '#FFFFFF'});
+        });
+
+        it('routes React Figma buttons through their generated service', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const specPath = join(root, 'src', 'blueprints', 'modules', 'open_button.yml');
+            await mkdir(dirname(specPath), {recursive: true});
+            await mkdir(join(root, 'src'), {recursive: true});
+            await writeFile(join(root, 'src', 'routing.mjs'), 'export const setCurrentRoute = () => {};\n');
+            await createFrameComponent({
+                filename: specPath,
+                child: {name: 'Open_button', mainFrame: {base: 'row.start', id: 'open_button_frame', styles: {}}, interactions: [{actions: [{type: 'NODE', navigation: 'NAVIGATE', destinationId: 'profile'}]}]},
+                routeLookup: {profile: {name: 'profile', type: 'dialog'}},
+            });
+            const spec = await specToJSON(specPath);
+            expect(spec.component.modifier.props.onClick).to.equal('logics.Open_button_press');
+            expect(spec.component.modifier.metadata.figmaServiceActions.Open_button_press).to.include({action: 'navigation.open', name: 'profile'});
+            const servicePath = join(root, 'src', 'services', 'open_button.mjs');
+            await mkdir(dirname(servicePath), {recursive: true});
+            await writeFile(servicePath, 'export function Open_button_press(context) {\n  // TODO: Implement the service.\n}\n');
+            await composeComponent({path: specPath, projectPath: root, data: spec.component});
+            const service = await readFile(servicePath, 'utf8');
+            expect(service).to.include('context.navigate({"name":"profile","type":"dialog"');
+            process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
         it('omits empty current and next wrappers in generated React and Flutter output', async function () {
@@ -700,12 +735,12 @@ describe('Specs', function () {
                         {id: 'item', name: 'Item_row', type: 'FRAME', layoutMode: 'HORIZONTAL', children: [
                             {id: 'title', name: 'Title_text', type: 'TEXT', characters: 'First item', visible: true, style: {}},
                             {id: 'price', name: 'Price_text', type: 'TEXT', characters: '12.50', visible: true, style: {}},
-                            {id: 'photo', name: 'Photo_image', type: 'RECTANGLE', fills: [{type: 'IMAGE', imageRef: 'photo-ref'}]},
+                            {id: 'photo', name: 'Photo', type: 'RECTANGLE', fills: [{type: 'IMAGE', imageRef: 'photo-ref'}]},
                         ]},
                         {id: 'item-2', name: 'Item_row', type: 'FRAME', layoutMode: 'HORIZONTAL', children: [
                             {id: 'title-2', name: 'Title_text', type: 'TEXT', characters: 'Second item', visible: true, style: {}},
                             {id: 'price-2', name: 'Price_text', type: 'TEXT', characters: '20.00', visible: true, style: {}},
-                            {id: 'photo-2', name: 'Photo_image', type: 'RECTANGLE', fills: [{type: 'IMAGE', imageRef: 'photo-ref-2'}]},
+                            {id: 'photo-2', name: 'Photo', type: 'RECTANGLE', fills: [{type: 'IMAGE', imageRef: 'photo-ref-2'}]},
                         ]},
                     ]
                 }]
@@ -796,6 +831,13 @@ describe('Specs', function () {
             await writeFile(servicePath, 'export function products_init(context) { context.setState("data", []); }\n');
             await generateCodeFromSpecs({root: join(root, 'src', 'blueprints'), projectPath: root});
             expect(await readFile(servicePath, 'utf8')).to.equal('export function products_init(context) { context.setState("data", []); }\n');
+        });
+
+        it('keeps loop bindings stable for Figma INSTANCE descendant ids', function () {
+            expect(sanitizedNameForLoopElement({
+                id: 'I73:11681;9:7634',
+                name: 'iI73_11681_9_7634_Name',
+            })).to.equal('name');
         });
 
         it('initializes a Flutter project and selects lib/blueprints', async function () {
@@ -969,6 +1011,26 @@ describe('Specs', function () {
             expect(flutter).to.include("?? 'assets/images/figma/icon.svg'");
         });
 
+        it('does not box React SVG primitives with Figma viewport dimensions', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const specPath = join(root, 'src', 'blueprints', 'modules', 'vector_icon.yml');
+            await mkdir(join(root, 'src', 'blueprints', 'modules'), {recursive: true});
+            await composeComponent({path: specPath, projectPath: root, data: {
+                base: 'image',
+                modifier: {
+                    props: {id: 'vector', alt: 'vector', src: '/images/figma/vector.svg'},
+                    styles: {objectFit: 'none'},
+                    frame: {base: 'row.start'}
+                }
+            }});
+            const generated = await readFile(join(root, 'src', 'modules', 'vector_icon.jsx'), 'utf8');
+            expect(generated).to.include('"objectFit":"none"');
+            expect(generated).not.to.include('"width":24');
+            expect(generated).not.to.include('"height":24');
+            expect(generated).not.to.include('"width":11.6676');
+            process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
         it('generates neutral navigation actions as stateless React events', async function () {
             process.env.FASTUI_TEMPLATE = 'reactjs';
             const specPath = join(root, 'src', 'blueprints', 'modules', 'nav_card.yml');
@@ -1024,6 +1086,41 @@ describe('Specs', function () {
             expect(runtime).to.include('export const appState = createObservableStore()');
             expect(runtime).to.include('useSyncExternalStore');
             expect(await readFile(join(root, 'src', 'routing.mjs'), 'utf8')).to.include("import {appState} from './fastui_runtime.mjs';");
+            process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
+        it('merges selected-node routes into the full generated route registry', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            await ensureAppRouteFileExist({
+                template: 'reactjs', initialId: 'home',
+                pages: [
+                    {id: 'home', sourceId: 'home', name: 'home_page', module: 'home'},
+                    {id: 'profile', sourceId: 'profile', name: 'profile_page', module: 'profile'},
+                ]
+            });
+            await ensureAppRouteFileExist({
+                template: 'reactjs', merge: true,
+                pages: [{id: 'fastui-selected-profile', sourceId: 'profile', name: 'profile_page', module: 'account'}]
+            });
+            const routes = JSON.parse(await readFile(join(root, '.fastui', 'generated-routes.json'), 'utf8'));
+            const appRoute = await readFile(join(root, 'src', 'AppRoute.jsx'), 'utf8');
+            expect(routes.pages).to.have.length(2);
+            expect(routes.pages.find(page => page.sourceId === 'profile')).to.include({module: 'account'});
+            expect(appRoute).to.include("./modules/home/home_page");
+            expect(appRoute).to.include("./modules/account/profile_page");
+            process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
+        it('bootstraps the generated route registry from selected nodes', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const registryPath = join(root, '.fastui', 'generated-routes.json');
+            await rm(registryPath, {force: true});
+            await ensureAppRouteFileExist({
+                template: 'reactjs', merge: true, initialId: 'home',
+                pages: [{id: 'fastui-selected-home', sourceId: 'home', name: 'home_page', module: 'home'}]
+            });
+            const routes = JSON.parse(await readFile(registryPath, 'utf8'));
+            expect(routes.pages).to.deep.include({id: 'fastui-selected-home', sourceId: 'home', name: 'home_page', module: 'home'});
             process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
@@ -1087,6 +1184,46 @@ describe('Specs', function () {
             expect(downloads).to.equal(0);
         });
 
+        it('treats an empty node selection as a full Figma file translation', async function () {
+            const srcPath = join(root, 'empty-node-selection-blueprints');
+            const translation = await translateFigmaToSpecs({
+                data: {document: {type: 'DOCUMENT', children: [{type: 'CANVAS', children: [{
+                    id: 'home', name: 'home_page', type: 'FRAME', visible: true,
+                    layoutMode: 'VERTICAL', children: []
+                }]}]}},
+                nodeIds: [], srcPath, projectPath: root
+            });
+            expect(translation.pages).to.have.length(1);
+            expect(translation.pages[0]).to.include({id: 'home', name: 'home_page'});
+        });
+
+        it('downloads and caches only requested Figma node subtrees', async function () {
+            const cachePath = join(root, '.fastui', 'figma', 'selected-node.json');
+            let request;
+            const data = await fetchFigmaNodes({
+                token: 'token', figFile: 'file', nodeIds: '12:34, 56:78', fresh: true, cachePath,
+                fetcher: async (url, options) => {
+                    request = {url, options};
+                    return {data: {nodes: {'12:34': {document: {id: '12:34'}}}}};
+                }
+            });
+            const cached = await fetchFigmaNodes({figFile: 'file', nodeIds: ['12:34', '56:78'], cachePath});
+            expect(request.url).to.equal('https://api.figma.com/v1/files/file/nodes');
+            expect(request.options.params).to.deep.equal({ids: '12:34,56:78'});
+            expect(data).to.deep.equal(cached);
+        });
+
+        it('accepts a Figma layer link wherever a node ID is accepted', function () {
+            expect(normalizeFigmaNodeIds('https://www.figma.com/design/file/Example?node-id=9-5829&t=token'))
+                .to.deep.equal(['9:5829']);
+        });
+
+        it('normalizes comma-separated Figma links and obtains their file keys', function () {
+            const links = 'https://www.figma.com/design/file-one/Example?node-id=9-5829,https://www.figma.com/design/file-one/Example?node-id=10-1';
+            expect(normalizeFigmaNodeIds(links)).to.deep.equal(['9:5829', '10:1']);
+            expect(getFigmaFileKeysFromNodeReferences(links)).to.deep.equal(['file-one']);
+        });
+
         it('includes Retry-After details for Figma 429 responses', async function () {
             try {
                 await fetchFigmaFile({
@@ -1118,6 +1255,30 @@ describe('Specs', function () {
             expect(document.flowStartingPoints).to.deep.equal([{nodeId: 'home'}]);
         });
 
+        it('makes each selected Figma node an independent page while preserving grouped children', async function () {
+            const document = getNodeDesignDocument({nodes: {'12:34': {document: {
+                id: '12:34', name: 'profile_page', type: 'GROUP', visible: true,
+                absoluteBoundingBox: {width: 320, height: 640}, children: [{
+                    id: '12:35', name: 'Title', type: 'TEXT', visible: true, characters: 'Profile',
+                    absoluteBoundingBox: {width: 100, height: 20}, style: {}
+                }]
+            }}}}, '12:34');
+            const srcPath = join(root, 'selected-blueprints');
+            const pages = await getPagesAndTraverseChildren({document, srcPath});
+            await walkFrameChildren({children: pages, srcPath});
+            expect(pages).to.have.length(1);
+            const pageSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'profile_page.yml'), 'utf8');
+            const groupSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'i12_34_Profile_page.yml'), 'utf8');
+            const titleSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'i12_35_Title.yml'), 'utf8');
+            expect(pageSpec).to.include('./i12_34_Profile_page.yml');
+            expect(groupSpec).to.include('./i12_35_Title.yml');
+            expect(titleSpec).to.include('Profile');
+            expect(groupSpec).to.include('width: 100%');
+            expect(groupSpec).to.include('height: 100%');
+            expect(groupSpec).not.to.include('width: 320');
+            expect(groupSpec).not.to.include('height: 640');
+        });
+
         it('creates local state only for explicit Figma state-changing interactions', async function () {
             const document = {children: [{
                 id: 'state-page', name: 'state_page', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
@@ -1132,10 +1293,11 @@ describe('Specs', function () {
             await generateCodeFromSpecs({root: srcPath, projectPath: root});
             const spec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'itoggle_Toggle_button.yml'), 'utf8');
             const widget = await readFile(join(root, 'lib', 'modules', 'presentation', 'pages', 'itoggle_toggle_button.dart'), 'utf8');
+            const service = await readFile(join(root, 'lib', 'services', 'presentation', 'pages', 'itoggle_toggle_button.dart'), 'utf8');
             expect(spec).to.include('variant: toggle');
             expect(spec).to.include('action: state.set');
             expect(widget).to.include('extends ConsumerStatefulWidget');
-            expect(widget).to.include("_notifier.setField('variant', 'selected-variant')");
+            expect(service).to.include("context.setState('variant', 'selected-variant')");
         });
 
         it('generates declarative controlled input updates without logic stubs', async function () {
@@ -1352,6 +1514,32 @@ describe('Specs', function () {
             expect(generated).to.include('"color":"#0000FF"');
             expect(generated).not.to.include('overrideStyles');
             expect(generated).not.to.include('__specBase');
+            process.env.FASTUI_TEMPLATE = 'flutter';
+        });
+
+        it('forwards reused-frame styles without generating a duplicate React wrapper', async function () {
+            process.env.FASTUI_TEMPLATE = 'reactjs';
+            const moduleRoot = join(root, 'src', 'blueprints', 'modules', 'reuse_layout');
+            await mkdir(moduleRoot, {recursive: true});
+            const instancePath = join(moduleRoot, 'header_instance.yml');
+            await writeFile(instancePath, `component:
+  base: ./shared_header.yml
+  modifier:
+    props:
+      id: header_instance
+    frame:
+      base:
+        type: row.start
+        styles:
+          paddingLeft: 32
+          paddingTop: 20
+`);
+            await composeComponent({data: (await specToJSON(instancePath)).component, path: instancePath, projectPath: root});
+            const generated = await readFile(join(root, 'src', 'modules', 'reuse_layout', 'header_instance.jsx'), 'utf8');
+            expect(generated).to.include('<SharedHeader');
+            expect(generated).to.include('"paddingLeft":32');
+            expect(generated.match(/"paddingLeft":32/g)).to.have.length(1);
+            expect(generated).not.to.include("id={'header_instance_frame'}");
             process.env.FASTUI_TEMPLATE = 'flutter';
         });
 
@@ -1734,6 +1922,7 @@ describe('Specs', function () {
 
             const openSpec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'iopen_Open_button.yml'), 'utf8');
             const openWidget = await readFile(join(root, 'lib', 'modules', 'presentation', 'pages', 'iopen_open_button.dart'), 'utf8');
+            const openService = await readFile(join(root, 'lib', 'services', 'presentation', 'pages', 'iopen_open_button.dart'), 'utf8');
             const appRoute = await readFile(join(root, 'lib', 'app_route.dart'), 'utf8');
             const runtime = await readFile(join(root, 'lib', 'fastui_runtime.dart'), 'utf8');
             const guard = await readFile(join(root, 'lib', 'routing_guard.dart'), 'utf8');
@@ -1744,12 +1933,13 @@ describe('Specs', function () {
             expect(openSpec).to.include('action: navigation.open');
             expect(openSpec).to.include('type: sheet');
             expect(openSpec).not.to.include('onStart');
-            expect(openWidget).to.match(/FastUINavigation\.navigate\(\s*context,\s*name: 'choices',\s*type: 'sheet'/);
-            expect(openWidget).to.include("transition: 'MOVE_IN'");
-            expect(openWidget).to.include("direction: 'BOTTOM'");
-            expect(openWidget).to.include('durationMs: 250');
-            expect(openWidget).to.include('barrierDismissible: true');
-            expect(openWidget).to.include('extends StatelessWidget');
+            expect(openService).to.match(/FastUINavigation\.navigate\(\s*context\.context,\s*name: 'choices',\s*type: 'sheet'/);
+            expect(openService).to.include("transition: 'MOVE_IN'");
+            expect(openService).to.include("direction: 'BOTTOM'");
+            expect(openService).to.include('durationMs: 250');
+            expect(openService).to.include('barrierDismissible: true');
+            expect(openService).to.match(/barrierDismissible: true\s*\);/);
+            expect(openWidget).to.include('FastUIComponentContext');
             expect(openSpec).to.match(/width:\s+100%/);
             expect(appRoute).to.include("'choices': FastUISurfaceDefinition(");
             expect(appRoute).to.include('builder: () => ChoicesSheet()');
@@ -1929,6 +2119,17 @@ describe('Figma resource reconciliation', function () {
         await rm(root, {recursive: true, force: true});
     });
 
+    it('uses the downloaded asset extension when resolving a cached image', async function () {
+        const imageRoot = join(root, '.fastui', 'assets', 'figma', 'images');
+        await mkdir(imageRoot, {recursive: true});
+        await writeFile(join(imageRoot, 'background-image.jpg'), 'jpeg-data');
+        configureAssetDownloads(false, root);
+
+        const asset = await getFigmaImagePath({imageRef: 'background-image'});
+
+        expect(asset).to.equal('asset://figma/background-image.jpg');
+    });
+
     it('discovers and deduplicates image, vector, and mixed text font variants', function () {
         const resources = discoverFigmaResources({children: [{
             id: 'frame', name: 'Frame', fills: [{type: 'IMAGE', imageRef: 'same-image'}], children: [
@@ -2021,6 +2222,30 @@ flutter:
         let generatedFontExists = true;
         try { await stat(join(root, 'assets', 'fonts', 'figma', 'Brand_Sans-400-normal.ttf')); } catch (_) { generatedFontExists = false; }
         expect(generatedFontExists).to.equal(false);
+    });
+
+    it('preserves resources from other pages during a selected-node reconciliation', async function () {
+        const allPages = {children: [
+            {id: 'first', name: 'First', fills: [{type: 'IMAGE', imageRef: 'first-image'}]},
+            {id: 'second', name: 'Second', fills: [{type: 'IMAGE', imageRef: 'second-image'}]},
+        ]};
+        const http = {get: async url => {
+            if (url.includes('/files/file/images')) return {data: {meta: {images: {
+                'first-image': 'https://assets.test/first.png',
+                'second-image': 'https://assets.test/second.png',
+            }}}};
+            const data = Buffer.from(url.endsWith('first.png') ? 'first' : 'second');
+            return {data, headers: {'content-type': 'image/png', 'content-length': `${data.length}`}};
+        }};
+        await reconcileFigmaResources({document: allPages, token: 'token', figFile: 'file', projectPath: root, template: 'reactjs', fresh: true, http, sleepFn: async () => {}});
+
+        const selected = {children: [allPages.children[0]]};
+        const result = await reconcileFigmaResources({document: selected, figFile: 'file', projectPath: root, template: 'reactjs', preserveExisting: true});
+        expect(result.summary.stale).to.equal(0);
+        await stat(join(root, '.fastui', 'assets', 'figma', 'images', 'second-image.png'));
+        await stat(join(root, 'public', 'images', 'figma', 'second-image.png'));
+        const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8'));
+        expect(manifest.resources).to.have.keys(['image:first-image', 'image:second-image']);
     });
 
     it('retries transient downloads and preserves verified cache after a failed fresh refresh', async function () {

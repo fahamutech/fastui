@@ -213,7 +213,7 @@ Loop stores always begin with `data: []`. Design rows are scaffolding, not appli
 
 1. Figma automation inventories every repeated row.
 2. Text fields are stored as strings under their loop binding keys.
-3. `_image` rectangles and vectors are resolved to deterministic `asset://figma/...` values.
+3. Native image nodes, image-filled rectangles, and vectors are resolved to deterministic `asset://figma/...` values.
 4. The full row shape is retained as `modifier.metadata.loopInitialData` for code generation.
 5. Only a newly created `*_init` service stub receives the sample rows.
 6. Once a developer edits that service, regeneration preserves it byte-for-byte.

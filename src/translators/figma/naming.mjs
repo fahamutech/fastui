@@ -72,7 +72,11 @@ export function getBaseType(child) {
 export function sanitizedNameForLoopElement(child) {
     const id = child?.id ?? '';
     const name = child?.name;
-    const stripped = `${name}`.trim().replaceAll(`i${id?.replaceAll(':', '_')}_`, '');
+    // INSTANCE descendants use Figma ids such as `I73:11681;9:7634`.
+    // generatedNodeName() folds both `:` and `;` to `_`; use the same
+    // normalization here so loop bindings remove the generated id prefix.
+    const generatedId = `${id}`.replaceAll(/[^a-zA-Z0-9]/g, '_');
+    const stripped = `${name}`.trim().replaceAll(`i${generatedId}_`, '');
     const chunks = stripped.split('_');
     if (chunks.length > 1) {
         chunks.pop();

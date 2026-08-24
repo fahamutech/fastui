@@ -419,7 +419,7 @@ async function configureTargetAssets({resources, template, projectPath, previous
     return current;
 }
 
-export async function reconcileFigmaResources({document, token, figFile, projectPath = process.cwd(), template = 'reactjs', fresh = false, http = axios, sleepFn = sleep}) {
+export async function reconcileFigmaResources({document, token, figFile, projectPath = process.cwd(), template = 'reactjs', fresh = false, preserveExisting = false, http = axios, sleepFn = sleep}) {
     const cacheRoot = join(projectPath, '.fastui', 'assets', 'figma');
     const manifestPath = join(cacheRoot, 'manifest.json');
     const reportPath = join(projectPath, '.fastui', 'reports', 'figma-resources.json');
@@ -486,18 +486,24 @@ export async function reconcileFigmaResources({document, token, figFile, project
         resources[`font:${font.family}|${font.weight}|${font.style}`] = resource;
         if (reconciliation && reconciliation !== 'local') summary[reconciliation]++;
     }
+    // A selected-node refresh only sees part of the Figma file. Keep the
+    // resources from every other page so it cannot remove their generated
+    // icons, images, or fonts as "stale".
+    const reconciledResources = preserveExisting ? {...previous.resources, ...resources} : resources;
+    const reconciledFonts = Object.values(reconciledResources).filter(resource => resource.kind === 'font');
     let targets = {
-        assets: await configureTargetAssets({resources, template, projectPath, previousAssets: previous.targets?.assets ?? []}),
+        assets: await configureTargetAssets({resources: reconciledResources, template, projectPath, previousAssets: previous.targets?.assets ?? []}),
     };
     if (template === 'flutter') {
-        targets.flutterFonts = await configureFlutterFonts({fonts: resolvedFonts, projectPath, previousGenerated: previous.targets?.flutterFonts ?? []});
+        targets.flutterFonts = await configureFlutterFonts({fonts: reconciledFonts, projectPath, previousGenerated: previous.targets?.flutterFonts ?? []});
     } else {
-        const react = await configureReactFonts({fonts: resolvedFonts, projectPath, previousGenerated: previous.targets?.reactFonts ?? []});
+        const react = await configureReactFonts({fonts: reconciledFonts, projectPath, previousGenerated: previous.targets?.reactFonts ?? []});
         targets.reactFonts = react.generated;
         targets.reactIntegration = react.integration;
     }
 
     for (const [key, value] of Object.entries(previous.resources ?? {})) {
+        if (preserveExisting && !resources[key]) continue;
         if (!value.file) continue;
         if (resources[key]?.file && resolve(resources[key].file) !== resolve(value.file)) {
             const owned = isManifestOwned(cacheRoot, value.file);
@@ -509,11 +515,11 @@ export async function reconcileFigmaResources({document, token, figFile, project
         if (owned) { await rm(value.file, {force: true}); summary.stale++; }
     }
     summary.unresolved = unresolved.length;
-    const manifest = {version: 1, figFile, resources, targets, summary, updatedAt: new Date().toISOString()};
+    const manifest = {version: 1, figFile, resources: reconciledResources, targets, summary, updatedAt: new Date().toISOString()};
     await mkdir(dirname(manifestPath), {recursive: true});
     await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
     await mkdir(dirname(reportPath), {recursive: true});
-    await writeFile(reportPath, JSON.stringify({figFile, summary, discovered, resources, targets, unresolved}, null, 2));
+    await writeFile(reportPath, JSON.stringify({figFile, summary, discovered, resources: reconciledResources, targets, unresolved}, null, 2));
     if (unresolved.length) console.warn(`WARN : ${unresolved.length} Figma resources unresolved; see ${relative(projectPath, reportPath)}.`);
     return {summary, reportPath, manifestPath, unresolved};
 }

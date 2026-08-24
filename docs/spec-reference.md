@@ -374,7 +374,7 @@ component:
 
 ### Loop data model and initialization
 
-Automated Figma loops derive one row model from the repeated design children. Text values remain strings. `_image` rectangles and vectors become named asset fields:
+Automated Figma loops derive one row model from the repeated design children. Text values remain strings. Native image nodes, image-filled rectangles, and vectors become named asset fields:
 
 ```yaml
 loop:

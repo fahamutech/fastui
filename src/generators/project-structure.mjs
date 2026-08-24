@@ -127,7 +127,7 @@ function reactServiceValue(value) {
  * Services are user-owned. Existing files and functions are never rewritten,
  * Existing bodies are never rewritten; only missing imports and hooks are appended.
  */
-export async function ensureServiceFile({servicePath, functions, template, flutterContext, flutterReturns = {}, initialStateByFunction = {}}) {
+export async function ensureServiceFile({servicePath, functions, template, flutterContext, flutterReturns = {}, initialStateByFunction = {}, reactBodiesByFunction = {}, flutterBodiesByFunction = {}, flutterRuntimePath}) {
     await mkdir(dirname(servicePath), {recursive: true});
     if (!(await exists(servicePath))) {
         await writeFile(servicePath, '');
@@ -145,13 +145,27 @@ export async function ensureServiceFile({servicePath, functions, template, flutt
                 source = ensureImport(source, `import {fastUITranslationStore} from '${reactTranslationImportPath(servicePath)}';`);
             }
         }
-        if (pattern.test(source)) continue;
+        const reactBody = reactBodiesByFunction[functionName];
+        if (pattern.test(source)) {
+            // Upgrade only the exact generated TODO stub. Any service body the
+            // user has edited remains authoritative across selected-node runs.
+            if (template === 'reactjs' && reactBody) {
+                const escaped = functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const stub = new RegExp(`(export function ${escaped}\\(context\\) \\{)\\n  // TODO: Implement the service\\.\\n(\\})`);
+                if (stub.test(source)) source = source.replace(stub, `$1\n${reactBody}\n$2`);
+            }
+            continue;
+        }
         if (functionName === 't') {
             additions.push(template === 'flutter' ? flutterTranslationStub() : reactTranslationStub());
         } else {
             const flutterReturn = flutterReturns[functionName] ?? 'FutureOr<void>';
+            const flutterBody = flutterBodiesByFunction[functionName];
             if (template === 'flutter' && flutterReturn === 'FutureOr<void>') {
                 source = ensureImport(source, "import 'dart:async';");
+            }
+            if (template === 'flutter' && flutterBody && flutterRuntimePath) {
+                source = ensureImport(source, `import '${relativeImport(servicePath, flutterRuntimePath)}';`);
             }
             if (template === 'flutter' && flutterContext) {
                 source = ensureImport(source, `import '${relativeImport(servicePath, flutterContext.runtimePath)}';`);
@@ -166,8 +180,8 @@ export async function ensureServiceFile({servicePath, functions, template, flutt
                 ? Object.entries(initialState).map(([key, value]) => `  context.notifier.${generatedSetterName(key)}(${dartServiceValue(value)});`).join('\n')
                 : '';
             additions.push(template === 'flutter'
-                ? `/// Receives the Riverpod-backed component state, inputs, and invocation arguments.\n${flutterReturn} ${functionName}(${flutterContext ? `FastUIComponentContext<${flutterContext.model}, ${flutterContext.notifier}>` : 'dynamic'} context) {\n  ${flutterSeed ? `// Replace this design-time seed with service data when implementing this hook.\n${flutterSeed}` : (flutterReturn.startsWith('Map<') ? 'return const <String, dynamic>{};' : '// TODO: Implement the service.')}\n}`
-                : `/** @param {import('${relativeImport(servicePath, resolve(translationRootFromServicePath(servicePath), 'fastui_runtime.mjs'))}').FastUIComponentContext} context */\nexport function ${functionName}(context) {\n${reactSeed ? `  // Replace this design-time seed with service data when implementing this hook.\n${reactSeed}` : '  // TODO: Implement the service.'}\n}`);
+                ? `/// Receives the Riverpod-backed component state, inputs, and invocation arguments.\n${flutterReturn} ${functionName}(${flutterContext ? `FastUIComponentContext<${flutterContext.model}, ${flutterContext.notifier}>` : (flutterBody ? 'FastUIComponentContext<dynamic, dynamic>' : 'dynamic')} context) {\n  ${flutterBody || (flutterSeed ? `// Replace this design-time seed with service data when implementing this hook.\n${flutterSeed}` : (flutterReturn.startsWith('Map<') ? 'return const <String, dynamic>{};' : '// TODO: Implement the service.'))}\n}`
+                : `/** @param {import('${relativeImport(servicePath, resolve(translationRootFromServicePath(servicePath), 'fastui_runtime.mjs'))}').FastUIComponentContext} context */\nexport function ${functionName}(context) {\n${reactBody || (reactSeed ? `  // Replace this design-time seed with service data when implementing this hook.\n${reactSeed}` : '  // TODO: Implement the service.')}\n}`);
         }
     }
     if (additions.length) {

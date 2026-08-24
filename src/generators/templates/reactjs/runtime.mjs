@@ -119,12 +119,13 @@ export function useFastUISelector(store, instanceId, selector, seed = {}) {
 }
 
 export class FastUIComponentContext {
-  constructor({store, componentId, instanceId, inputs = {}, args = []}) {
+  constructor({store, componentId, instanceId, inputs = {}, args = [], navigate}) {
     this.store = store;
     this.componentId = componentId;
     this.instanceId = instanceId;
     this.inputs = inputs;
     this.args = args;
+    this.navigate = typeof navigate === 'function' ? navigate : () => {};
   }
   get state() { return this.store?.get(this.instanceId) ?? Object.freeze({}); }
   setState(key, value) {

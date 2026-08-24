@@ -4,7 +4,7 @@ import {readSpecs} from "./specs/reader.mjs";
 import {ensureBlueprintFolderExist, ensureWatchFileExist} from "./tooling/scaffold.mjs";
 import {loadEnvFile} from "./tooling/env.mjs";
 import {ensureAppRouteFileExist} from './generators/routing.mjs';
-import {fetchFigmaFile} from "./translators/figma/index.mjs";
+import {fetchFigmaFile, fetchFigmaNodes, getFigmaFileKeysFromNodeReferences, normalizeFigmaNodeIds} from "./translators/figma/index.mjs";
 import {join, resolve} from "node:path";
 import {getBlueprintRoot, getTemplateSelected, normalizeTemplate} from "./tooling/config.mjs";
 import {initializeProject} from "./tooling/project.mjs";
@@ -66,8 +66,8 @@ ${c.bold('COMMANDS')}
   ${c.cyan('specs build')} ${c.dim('[path]')}
     Generate source code from YAML blueprints under [path].
 
-  ${c.cyan('specs automate')} ${c.dim('[reactjs|flutter] [--fresh]')}
-    Pull a Figma file, translate it to YAML blueprints, and write routing.
+  ${c.cyan('specs automate')} ${c.dim('[reactjs|flutter] [--fresh] [--node <id[,id…]>]')}
+    Pull a Figma file or selected design nodes, translate them to YAML blueprints, and write routing.
     Reads FIGMA_TOKEN and FIGMA_FILE from the environment or .env file.
     Pass ${c.yellow('--fresh')} to force a re-download of the Figma document.
 
@@ -78,17 +78,19 @@ ${c.bold('OPTIONS')}
   ${c.yellow('-v')}, ${c.yellow('--version')}   Print version and exit
   ${c.yellow('-h')}, ${c.yellow('--help')}      Show this help message
   ${c.yellow('--fresh')}         (automate) Force re-download of Figma document
+  ${c.yellow('--node')} ${c.dim('<id[,id…]>')} (automate) Download only Figma node(s) and create a page for each
   ${c.yellow('--template')} ${c.dim('<name>')}  Explicitly choose reactjs or flutter
 
 ${c.bold('ENVIRONMENT')}
   FIGMA_TOKEN   Personal access token for the Figma REST API
   FIGMA_FILE    Figma file key (from the URL: figma.com/design/<key>/…)
+  FIGMA_NODE    Optional comma-separated Figma node IDs (same as --node)
 
 ${c.bold('EXAMPLES')}
   fastui init reactjs          # initialise a React project
   fastui init flutter           # initialise a Flutter project
   fastui specs build src/blueprints
-  fastui specs automate reactjs --fresh
+  fastui specs automate reactjs --fresh --node 12:34
   fastui watch flutter
 `.trimStart();
 
@@ -156,23 +158,33 @@ try {
                     const bpRoot    = getBlueprintRoot(template);
                     const srcPath   = resolve(join(process.cwd(), bpRoot));
 
-                    info(`Automating from Figma  ${c.dim(`(template: ${template}${fresh ? ', fresh' : ''})`)}…`);
-
                     await ensureBlueprintFolderExist(bpRoot);
                     await loadEnvFile();
 
                     const token   = process.env.FIGMA_TOKEN;
                     const figFile = process.env.FIGMA_FILE;
+                    const nodeReference = flagVal('--node') ?? process.env.FIGMA_NODE;
+                    const nodeIds = normalizeFigmaNodeIds(nodeReference);
 
-                    if (!token)   fatal('FIGMA_TOKEN is not set. Add it to .env or export it before running.');
+                    info(`Automating from Figma  ${c.dim(`(template: ${template}${nodeIds.length ? `, nodes: ${nodeIds.join(', ')}` : ''}${fresh ? ', fresh' : ''})`)}…`);
+
                     if (!figFile) fatal('FIGMA_FILE is not set.  Add it to .env or export it before running.');
+                    if (fresh && !token) fatal('FIGMA_TOKEN is not set. Add it to .env or export it before running.');
+                    const linkFileKeys = getFigmaFileKeysFromNodeReferences(nodeReference);
+                    const mismatchedFileKeys = linkFileKeys.filter(fileKey => fileKey !== figFile);
+                    if (mismatchedFileKeys.length) {
+                        fatal(`Figma node link file key ${mismatchedFileKeys.join(', ')} does not match FIGMA_FILE (${figFile}). Use links from the same Figma file or update FIGMA_FILE.`);
+                    }
 
-                    info(`Fetching Figma file ${c.dim(figFile)}…`);
-                    const data = await fetchFigmaFile({token, figFile, fresh});
+                    info(`Fetching Figma ${nodeIds.length ? `node${nodeIds.length === 1 ? '' : 's'}` : 'file'} ${c.dim(nodeIds.length ? nodeIds.join(', ') : figFile)}…`);
+                    const data = nodeIds.length
+                        ? await fetchFigmaNodes({token, figFile, nodeIds, fresh})
+                        : await fetchFigmaFile({token, figFile, fresh});
 
                     info('Translating Figma design to YAML specs…');
                     const translation = await translateFigmaToSpecs({
                         data,
+                        nodeIds,
                         srcPath,
                         token,
                         figFile,
@@ -185,7 +197,8 @@ try {
                     await ensureAppRouteFileExist({
                         pages:     translation.pages,
                         initialId: translation.initialId,
-                        template
+                        template,
+                        merge: nodeIds.length > 0,
                     });
 
                     const resourceSummary = translation.resources?.summary;

@@ -189,21 +189,21 @@ export async function getFigmaImagePath({
             try {
                 const files = await readdir(candidate);
 
-                const file = files.find(value => {
-                    const extension = extname(value)
-                        .slice(1)
-                        .toLowerCase();
-
+                const matchingFiles = files.filter(value => {
                     const basename = value.slice(
                         0,
                         -(extname(value).length || 0)
                     );
-
-                    return (
-                        basename === expected &&
-                        extension === expectedExtension
-                    );
+                    return basename === expected;
                 });
+                // Figma may return JPEG/WebP data for a raster image even
+                // when its export request defaulted to PNG. Use the extension
+                // of the cached, verified download so generated specs point to
+                // a file that actually exists. Prefer the requested format if
+                // both variants happen to be present.
+                const file = matchingFiles.find(value =>
+                    extname(value).slice(1).toLowerCase() === expectedExtension
+                ) ?? matchingFiles[0];
 
                 if (file) {
                     return `asset://figma/${file}`;

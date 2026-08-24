@@ -24,6 +24,7 @@ import {
     createContainerComponent,
     createConditionComponent,
     createFrameComponent,
+    createImageComponent,
     createInstanceComponent,
     createLoopComponent,
     createTextComponent,
@@ -32,6 +33,7 @@ import {
 } from './spec-writer.mjs';
 
 const DEFAULT_PAGE_MODULE = 'presentation/pages';
+const CONTAINER_NODE_TYPES = new Set(['FRAME', 'INSTANCE', 'COMPONENT', 'GROUP', 'SECTION']);
 
 async function loopRowData(node, {token, figFile, srcPath}) {
     const row = {_key: node?.id ?? randomUUID().toString()};
@@ -42,7 +44,7 @@ async function loopRowData(node, {token, figFile, srcPath}) {
         }
         const imageRef = child?.type === 'VECTOR'
             ? vectorResourceName(child)
-            : getBaseType(child) === 'image'
+            : child?.type === 'IMAGE' || (child?.type === 'RECTANGLE' && (getImageRef(child?.fills) || getBaseType(child) === 'image'))
                 ? getImageRef(child?.fills)
                 : undefined;
         if (key && imageRef) {
@@ -79,7 +81,7 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
         const stateText = child?.type === 'TEXT' ? textStateBinding(child) : null;
         const name = generatedNodeName(child);
 
-        if (child?.type === 'FRAME' || child?.type === 'INSTANCE' || child?.type === 'COMPONENT') {
+        if (CONTAINER_NODE_TYPES.has(child?.type)) {
             const backGroundImage = await getFigmaImagePath({
                 token, figFile, srcPath, imageRef: getImageRef(child?.fills), child: undefined
             });
@@ -130,9 +132,9 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         flex: flexForAxis,
                         justifyContent: transformLayoutAxisAlign(child?.primaryAxisAlignItems),
                         alignItems: transformLayoutAxisAlign(child?.counterAxisAlignItems),
-                        width: getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width)
+                        width: child?.selectedSurfaceRoot ? '100%' : getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width)
                             ?? (frame?.layoutMode === 'VERTICAL' && (child?.layoutAlign === 'STRETCH' || child?.layoutSizingHorizontal === 'FILL') ? '100%' : undefined),
-                        height: getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height)
+                        height: child?.selectedSurfaceRoot ? '100%' : getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height)
                             ?? (frame?.layoutMode !== 'VERTICAL' && (child?.layoutAlign === 'STRETCH' || child?.layoutSizingVertical === 'FILL') ? '100%' : undefined),
                         fallbackWidth: child?.layoutSizingHorizontal === 'FILL' || child?.layoutAlign === 'STRETCH'
                             ? child?.absoluteRenderBounds?.width
@@ -322,9 +324,11 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
             await createTextComponent(filename, structuredClone(child));
         } else if (child?.type === 'RECTANGLE') {
             await handleRectangleComponent(structuredClone({child, srcPath, figFile, token, filename}));
+        } else if (child?.type === 'IMAGE') {
+            await createImageComponent({filename, child, srcPath, token, figFile});
         } else if (child?.type === 'VECTOR') {
             await createVectorComponent({filename, child, srcPath, token, figFile});
-        } else if (child?.type === 'FRAME' || child?.type === 'INSTANCE' || child?.type === 'COMPONENT') {
+        } else if (CONTAINER_NODE_TYPES.has(child?.type)) {
             if (isRepeatType(getBaseType(child))) {
                 await createLoopComponent({filename, child});
             } else if (child?.type === 'INSTANCE') {

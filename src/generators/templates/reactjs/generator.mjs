@@ -187,6 +187,13 @@ export function composeFrame(data, frame, ownView, extraProps = '') {
         : [...[currentItem].filter(Boolean), ...nextViews];
     const scrollStyles = getFeed(data) ? {} : containerScrollStyles(data?.modifier?.props?.scroll, frame?.baseStyles ?? {});
     const extraBaseStyles = {...reactStyleAssets(frame?.baseStyles ?? {}), ...scrollStyles};
+    // A growing column must be allowed to shrink below its contents. This is
+    // essential when a descendant owns vertical scrolling; without it, the
+    // column's min-content height pushes preceding siblings (such as a page
+    // header) out of a viewport whose root clips overflow.
+    if (frameDirection(base) === 'column' && extraBaseStyles.flex !== undefined) {
+        extraBaseStyles.minHeight ??= 0;
+    }
     if (frameIsStack(base)) {
         const layers = ordered
             .map(item => `<div style={{gridArea:'1 / 1'}}>${item}</div>`)
@@ -476,7 +483,23 @@ export function getUseMemoDependencies(data) {
 export function getComponentMemoStatement(data, specPath) {
     if (!containsLogicReference(data) && Object.keys(getEffects(data)).length === 0) return '';
     const componentId = specPath ? specStructure(specPath, 'reactjs').specId : 'component';
-    return `const component=React.useMemo(()=>createFastUIComponentContext({store:componentStore,componentId:${JSON.stringify(componentId)},instanceId:resolvedInstanceId,inputs}),[componentStore,resolvedInstanceId,${getInputsStatement(data)}]);`;
+    const navigate = containsNavigationAction(data) ? ',navigate:setCurrentRoute' : '';
+    return `const component=React.useMemo(()=>createFastUIComponentContext({store:componentStore,componentId:${JSON.stringify(componentId)},instanceId:resolvedInstanceId,inputs${navigate}}),[componentStore,resolvedInstanceId,${getInputsStatement(data)}]);`;
+}
+
+function figmaServiceBody(action) {
+    const actions = action?.action === 'sequence' ? action.actions ?? [] : [action];
+    return actions.map(item => {
+        if (`${item?.action ?? ''}`.startsWith('navigation.')) {
+            const route = {...item};
+            delete route.action;
+            return `  context.navigate(${JSON.stringify(route)});`;
+        }
+        if (item?.action === 'state.set' && item.target) {
+            return `  context.setState(${JSON.stringify(item.target)}, ${JSON.stringify(item.value)});`;
+        }
+        return '';
+    }).filter(Boolean).join('\n');
 }
 
 /**
@@ -516,6 +539,9 @@ export async function getLogicsImportStatement(data = {}, unParsedPath = '', pro
             const initName = parseLogicReference(data?.modifier?.effects?.onInit?.body)?.name;
             return initName && Array.isArray(sample) ? {[initName]: {data: sample}} : {};
         })(),
+        reactBodiesByFunction: Object.fromEntries(Object.entries(data?.modifier?.metadata?.figmaServiceActions ?? {})
+            .map(([name, action]) => [name, figmaServiceBody(action)])
+            .filter(([, body]) => body)),
     });
     const outputPath = pathResolve(getSrcPathFromBlueprintPath(unParsedPath));
     return `import {${exports.join(',')}} from '${relativeImport(outputPath, servicePath)}';`;
@@ -772,6 +798,11 @@ export async function composeReactComponent({data, path, projectPath}) {
             ? `${getProps(data).value}`.replace(/^inputs\./i, '')
             : JSON.stringify(getProps(data).value ?? '');
     const inputStatement = ['input', 'textarea'].includes(getBase(data)) ? `const inputRef=useFastUIControlledInput(${inputValue});` : '';
+    // A spec-file base is already a complete rendered component. Its instance
+    // frame styles are forwarded by reuseComponentOwnView(), so composing it
+    // again would create an outer wrapper with the same styles (and compound
+    // layout styles such as padding).
+    const renderedView = isReuse ? ownView : composeFrame(data, frame, ownView, ownProps);
     const content = `
 import React from 'react';
 ${logicsStatement}
@@ -790,7 +821,7 @@ export const ${getFileName(path)}=React.memo(function ${getFileName(path)}({${re
     ${inputStatement}
     ${styleStatement}
     ${effectsString}
-    return(${composeFrame(data, frame, ownView, ownProps)});
+    return(${renderedView});
 });
     `;
 

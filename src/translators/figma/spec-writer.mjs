@@ -195,6 +195,10 @@ export async function createFrameComponent({filename, child, routeLookup}) {
     // generator auto-creates a stub. Other frame types don't need a default.
     const isButton = baseType === 'button';
     const logicsFn = isButton ? `logics.${logicsFnName(child)}_press` : undefined;
+    const delegateButtonNavigation = isButton;
+    const serviceActions = delegateButtonNavigation && behavior.onClick
+        ? {figmaServiceActions: {[`${logicsFnName(child)}_press`]: behavior.onClick}}
+        : undefined;
     const yamlData = yaml.dump({
         component: {
             base: 'container',
@@ -202,11 +206,17 @@ export async function createFrameComponent({filename, child, routeLookup}) {
                 extend: childPaths.length > 0 ? childPaths : undefined,
                 props: {
                     id: sanitizeFullColon(child?.isLoopElement ? `'_'+loopIndex+'${sanitizedNameForLoopElement(child)}'` : `${child?.name}`),
-                    onClick: behavior.onClick ?? logicsFn,
+                    // Keep navigation in the button's user-owned service.
+                    // A selected-node rebuild can then replace this spec
+                    // without overwriting the previously generated service.
+                    onClick: delegateButtonNavigation ? logicsFn : (behavior.onClick ?? logicsFn),
                     scroll: componentScrollDirection(child),
                 },
                 states: Object.keys(behavior.states).length > 0 ? behavior.states : undefined,
-                metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
+                metadata: {
+                    ...(child?.surfacePresentation ? {surface: child.surfacePresentation} : {}),
+                    ...serviceActions,
+                },
                 frame: toFrameShape(child?.mainFrame, {
                     cursor: baseType === 'button' ? 'pointer' : undefined,
                     overflow: child?.clipsContent ? 'hidden' : undefined,
@@ -320,7 +330,7 @@ export async function createLoopComponent({filename, child}) {
     await writeFile(filename, yamlData);
 }
 
-export function dumpImageYaml({child, srcUrl, objectFit = 'cover'}) {
+export function dumpImageYaml({child, srcUrl, objectFit = 'cover', includeSize = true}) {
     return yaml.dump({
         component: {
             base: 'image',
@@ -332,7 +342,7 @@ export function dumpImageYaml({child, srcUrl, objectFit = 'cover'}) {
                 },
                 styles: {
                     ...getContainerLikeStyles(child, null),
-                    ...getSizeStyles(child),
+                    ...(includeSize ? getSizeStyles(child) : {}),
                     objectFit
                 },
                 frame: toFrameShape(child?.childFrame),
@@ -368,7 +378,9 @@ export async function createVectorComponent({filename, child, srcPath, token, fi
         imageRef: vectorResourceName(child),
         child,
     });
-    const yamlData = dumpImageYaml({srcUrl, child, objectFit: 'none'});
+    // An exported SVG already owns its drawing viewport. Its containing Figma
+    // frame is the UI layout box, so do not emit dimensions for this primitive.
+    const yamlData = dumpImageYaml({srcUrl, child, objectFit: 'none', includeSize: false});
     await writeFile(filename, yamlData);
 }
 
@@ -377,7 +389,7 @@ export async function handleRectangleComponent({child, filename, srcPath, token,
     if (baseType === 'input') {
         const inputType = `${child?.name}`.toLowerCase()?.includes('password') ? 'password' : undefined;
         await createTextInputComponent(filename, child, inputType);
-    } else if (baseType === 'image') {
+    } else if (getImageRef(child?.fills) || baseType === 'image') {
         await createImageComponent({filename, child, srcPath, token, figFile});
     } else {
         const backGroundImage = await getFigmaImagePath({
