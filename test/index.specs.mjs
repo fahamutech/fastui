@@ -14,11 +14,11 @@ import {initializeProject} from "../src/tooling/project.mjs";
 import {routeFromSurfaceName} from "../src/shared/routing.mjs";
 import {fetchFigmaFile, fetchFigmaNodes, getDesignDocument, getFigmaFileKeysFromNodeReferences, getNodeDesignDocument, getPagesAndTraverseChildren, normalizeFigmaNodeIds, resolvePrototypeRoute, walkFrameChildren} from "../src/translators/figma/index.mjs";
 import {configureAssetDownloads, getFigmaImagePath} from "../src/translators/figma/assets.mjs";
-import {loopScrollDirection} from "../src/translators/figma/layout.mjs";
+import {getContainerLikeStyles, loopScrollDirection} from "../src/translators/figma/layout.mjs";
 import {generatedNodeName, sanitizedNameForLoopElement} from "../src/translators/figma/naming.mjs";
 import {generateCodeFromSpecs} from '../src/generators/spec-to-code.mjs';
 import {translateFigmaToSpecs} from '../src/translators/figma-to-spec.mjs';
-import {createFrameComponent, createTextComponent} from '../src/translators/figma/spec-writer.mjs';
+import {createFrameComponent, createTextComponent, createTextInputComponent} from '../src/translators/figma/spec-writer.mjs';
 import {discoverFigmaResources, reconcileFigmaResources} from '../src/translators/figma/resources.mjs';
 import {reactRuntimeSource} from '../src/generators/templates/reactjs/runtime.mjs';
 import {normalizeSpecDocument} from '../src/generators/spec-normalizer.mjs';
@@ -165,8 +165,8 @@ describe('Specs', function () {
             expect(label).to.include("widget.overrideProps['id'] ?? 'label_id'");
             expect(label).to.match(/LayoutBuilder\(\s*builder: \(context, constraints\)/);
             expect(label).to.include('constraints.hasBoundedWidth');
-            expect(label).to.match(/height:\s*constraints\.hasBoundedHeight\s*\? constraints\.maxHeight/);
-            expect(button).to.match(/GestureDetector\(\s*onTap:/);
+            expect(label).to.match(/height:\s*fastUIConstraints\.hasBoundedHeight\s*\? fastUIConstraints\.maxHeight/);
+            expect(button).to.match(/InkWell\(\s*mouseCursor: SystemMouseCursors\.click,\s*onTap:/);
             expect(button).to.include('Label(');
             expect(list).to.match(/core\.List<dynamic>\.from\(\s*state\.data/);
             expect(list).to.match(/ListView\.(?:builder|separated)\(/);
@@ -197,7 +197,9 @@ describe('Specs', function () {
                 modifier: {feed: './feed.yml', states: {data: []}, frame: {base: 'column.start'}}
             }});
             await composeLoop({path: horizontalPath, projectPath: root, data: {
-                modifier: {feed: './feed.yml', props: {scroll: 'horizontal'}, states: {data: []}, frame: {base: 'row.start'}}
+                modifier: {feed: './feed.yml', props: {scroll: 'horizontal'}, states: {data: []}, frame: {base: {
+                    type: 'row.start', styles: {height: '100%', fallbackHeight: 206}
+                }}}
             }});
             await composeComponent({path: areaPath, projectPath: root, data: {
                 base: 'container', modifier: {
@@ -214,6 +216,7 @@ describe('Specs', function () {
             expect(scrollingFlutter).to.include('ListView.separated(');
             expect(horizontalFlutter).to.include('ListView.separated(');
             expect(horizontalFlutter).to.match(/scrollDirection:\s*Axis\.horizontal/);
+            expect(horizontalFlutter).to.include('fastUIConstraints.minHeight > 206');
             expect(staticFlutter).not.to.include('ListView.');
             expect(staticFlutter).to.include('Column(');
             expect(staticFlutter).not.to.include('SingleChildScrollView');
@@ -427,6 +430,34 @@ describe('Specs', function () {
             });
         });
 
+        it('keeps visually empty Figma input rectangles empty', async function () {
+            const root = await mkdtemp(join(tmpdir(), 'fastui-figma-input-'));
+            const specPath = join(root, 'email_input.yml');
+            await createTextInputComponent(specPath, {
+                id: '9:5761', name: 'email_input', type: 'RECTANGLE',
+                absoluteBoundingBox: {width: 360, height: 44},
+                strokes: [], fills: [], cornerRadius: 8,
+            });
+            const spec = await readFile(specPath, 'utf8');
+            expect(spec).to.not.include('placeholder:');
+            expect(spec).to.include("control: input");
+            await rm(root, {recursive: true, force: true});
+        });
+
+        it('uses a visible Figma input text layer as the placeholder', async function () {
+            const root = await mkdtemp(join(tmpdir(), 'fastui-figma-input-text-'));
+            const specPath = join(root, 'search_input.yml');
+            await createTextInputComponent(specPath, {
+                id: '9:1', name: 'search_input', type: 'FRAME', children: [
+                    {type: 'TEXT', characters: 'Search listings'},
+                ],
+            });
+            const spec = await readFile(specPath, 'utf8');
+            expect(spec).to.include('placeholder:');
+            expect(spec).to.include('fallback: Search listings');
+            await rm(root, {recursive: true, force: true});
+        });
+
         it('serializes Figma $ text markers as component-local state', async function () {
             const specPath = join(root, 'state_text_spec.yml');
             await createTextComponent(specPath, {
@@ -518,7 +549,7 @@ describe('Specs', function () {
             expect(widget).to.include("fontFamily: 'Inter'");
             expect(widget).to.include('fontWeight: FontWeight.w400');
             expect(widget).to.include('fontSize: 14');
-            expect(widget).to.include('width: 120');
+            expect(widget).to.include('fastUIConstraints.constrainWidth(120)');
             expect(widget).to.include('padding: EdgeInsets.fromLTRB(8, 4, 8, 4)');
             expect(widget).to.include('borderRadius: BorderRadius.circular(6)');
             expect(widget).to.include('Opacity(');
@@ -526,6 +557,32 @@ describe('Specs', function () {
             expect(widget).not.to.include('overrideStyles');
             expect(widget).not.to.include('fontPostScriptName');
             expect(widget).not.to.include('textAutoResize');
+        });
+
+        it('preserves Flutter text variants and frame fallbacks in unbounded flex axes', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const textPath = join(root, 'lib', 'blueprints', 'modules', 'text_variants.yml');
+            const buttonPath = join(root, 'lib', 'blueprints', 'modules', 'fill_height_button.yml');
+            await composeComponent({path: textPath, projectPath: root, data: {
+                base: 'text',
+                modifier: {styles: {
+                    fontWeight: 'bold', fontStyle: 'italic', textDecorationLine: 'underline',
+                }, props: {children: 'Styled'}},
+            }});
+            await composeComponent({path: buttonPath, projectPath: root, data: {
+                base: 'container',
+                modifier: {
+                    extend: './text_variants.yml',
+                    frame: {base: {type: 'row.start', styles: {height: '100%', fallbackHeight: 20}}},
+                },
+            }});
+            const text = await readFile(join(root, 'lib', 'modules', 'text_variants.dart'), 'utf8');
+            const button = await readFile(join(root, 'lib', 'modules', 'fill_height_button.dart'), 'utf8');
+            expect(text).to.include('fontWeight: FontWeight.w700');
+            expect(text).to.include('fontStyle: FontStyle.italic');
+            expect(text).to.include('decoration: TextDecoration.underline');
+            expect(button).to.include('constraints.minHeight > 20');
+            expect(button).not.to.include('constraints.minHeight > 0\n                    ? constraints.minHeight\n                    : 0, child:');
         });
 
         it('maps Flutter image, frame, input, border, radius, and CSS color styles', async function () {
@@ -540,7 +597,7 @@ describe('Specs', function () {
                     styles: {
                         width: 120, height: 80, objectFit: 'contain', borderRadius: '12px',
                         borderTopWidth: 1, borderRightWidth: 2, borderBottomWidth: 3, borderLeftWidth: 4,
-                        borderColor: '#1234', boxShadow: '0 2 8 0 rgba(0,0,0,0.25)',
+                        borderColor: '#1234', boxShadow: '0 2 8 0 rgba(0,0,0,0.25), 0 1.5 4.5 0 rgba(16,24,40,0.1)',
                     },
                     props: {src: 'asset://figma/photo.png'},
                 },
@@ -574,6 +631,8 @@ describe('Specs', function () {
             expect(image).to.include('Border(top: BorderSide(');
             expect(image).to.include('Color(0x44112233)');
             expect(image).to.include('boxShadow: <BoxShadow>[');
+            expect(image).to.include('blurRadius: 8');
+            expect(image).to.include('blurRadius: 4.5');
             expect(frame).to.include('topLeft: Radius.circular(2)');
             expect(frame).to.include('bottomLeft: Radius.circular(8)');
             expect(frame).to.include('ConstrainedBox(');
@@ -586,6 +645,30 @@ describe('Specs', function () {
             expect(input).to.include('topRight: Radius.circular(4)');
             expect(input).to.include('readOnly: true');
             expect(input).to.include('margin: EdgeInsets.fromLTRB(8, 4, 8, 4)');
+            expect(input).to.include('width: constraints.hasBoundedWidth ? null : 240');
+        });
+
+        it('preserves Figma linear-gradient paints through specs and Flutter decoration', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const styles = getContainerLikeStyles({
+                fills: [{
+                    type: 'GRADIENT_LINEAR', opacity: 0.8,
+                    gradientHandlePositions: [{x: 0, y: 0}, {x: 1, y: 0}],
+                    gradientStops: [
+                        {position: 0, color: {r: 1, g: 0, b: 0, a: 1}},
+                        {position: 1, color: {r: 0, g: 0, b: 1, a: 0.5}},
+                    ],
+                }],
+            });
+            expect(styles.backgroundGradient).to.equal('linear-gradient(90deg, rgba(255, 0, 0, 0.8) 0%, rgba(0, 0, 255, 0.4) 100%)');
+            const specPath = join(root, 'lib', 'blueprints', 'modules', 'gradient_card.yml');
+            await composeComponent({path: specPath, projectPath: root, data: {
+                base: 'container', modifier: {styles, props: {children: 'Gradient'}},
+            }});
+            const widget = await readFile(join(root, 'lib', 'modules', 'gradient_card.dart'), 'utf8');
+            expect(widget).to.include('gradient: LinearGradient(');
+            expect(widget).to.include('colors: <Color>[Color.fromRGBO(255, 0, 0, 0.8), Color.fromRGBO(0, 0, 255, 0.4)]');
+            expect(widget).to.include('stops: <double>[0, 1]');
         });
 
         it('retains service-computed Flutter styles without runtime override maps', async function () {
@@ -1066,7 +1149,12 @@ describe('Specs', function () {
             expect(routing).to.include("decision === 'cancel'");
             expect(routing).to.include('appState.set({route: resolved})');
             expect(routing).to.include("source = 'action'");
+            expect(routing).to.include("hash.startsWith('#/')");
+            expect(routing).to.include("window.onhashchange");
+            expect(routing).to.include("browserRouteUrl(resolved.name)");
             expect(appRoute).to.include('lazy(() => import(');
+            expect(appRoute).to.include('function currentLocationPath()');
+            expect(appRoute).to.include("window.location.hash.startsWith('#/')");
             expect(appRoute).to.include('getSheetRoute');
             expect(appRoute).to.include('surfacePresentations');
             expect(appRoute).to.include('data-fastui-surface');
@@ -1853,6 +1941,58 @@ describe('Specs', function () {
             expect(generated).to.match(/Expanded\(\s*child:\s*Container\([\s\S]*Color\(0xFFF5F5F5\)[\s\S]*Alignment\.topLeft/);
         });
 
+        it('matches CSS flex shrinking, Figma default cross-axis start alignment, and overflow clipping', async function () {
+            const moduleRoot = join(root, 'lib', 'blueprints', 'modules');
+            await composeComponent({path: join(moduleRoot, 'natural_child.yml'), projectPath: root, data: {
+                base: 'container', modifier: {styles: {width: 40, height: 40}}
+            }});
+            await composeComponent({path: join(moduleRoot, 'wide_child.yml'), projectPath: root, data: {
+                base: 'container', modifier: {styles: {width: 573}, props: {children: 'Wide'}}
+            }});
+            const composerPath = join(moduleRoot, 'css_flex_composer.yml');
+            await composeComponent({path: composerPath, projectPath: root, data: {
+                base: 'container',
+                modifier: {
+                    extend: ['./natural_child.yml', './wide_child.yml'],
+                    frame: {base: {type: 'row.start', styles: {alignItems: 'normal', overflow: 'hidden'}}},
+                },
+            }});
+            const generated = await readFile(join(root, 'lib', 'modules', 'css_flex_composer.dart'), 'utf8');
+            const wideChild = await readFile(join(root, 'lib', 'modules', 'wide_child.dart'), 'utf8');
+            expect(generated).to.include('fit: FlexFit.loose');
+            expect(generated).to.include("WideChild.fastUIWidthMode == 'fixed'");
+            expect(generated).to.include('crossAxisAlignment:\n                    CrossAxisAlignment.start');
+            expect(generated).to.include('ClipRect(');
+            expect(wideChild).to.include('fastUIConstraints.constrainWidth(573)');
+        });
+
+        it('maps Figma Auto Layout wrap to a Flutter Wrap rather than an overflowing Flex', async function () {
+            process.env.FASTUI_TEMPLATE = 'flutter';
+            const moduleRoot = join(root, 'lib', 'blueprints', 'modules');
+            await composeComponent({path: join(moduleRoot, 'wrap_card_a.yml'), projectPath: root, data: {
+                base: 'container', modifier: {styles: {width: 160, height: 80}},
+            }});
+            await composeComponent({path: join(moduleRoot, 'wrap_card_b.yml'), projectPath: root, data: {
+                base: 'container', modifier: {styles: {width: 160, height: 80}},
+            }});
+            await composeComponent({path: join(moduleRoot, 'wrap_grid.yml'), projectPath: root, data: {
+                base: 'container', modifier: {
+                    extend: ['./wrap_card_a.yml', './wrap_card_b.yml'],
+                    frame: {base: {type: 'row.start', styles: {
+                        flexWrap: 'wrap', spaceValue: 12, justifyContent: 'space-between', alignItems: 'center',
+                    }}},
+                },
+            }});
+            const generated = await readFile(join(root, 'lib', 'modules', 'wrap_grid.dart'), 'utf8');
+            expect(generated).to.include('Wrap(');
+            expect(generated).to.include('direction: Axis.horizontal');
+            expect(generated).to.include('spacing: 12');
+            expect(generated).to.include('runSpacing: 12');
+            expect(generated).to.include('alignment: WrapAlignment.spaceBetween');
+            expect(generated).to.include('crossAxisAlignment: WrapCrossAlignment.center');
+            expect(generated).not.to.include('Flexible(\n                            fit: FlexFit.loose');
+        });
+
         it('translates a plain Figma frame into a container composer with ordered extend children', async function () {
             const document = {children: [{
                 id: 'page', name: 'demo_page', type: 'FRAME', visible: true, layoutMode: 'VERTICAL',
@@ -1879,6 +2019,28 @@ describe('Specs', function () {
             const orderC = groupSpec.indexOf('./ic_C_text.yml');
             expect(orderA).to.be.lessThan(orderB);
             expect(orderB).to.be.lessThan(orderC);
+        });
+
+        it('uses Figma bounding boxes, not effect-expanded render bounds, for fixed layout dimensions', async function () {
+            const document = {children: [{
+                id: 'page', name: 'dialog_page', type: 'FRAME', visible: true, layoutMode: 'VERTICAL', children: [{
+                    id: 'dialog', name: 'Dialog_container', type: 'FRAME', layoutMode: 'VERTICAL',
+                    layoutSizingHorizontal: 'FIXED', layoutSizingVertical: 'FIXED',
+                    absoluteBoundingBox: {width: 400, height: 300},
+                    // A shadow may make its visual paint area larger, but not its
+                    // authored Figma layout rectangle.
+                    absoluteRenderBounds: {width: 440, height: 332},
+                    children: [],
+                }]
+            }]};
+            const srcPath = join(root, 'lib', 'blueprints');
+            const children = await getPagesAndTraverseChildren({document, srcPath});
+            await walkFrameChildren({children, srcPath});
+            const spec = await readFile(join(srcPath, 'modules', 'presentation', 'pages', 'idialog_Dialog_container.yml'), 'utf8');
+            expect(spec).to.include('width: 400');
+            expect(spec).to.include('height: 300');
+            expect(spec).not.to.include('width: 440');
+            expect(spec).not.to.include('height: 332');
         });
 
         it('translates neutral Figma navigation and generates Flutter overlays', async function () {
@@ -1951,9 +2113,15 @@ describe('Specs', function () {
             expect(runtime).to.include('showGeneralDialog<T>');
             expect(runtime).to.include('FastUINavigationDecisionType');
             expect(runtime).to.include('Future<bool> popRoute()');
+            expect(runtime).to.include("final fragment = routeInformation.uri.fragment");
+            expect(runtime).to.include("fragment.startsWith('/')");
             expect(runtime).to.include('ValueNotifier<FastUIRouteRef?> currentRoute');
+            expect(runtime).to.include('class _FastUIPageEntry');
+            expect(runtime).to.include('int _nextPageId = 1');
+            expect(runtime).to.include('key: ValueKey<int>(page.id)');
+            expect(runtime).not.to.include('key: ValueKey<String>(name)');
             expect(runtime).to.include('Material(type: MaterialType.transparency');
-            expect(runtime).to.include('child: FastUINavigation.surface(name)');
+            expect(runtime).to.include('child: FastUINavigation.surface(page.name)');
             expect(runtime).not.to.include('FastUIScrollableSurface');
             expect(runtime).to.include('presentation.safeArea');
             expect(runtime).to.include('presentation.barrierColor');

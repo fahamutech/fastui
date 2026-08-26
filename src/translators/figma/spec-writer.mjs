@@ -57,6 +57,32 @@ function toFrameShape(internalFrame, extraBaseStyles = {}) {
 }
 
 /**
+ * Figma materializes an INSTANCE with the visual Auto Layout properties of
+ * its MAIN COMPONENT. Those properties are inherited, not an instruction to
+ * add a second visual wrapper around the reused component. Carry only the
+ * instance's contract with its parent; the shared component remains the sole
+ * owner of padding, paint, radius, shadow, and its children’s alignment.
+ */
+function toInstanceFrameShape(internalFrame) {
+    if (!internalFrame) return undefined;
+    const styles = internalFrame.styles ?? {};
+    const parentLayout = Object.fromEntries(
+        ['flex', 'width', 'height', 'fallbackWidth', 'fallbackHeight']
+            .filter(key => styles[key] !== undefined)
+            .map(key => [key, styles[key]])
+    );
+    return {
+        base: {
+            type: internalFrame.base,
+            styles: parentLayout,
+        },
+        id: internalFrame.id,
+        current: {},
+        next: {},
+    };
+}
+
+/**
  * Derives a stable i18n translation key from a text string.
  * Lowercases, replaces non-alphanumeric runs with underscores, trims, and
  * caps at 40 characters so keys stay readable in translation files.
@@ -131,6 +157,9 @@ export async function createTextInputComponent(filename, child, type = 'text') {
     // stub for input business logic (validation, API calls, etc).
     // onChange remains a state.set action to keep value state updated live.
     const inputFn = logicsFnName(child);
+    // A placeholder is visual content, not a generator default. Preserve it
+    // only when the Figma input itself contains a visible TEXT layer.
+    const placeholderText = findInputPlaceholder(child);
     const yamlData = yaml.dump({
         component: {
             base: 'container',
@@ -148,7 +177,12 @@ export async function createTextInputComponent(filename, child, type = 'text') {
                     value: 'states.value',
                     onChange: `logics.${inputFn}_change`,
                     onSubmit: `logics.${inputFn}_submit`,
-                    placeholder: {translation: {key: translationKey('Type here'), fallback: 'Type here'}},
+                    ...(placeholderText
+                        ? {placeholder: {translation: {
+                            key: translationKey(placeholderText),
+                            fallback: placeholderText,
+                        }}}
+                        : {}),
                     id: sanitizeFullColon(`${child?.name}`)
                 },
                 states: {
@@ -162,6 +196,22 @@ export async function createTextInputComponent(filename, child, type = 'text') {
         }
     }, undefined);
     await writeFile(filename, yamlData);
+}
+
+function findInputPlaceholder(node) {
+    const visit = candidate => {
+        if (!candidate || candidate.visible === false) return undefined;
+        if (candidate.type === 'TEXT') {
+            const text = `${candidate.characters ?? ''}`.trim();
+            return text || undefined;
+        }
+        for (const child of candidate.children ?? []) {
+            const text = visit(child);
+            if (text) return text;
+        }
+        return undefined;
+    };
+    return visit(node);
 }
 
 export async function createContainerComponent(filename, child, backgroundImage) {
@@ -253,7 +303,7 @@ export async function createInstanceComponent({filename, child, srcPath, sharedC
                 },
                 states: Object.keys(behavior.states).length > 0 ? behavior.states : undefined,
                 metadata: child?.surfacePresentation ? {surface: child.surfacePresentation} : undefined,
-                frame: toFrameShape(child?.mainFrame),
+                frame: toInstanceFrameShape(child?.mainFrame),
             }
         }
     }, undefined);

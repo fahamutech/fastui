@@ -37,6 +37,19 @@ function normalizeRoute(route, fallbackType = 'page') {
   return {...route, name: route?.name ? String(route.name).replace(/^\\//, '') : undefined, type};
 }
 
+function browserRouteName() {
+  if (typeof window === 'undefined') return '';
+  const hash = window.location.hash;
+  const path = hash.startsWith('#/') ? hash.slice(2) : window.location.pathname.replace(/^\\//, '');
+  return path.split(/[?#]/, 1)[0];
+}
+
+function browserRouteUrl(name) {
+  return typeof window !== 'undefined' && window.location.hash.startsWith('#/')
+    ? '/#/' + name
+    : '/' + name;
+}
+
 async function guardNavigation(intent) {
   const result = await beforeNavigate(intent);
   if (result === false || result?.decision === 'cancel') return {decision: 'cancel'};
@@ -76,7 +89,7 @@ export async function setCurrentRoute(route, pushToHistory = true, source = 'act
   routeEvents.next(resolved);
   if (pushToHistory && resolved.type === 'page' && typeof window !== 'undefined') {
     const method = resolved.replace ? 'replaceState' : 'pushState';
-    window.history[method]({fastuiRoute: resolved}, '', '/' + resolved.name);
+    window.history[method]({fastuiRoute: resolved}, '', browserRouteUrl(resolved.name));
   }
   return true;
 }
@@ -91,8 +104,10 @@ export function getCurrentRouteValue() {
 
 if (typeof window !== 'undefined') {
   window.onpopstate = event => {
-    const path = window.location.pathname.replace(/^\\//, '');
-    void setCurrentRoute(event.state?.fastuiRoute ?? {name: path, type: 'page'}, false, 'browser');
+    void setCurrentRoute(event.state?.fastuiRoute ?? {name: browserRouteName(), type: 'page'}, false, 'browser');
+  };
+  window.onhashchange = () => {
+    void setCurrentRoute({name: browserRouteName(), type: 'page'}, false, 'browser');
   };
 }
 `;
@@ -170,6 +185,13 @@ ${pathTypeCases}
   }
 }
 
+function currentLocationPath() {
+  const hashPath = window.location.hash.startsWith('#/')
+    ? window.location.hash.slice(1)
+    : '';
+  return hashPath || window.location.pathname;
+}
+
 export function AppRoute() {
   const [currentPage, setCurrentPage] = useState('');
   const [currentDialog, setCurrentDialog] = useState();
@@ -188,9 +210,10 @@ export function AppRoute() {
   }, []);
 
   useEffect(() => {
+    const path = currentLocationPath();
     void setCurrentRoute({
-      name: handlePathToRouteName(window.location.pathname),
-      type: handlePathToRouteType(window.location.pathname),
+      name: handlePathToRouteName(path),
+      type: handlePathToRouteType(path),
     }, false, 'initial');
   }, []);
 

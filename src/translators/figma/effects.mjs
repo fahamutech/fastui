@@ -17,17 +17,18 @@ export function getBackgroundBlurEffect(child) {
  * inner shadow effect.
  */
 export function getDropShadowEffect(child) {
-    const effect = itOrEmptyList(child?.effects).find(x => x?.type === 'DROP_SHADOW')
-        ?? itOrEmptyList(child?.effects).find(x => x?.type === 'INNER_SHADOW');
-    const inner = effect?.type === 'INNER_SHADOW' ? 'inset' : '';
-    const x = effect?.offset?.x ?? 0;
-    const y = effect?.offset?.y ?? 0;
-    const radius = effect?.radius ?? 0;
-    const spread = effect?.spread ?? 0;
-    const color = getColor([{type: 'SOLID', color: {...effect?.color ?? {}}}]);
-    return effect && effect.visible !== false
-        ? `${inner} ${x}px ${y}px ${radius}px ${spread}px ${color}`.trim()
-        : undefined;
+    const shadows = itOrEmptyList(child?.effects)
+        .filter(effect => effect?.visible !== false && ['DROP_SHADOW', 'INNER_SHADOW'].includes(effect?.type))
+        .map(effect => {
+            const inner = effect.type === 'INNER_SHADOW' ? 'inset' : '';
+            const x = effect?.offset?.x ?? 0;
+            const y = effect?.offset?.y ?? 0;
+            const radius = effect?.radius ?? 0;
+            const spread = effect?.spread ?? 0;
+            const color = getColor([{type: 'SOLID', color: {...effect?.color ?? {}}}]);
+            return `${inner} ${x}px ${y}px ${radius}px ${spread}px ${color}`.trim();
+        });
+    return shadows.length ? shadows.join(', ') : undefined;
 }
 
 /**

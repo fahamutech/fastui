@@ -22,6 +22,33 @@ const cachedResourceValid = async resource => {
 };
 const sleep = ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms));
 
+function visiblePaint(paint) {
+    return paint?.visible !== false && (paint?.opacity ?? 1) > 0 && (paint?.color?.a ?? 1) > 0;
+}
+
+export function isInertFigmaVector(node) {
+    const box = node?.absoluteBoundingBox ?? node?.size ?? {};
+    const width = Number(box.width ?? box.x ?? 0);
+    const height = Number(box.height ?? box.y ?? 0);
+    const hasExplicitSize = Number.isFinite(width) && Number.isFinite(height) &&
+        (Object.hasOwn(box, 'width') || Object.hasOwn(box, 'x')) &&
+        (Object.hasOwn(box, 'height') || Object.hasOwn(box, 'y'));
+    const paints = [...(node?.fills ?? []), ...(node?.strokes ?? [])];
+    return (hasExplicitSize && (width <= 0.01 || height <= 0.01)) ||
+        (paints.length > 0 && !paints.some(visiblePaint));
+}
+
+function vectorFallbackSvg(item) {
+    const node = item?.nodes?.[0];
+    const name = `${node?.name ?? item?.name ?? ''}`.toLowerCase();
+    if (!/(?:^|[_-])expand[_-]?more(?:$|[_-])/.test(name)) return undefined;
+    const paint = [...(node?.fills ?? []), ...(node?.strokes ?? [])].find(visiblePaint);
+    const color = paint?.color ?? {};
+    const alpha = Math.max(0, Math.min(1, (paint?.opacity ?? 1) * (color.a ?? 1)));
+    const fill = `rgba(${Math.round((color.r ?? 0) * 255)},${Math.round((color.g ?? 0) * 255)},${Math.round((color.b ?? 0) * 255)},${alpha})`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path fill="${fill}" d="M.7.7 5 5l4.3-4.3L10 1.4 5 6 0 1.4z"/></svg>`;
+}
+
 function normalizeWeight(value) {
     const weight = Number(value);
     if (!Number.isFinite(weight)) return 400;
@@ -49,7 +76,7 @@ export function discoverFigmaResources(document) {
             const ref = paint?.imageRef ?? paint?.gifRef;
             if (ref) addUsage(images, ref, {kind: 'image', ref}, node);
         }
-        if (node.type === 'VECTOR') {
+        if (node.type === 'VECTOR' && !isInertFigmaVector(node)) {
             const name = vectorResourceName(node);
             addUsage(vectors, `${node.id}`, {kind: 'vector', nodeId: node.id, name, format: 'svg'}, node);
         }
@@ -457,7 +484,17 @@ export async function reconcileFigmaResources({document, token, figFile, project
         if (!fresh && await cachedResourceValid(old)) { resources[item.key] = old; summary.cached++; return; }
         if (!item.url) {
             if (await cachedResourceValid(old)) { resources[item.key] = old; summary.cached++; }
-            else unresolved.push({...item, reason: token ? 'Figma did not return a resource URL' : 'FIGMA_TOKEN is unavailable'});
+            else {
+                const fallback = item.kind === 'vector' ? vectorFallbackSvg(item) : undefined;
+                if (fallback) {
+                    const file = `${item.base}.svg`;
+                    await atomicWrite(file, fallback);
+                    resources[item.key] = {...item, file, sha256: sha256(fallback), fallback: true};
+                    summary.downloaded++;
+                } else {
+                    unresolved.push({...item, reason: token ? 'Figma did not return a resource URL' : 'FIGMA_TOKEN is unavailable'});
+                }
+            }
             return;
         }
         try {

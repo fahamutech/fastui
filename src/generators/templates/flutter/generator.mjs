@@ -731,6 +731,35 @@ function backgroundImage(styles) {
     return `DecorationImage(image: ${provider}, fit: BoxFit.${fit}, alignment: Alignment.${alignment})`;
 }
 
+function linearGradient(styles) {
+    const raw = `${styles.backgroundGradient ?? ''}`.trim();
+    const header = raw.match(/^linear-gradient\(\s*(-?[\d.]+)deg\s*,/i);
+    if (!header) return null;
+    const colorPattern = /rgba?\([^)]*\)|#[0-9a-f]{3,8}/gi;
+    const colors = [];
+    const stops = [];
+    let match;
+    while ((match = colorPattern.exec(raw))) {
+        const color = colorExpression(match[0]);
+        if (!color) continue;
+        const tail = raw.slice(colorPattern.lastIndex).match(/^\s*([\d.]+)%/);
+        colors.push(color);
+        stops.push(tail ? Math.max(0, Math.min(1, Number(tail[1]) / 100)) : null);
+    }
+    if (colors.length < 2) return null;
+
+    const angle = Number(header[1]) * Math.PI / 180;
+    // CSS 0deg points up; Flutter's Alignment y-axis points down.
+    const beginX = Number((-Math.sin(angle)).toFixed(6));
+    const beginY = Number((Math.cos(angle)).toFixed(6));
+    const endX = Number((Math.sin(angle)).toFixed(6));
+    const endY = Number((-Math.cos(angle)).toFixed(6));
+    const stopArg = stops.every(Number.isFinite)
+        ? `, stops: <double>[${stops.join(', ')}]`
+        : '';
+    return `LinearGradient(begin: Alignment(${beginX}, ${beginY}), end: Alignment(${endX}, ${endY}), colors: <Color>[${colors.join(', ')}]${stopArg})`;
+}
+
 function backdropBlur(styles) {
     const match =
         `${styles.backdropFilter ?? styles.WebkitBackdropFilter ?? ''}`
@@ -783,10 +812,24 @@ function applyLayerBlur(styles, child) {
           )`;
 }
 
-function boxShadowExpression(styles) {
-    const raw =
-        `${styles.boxShadow ?? ''}`
-            .trim();
+function splitCssShadowList(value) {
+    const parts = [];
+    let start = 0;
+    let depth = 0;
+    for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === '(') depth += 1;
+        else if (value[index] === ')') depth = Math.max(0, depth - 1);
+        else if (value[index] === ',' && depth === 0) {
+            parts.push(value.slice(start, index).trim());
+            start = index + 1;
+        }
+    }
+    parts.push(value.slice(start).trim());
+    return parts.filter(Boolean);
+}
+
+function boxShadowExpression(raw) {
+    raw = `${raw ?? ''}`.trim();
 
     if (
         !raw ||
@@ -849,6 +892,17 @@ function boxShadowExpression(styles) {
         blurRadius: ${blur},
         spreadRadius: ${spread}${colorArg}
     )`;
+}
+
+function boxShadowExpressions(styles) {
+    const raw = `${styles.boxShadow ?? ''}`.trim();
+    if (!raw || raw === 'none') return [];
+    return splitCssShadowList(raw)
+        // BoxDecoration has no inner-shadow equivalent. Keep exterior shadow
+        // fidelity and leave inset effects for a future CustomPainter path.
+        .filter(value => !/^inset\b/i.test(value))
+        .map(boxShadowExpression)
+        .filter(Boolean);
 }
 
 function applyOpacityWrap(
@@ -991,13 +1045,17 @@ function containerExpression(
 
     if (width) {
         args.push(
-            `width: ${width}`
+            `width: fastUIConstraints.hasBoundedWidth
+                ? fastUIConstraints.constrainWidth(${width})
+                : ${width}`
         );
     }
 
     if (height) {
         args.push(
-            `height: ${height}`
+            `height: fastUIConstraints.hasBoundedHeight
+                ? fastUIConstraints.constrainHeight(${height})
+                : ${height}`
         );
     }
 
@@ -1048,9 +1106,12 @@ function containerExpression(
         );
     }
 
-    const shadow = boxShadowExpression(styles);
-    if (shadow) {
-        decoration.push(`boxShadow: <BoxShadow>[${shadow}]`);
+    const gradient = linearGradient(styles);
+    if (gradient) decoration.push(`gradient: ${gradient}`);
+
+    const shadows = boxShadowExpressions(styles);
+    if (shadows.length) {
+        decoration.push(`boxShadow: <BoxShadow>[${shadows.join(', ')}]`);
     }
 
     const radius =
@@ -1114,9 +1175,16 @@ function containerExpression(
         return 'const SizedBox.shrink()';
     }
 
+    const hasWrapperOnlyStyle =
+        ['overflow', 'overflowX', 'overflowY', 'opacity', 'filter',
+            'backdropFilter', 'WebkitBackdropFilter',
+            'minWidth', 'maxWidth', 'minHeight', 'maxHeight']
+            .some(key => Object.prototype.hasOwnProperty.call(styles, key));
+
     if (
         !fillWidth &&
         !fillHeight &&
+        !hasWrapperOnlyStyle &&
         backdropBlur(styles) === null &&
         args.length === 1 &&
         child !== 'null' &&
@@ -1146,7 +1214,12 @@ function containerExpression(
         !fillWidth &&
         !fillHeight
     ) {
-        return styledContainer;
+        return width || height
+            ? `LayoutBuilder(
+                builder: (context, fastUIConstraints) =>
+                    ${styledContainer}
+              )`
+            : styledContainer;
     }
 
     const fallbackWidth =
@@ -1173,18 +1246,18 @@ function containerExpression(
 
     const sizes = [
         fillWidth
-            ? `width: constraints.hasBoundedWidth
-                ? constraints.maxWidth
-                : constraints.minWidth > ${fallbackWidth}
-                    ? constraints.minWidth
+            ? `width: fastUIConstraints.hasBoundedWidth
+                ? fastUIConstraints.maxWidth
+                : fastUIConstraints.minWidth > ${fallbackWidth}
+                    ? fastUIConstraints.minWidth
                     : ${fallbackWidth}`
             : '',
 
         fillHeight
-            ? `height: constraints.hasBoundedHeight
-                ? constraints.maxHeight
-                : constraints.minHeight > ${fallbackHeight}
-                    ? constraints.minHeight
+            ? `height: fastUIConstraints.hasBoundedHeight
+                ? fastUIConstraints.maxHeight
+                : fastUIConstraints.minHeight > ${fallbackHeight}
+                    ? fastUIConstraints.minHeight
                     : ${fallbackHeight}`
             : '',
 
@@ -1194,7 +1267,7 @@ function containerExpression(
         .join(', ');
 
     return `LayoutBuilder(
-        builder: (context, constraints) =>
+        builder: (context, fastUIConstraints) =>
             SizedBox(
               ${sizes}
             )
@@ -1212,20 +1285,29 @@ function textStyleProperties(styles = {}) {
     if (color) properties.push(`color: ${color}`);
     const fontSize = parsePxValue(styles.fontSize);
     if (Number.isFinite(fontSize)) properties.push(`fontSize: ${fontSize}`);
-    const rawWeight = Number(styles.fontWeight);
+    const namedWeights = {
+        thin: 100, extralight: 200, ultralight: 200, light: 300,
+        normal: 400, regular: 400, medium: 500, semibold: 600,
+        demibold: 600, bold: 700, extrabold: 800, ultrabold: 800,
+        black: 900, heavy: 900,
+    };
+    const normalizedWeight = `${styles.fontWeight ?? ''}`.replace(/[\s_-]/g, '').toLowerCase();
+    const rawWeight = Number.isFinite(Number(styles.fontWeight))
+        ? Number(styles.fontWeight)
+        : namedWeights[normalizedWeight];
     if (Number.isFinite(rawWeight)) {
         const weight = Math.max(100, Math.min(900, Math.round(rawWeight / 100) * 100));
         properties.push(`fontWeight: FontWeight.w${weight}`);
     }
     if (styles.fontFamily) properties.push(`fontFamily: ${dartString(styles.fontFamily)}`);
-    if (`${styles.fontStyle}`.toLowerCase() === 'italic') properties.push('fontStyle: FontStyle.italic');
+    if (`${styles.fontStyle ?? styles.italic ?? ''}`.toLowerCase() === 'italic' || styles.italic === true) properties.push('fontStyle: FontStyle.italic');
     const letterSpacing = parsePxValue(styles.letterSpacing);
     if (Number.isFinite(letterSpacing)) properties.push(`letterSpacing: ${letterSpacing}`);
     const lineHeight = parsePxValue(styles.lineHeightPx ?? styles.lineHeight);
     if (Number.isFinite(lineHeight) && Number.isFinite(fontSize) && fontSize > 0) {
         properties.push(`height: ${lineHeight / fontSize}`);
     }
-    const decoration = `${styles.textDecoration ?? ''}`.toLowerCase();
+    const decoration = `${styles.textDecoration ?? styles.textDecorationLine ?? ''}`.toLowerCase();
     if (decoration.includes('underline')) properties.push('decoration: TextDecoration.underline');
     else if (decoration.includes('line-through')) properties.push('decoration: TextDecoration.lineThrough');
     return properties;
@@ -1535,9 +1617,13 @@ function applyInteractions(
         typeof onClick ===
         'object'
     ) {
-        return `GestureDetector(
-            onTap: ${interactionHandler(onClick)},
-            child: ${body}
+        return `Material(
+            color: Colors.transparent,
+            child: InkWell(
+                mouseCursor: SystemMouseCursors.click,
+                onTap: ${interactionHandler(onClick)},
+                child: ${body}
+            )
         )`;
     }
 
@@ -1547,10 +1633,14 @@ function applyInteractions(
             onClick
         )
     )
-        ? `GestureDetector(
-            onTap: () =>
-                ${logicCall(onClick)},
-            child: ${body}
+        ? `Material(
+            color: Colors.transparent,
+            child: InkWell(
+                mouseCursor: SystemMouseCursors.click,
+                onTap: () =>
+                    ${logicCall(onClick)},
+                child: ${body}
+            )
           )`
         : body;
 }
@@ -1741,6 +1831,23 @@ function inputExpression(data) {
             ${args.join(', ')}
         )`;
 
+    // Text fields cannot lay themselves out with an infinite horizontal
+    // constraint. This happens when an auto-width input is a child of a
+    // shrink-wrapped Row. Keep the configured width when there is one, and
+    // otherwise give the field a practical finite fallback in that case.
+    const configuredWidth = parsePxValue(styles.width);
+    const unconstrainedWidth =
+        Number.isFinite(configuredWidth) && configuredWidth > 0
+            ? configuredWidth
+            : 240;
+    const constrainedField = `LayoutBuilder(
+        builder: (context, constraints) =>
+            SizedBox(
+                width: constraints.hasBoundedWidth ? null : ${unconstrainedWidth},
+                child: ${field}
+            )
+    )`;
+
     const outerStyles = {...styles};
     for (const key of Object.keys(outerStyles)) {
         if (key === 'padding' || key.startsWith('padding') || key === 'background' || key === 'backgroundColor' || key.startsWith('border')) {
@@ -1749,7 +1856,7 @@ function inputExpression(data) {
     }
     // Radius remains useful for a matching shadow shape.
     if (styles.borderRadius !== undefined) outerStyles.borderRadius = styles.borderRadius;
-    return containerExpression(outerStyles, field);
+    return containerExpression(outerStyles, constrainedField);
 }
 
 
@@ -1965,7 +2072,7 @@ function mainAxis(value) {
     }`;
 }
 
-function crossAxis(value) {
+function crossAxis(value, {isRow = false, adaptiveNormal = false} = {}) {
     const map = {
         center: 'center',
         'flex-end': 'end',
@@ -1973,10 +2080,41 @@ function crossAxis(value) {
         baseline: 'baseline'
     };
 
-    return `CrossAxisAlignment.${
-        map[value] ??
-        'start'
-    }`;
+    if (map[value]) {
+        return `CrossAxisAlignment.${map[value]}`;
+    }
+
+    // Figma's absent/default counter-axis alignment is MIN (start), not
+    // Flutter's stretch. Stretching it forces fixed Figma children—such as a
+    // 200px avatar inside a padded form column—to the parent width and then
+    // changes the crop of their image fills. Nodes declared FILL already
+    // retain their own width/height contract through frame sizing.
+    if (adaptiveNormal) return 'CrossAxisAlignment.start';
+
+    return 'CrossAxisAlignment.start';
+}
+
+function wrapAlignment(value) {
+    const map = {
+        center: 'center',
+        'flex-end': 'end',
+        end: 'end',
+        'space-between': 'spaceBetween',
+        'space-around': 'spaceAround',
+        'space-evenly': 'spaceEvenly',
+        stretch: 'start',
+    };
+    return `WrapAlignment.${map[value] ?? 'start'}`;
+}
+
+function wrapCrossAxis(value) {
+    const map = {
+        center: 'center',
+        'flex-end': 'end',
+        end: 'end',
+        baseline: 'baseline',
+    };
+    return `WrapCrossAlignment.${map[value] ?? 'start'}`;
 }
 
 function alignedContent(
@@ -2367,6 +2505,7 @@ const LAYOUT_ONLY_KEYS =
         'justifyContent',
         'alignItems',
         'flexDirection',
+        'flexWrap',
         'flex',
         'fallbackWidth',
         'fallbackHeight'
@@ -2557,6 +2696,15 @@ function composeFrame(
             baseStyles
         );
 
+    // Preserve Figma's fallback dimension on the styling wrapper. Without it,
+    // a 100% height child in an unbounded Row is emitted as height zero.
+    if (baseStyles.fallbackWidth !== undefined) {
+        baseContainerStyles.fallbackWidth = baseStyles.fallbackWidth;
+    }
+    if (baseStyles.fallbackHeight !== undefined) {
+        baseContainerStyles.fallbackHeight = baseStyles.fallbackHeight;
+    }
+
     const fillWidth =
         fillsAxis(
             baseStyles.width,
@@ -2662,6 +2810,31 @@ function composeFrame(
         );
     }
 
+    // A one-child frame is layout-neutral. Keeping a synthetic Row/Column
+    // makes Flutter lay the child out at its intrinsic main-axis size, even
+    // when the frame itself fills the available space. That breaks inherited
+    // Figma instances such as a full-width page header: the inherited header
+    // receives only its intrinsic width, so its FILL title cannot push its
+    // trailing action to the right edge. Apply any frame styling directly to
+    // the child instead, which preserves the parent's bounded constraints.
+    if (
+        extendRefs.length === 0 &&
+        ownHasContent &&
+        !currentFlexible
+    ) {
+        const wrapped =
+            Object.keys(baseContainerStyles).length > 0
+                ? containerExpression(
+                    baseContainerStyles,
+                    currentWidget
+                )
+                : currentWidget;
+        return applyScrollableArea(
+            scroll,
+            wrapped
+        );
+    }
+
     const isEnd =
         `${base ?? ''}`
             .toLowerCase()
@@ -2711,6 +2884,29 @@ function composeFrame(
         nextAxisMode ===
         'fixed';
 
+    const growableChildExpression = [
+        currentFlexible
+            ? 'true'
+            : null,
+        ...nextWidgets.map(({ref}) => `(
+                            ${ref.className}.fastUIFlex > 0
+                            ||
+                            ${ref.className}.${childAxisModeMember} == 'fill'
+                        )`)
+    ]
+        .filter(Boolean)
+        .join(' || ') || 'false';
+
+    const shrinkAutoChildren =
+        isRow &&
+        extendRefs.length === 1 &&
+        ['hidden', 'clip']
+            .includes(
+                `${baseStyles.overflow ?? ''}`
+                    .trim()
+                    .toLowerCase()
+            );
+
     const nextItems =
         nextWidgets.map(
             ({
@@ -2746,6 +2942,27 @@ function composeFrame(
 
                 return `
                     if (
+                        ${bounded}
+                        &&
+                        (
+                            ${axisMode} == 'fixed'
+                            ||
+                            ${
+                                shrinkAutoChildren
+                                    ? `${axisMode} == 'auto'`
+                                    : 'false'
+                            }
+                        )
+                        &&
+                        !${scrollMatchesParent}
+                        &&
+                        !(${growableChildExpression})
+                    )
+                        Flexible(
+                            fit: FlexFit.loose,
+                            child: ${widget}
+                        )
+                    else if (
                         ${bounded}
                         &&
                         ${ref.className}.fastUIFlex > 0
@@ -2856,6 +3073,32 @@ function composeFrame(
             baseContainerStyles
         ).length > 0;
 
+    // CSS flex-wrap is a first-class Figma Auto Layout semantic. A Row or
+    // Column cannot reproduce it: it keeps laying children on one run and
+    // produces overflow. Flutter's Wrap is the corresponding primitive. Do
+    // not feed Row/Column's Flexible wrappers into Wrap because they require
+    // a Flex ancestor; use each component's real sized widget instead.
+    const wraps = `${baseStyles.flexWrap ?? ''}`.trim().toLowerCase() === 'wrap';
+    if (wraps) {
+        const wrapChildren = [
+            ...(ownHasContent ? [currentWidget] : []),
+            ...nextWidgets.map(item => item.widget),
+        ];
+        const wrap = `Wrap(
+            direction: Axis.${isRow ? 'horizontal' : 'vertical'},
+            spacing: ${Number.isFinite(gap) && gap > 0 ? gap : 0},
+            runSpacing: ${Number.isFinite(gap) && gap > 0 ? gap : 0},
+            alignment: ${wrapAlignment(justifyContent)},
+            runAlignment: ${wrapAlignment(justifyContent)},
+            crossAxisAlignment: ${wrapCrossAxis(alignItems)},
+            children: [${wrapChildren.join(', ')}]
+        )`;
+        const wrapped = hasBaseContainerStyles
+            ? containerExpression(baseContainerStyles, wrap)
+            : wrap;
+        return applyScrollableArea(scroll, wrapped);
+    }
+
     const buildRowCol =
         boundedExpr => {
             const ms =
@@ -2874,7 +3117,7 @@ function composeFrame(
                 mainAxisAlignment:
                     ${mainAxis(justifyContent)},
                 crossAxisAlignment:
-                    ${crossAxis(alignItems)},
+                    ${crossAxis(alignItems, {isRow, adaptiveNormal: true})},
                 children: [
                     ${ordered.join(', ')}
                 ]
@@ -4273,6 +4516,16 @@ function loopExpression(
         stripLayoutKeys(
             frameStyles
         );
+
+    // A 100% loop cross-axis is often placed in an unbounded Flutter flex.
+    // Keep the exported Figma fallback so it retains the design height/width
+    // instead of collapsing to zero.
+    if (frameStyles.fallbackWidth !== undefined) {
+        frameContainerStyles.fallbackWidth = frameStyles.fallbackWidth;
+    }
+    if (frameStyles.fallbackHeight !== undefined) {
+        frameContainerStyles.fallbackHeight = frameStyles.fallbackHeight;
+    }
 
     /*
      * Already consumed by loop renderer.

@@ -3,7 +3,7 @@
 import {createRequire} from 'node:module';
 import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
-import {routeFromSurfaceName} from '../src/services/navigation.mjs';
+import {routeFromSurfaceName} from '../src/shared/routing.mjs';
 
 const require = createRequire(import.meta.url);
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
@@ -32,7 +32,12 @@ const surfaces = (data.document?.children ?? [])
     .filter(surface => requestedRoutes.size === 0 || requestedRoutes.has(surface.name));
 
 await mkdir(outputPath, {recursive: true});
-const browser = await chromium.launch({headless: true});
+const browser = await chromium.launch({
+    headless: true,
+    ...(process.env.FASTUI_PLAYWRIGHT_CHANNEL
+        ? {channel: process.env.FASTUI_PLAYWRIGHT_CHANNEL}
+        : {}),
+});
 const errors = [];
 
 const captured = [];
@@ -42,17 +47,36 @@ for (const surface of surfaces) {
         deviceScaleFactor: 1,
     });
     page.on('console', message => {
-        if (message.type() === 'error' || message.type() === 'warning') {
+        // Network failures are collected below with their URL and HTTP status.
+        // Chromium otherwise emits a context-free console error for a missing
+        // favicon, which makes a healthy generated surface look broken.
+        if (
+            (message.type() === 'error' || message.type() === 'warning') &&
+            !message.text().startsWith('Failed to load resource:') &&
+            // Flutter Web can emit this before an isolated cold page has
+            // registered its lifecycle listener. It is a framework startup
+            // diagnostic, not an application/rendering failure.
+            !message.text().startsWith('A message on the flutter/lifecycle channel was discarded')
+        ) {
             errors.push(`${surface.name}: ${message.type()}: ${message.text()}`);
         }
     });
+    page.on('response', response => {
+        if (response.status() >= 400 && !response.url().endsWith('/favicon.ico')) {
+            errors.push(`${surface.name}: resource ${response.status()}: ${response.url()}`);
+        }
+    });
     page.on('pageerror', error => errors.push(`${surface.name}: pageerror: ${error.message}`));
-    if (platform === 'reactjs') {
-        await page.goto(`${baseUrl}/${surface.name}`, {waitUntil: 'domcontentloaded'});
-    } else {
-        await page.goto(`${baseUrl}/#/${surface.name}`, {waitUntil: 'domcontentloaded'});
-    }
-    await page.waitForTimeout(Number.isFinite(waitMs) ? waitMs : platform === 'flutter' ? 2500 : 1000);
+    // Both generated targets use hash routing on the web.  A path URL leaves
+    // React at its initial route and makes a visual audit silently invalid.
+    await page.goto(`${baseUrl}/#/${surface.name}`, {waitUntil: 'domcontentloaded'});
+    // A new Flutter web page has to initialize CanvasKit before it paints its
+    // first frame.  The capture loop deliberately opens an isolated page for
+    // every Figma surface, so the old 2.5s default could save an all-white
+    // canvas and incorrectly mark the visual audit as successful. Keep an
+    // explicit FASTUI_WAIT_MS override for fast local runs, but use a cold
+    // start-safe default for evidence-producing Flutter captures.
+    await page.waitForTimeout(Number.isFinite(waitMs) ? waitMs : platform === 'flutter' ? 10000 : 1000);
     const filename = `${surface.name}_${surface.type}.png`;
     await page.screenshot({path: resolve(outputPath, filename), animations: 'disabled'});
     const layout = await page.evaluate(() => ({

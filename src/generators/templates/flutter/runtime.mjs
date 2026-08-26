@@ -119,32 +119,52 @@ class FastUIRouteInformationParser extends RouteInformationParser<String> {
   const FastUIRouteInformationParser();
 
   @override
-  Future<String> parseRouteInformation(RouteInformation routeInformation) async =>
-      routeInformation.uri.path.replaceFirst(RegExp(r'^/'), '');
+  Future<String> parseRouteInformation(RouteInformation routeInformation) async {
+    // Flutter web's default URL strategy stores #/route in the fragment.
+    // Prefer that route when present, while retaining path-strategy support.
+    final fragment = routeInformation.uri.fragment;
+    final route = fragment.startsWith('/')
+        ? fragment
+        : routeInformation.uri.path;
+    return route.replaceFirst(RegExp(r'^/'), '');
+  }
 
   @override
   RouteInformation restoreRouteInformation(String configuration) =>
       RouteInformation(uri: Uri(path: '/\$configuration'));
 }
 
+class _FastUIPageEntry {
+  const _FastUIPageEntry({required this.name, required this.id});
+
+  final String name;
+  final int id;
+}
+
 class FastUIRouterDelegate extends RouterDelegate<String>
     with ChangeNotifier, PopNavigatorRouterDelegateMixin<String> {
-  FastUIRouterDelegate({required String initialRoute}) : _pages = <String>[initialRoute];
+  FastUIRouterDelegate({required String initialRoute})
+      : _pages = <_FastUIPageEntry>[
+          _FastUIPageEntry(name: initialRoute, id: 0),
+        ];
 
-  final List<String> _pages;
+  final List<_FastUIPageEntry> _pages;
+  int _nextPageId = 1;
 
   @override
   final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
   BuildContext? get overlayContext => navigatorKey.currentContext;
-  String get currentName => _pages.last;
+  String get currentName => _pages.last.name;
 
   @override
   String get currentConfiguration => currentName;
 
   void open(String name, {bool replace = false}) {
     if (replace && _pages.isNotEmpty) _pages.removeLast();
-    if (_pages.isEmpty || _pages.last != name) _pages.add(name);
+    if (_pages.isEmpty || _pages.last.name != name) {
+      _pages.add(_FastUIPageEntry(name: name, id: _nextPageId++));
+    }
     notifyListeners();
   }
 
@@ -167,10 +187,10 @@ class FastUIRouterDelegate extends RouterDelegate<String>
   @override
   Widget build(BuildContext context) => Navigator(
     key: navigatorKey,
-    pages: _pages.map((name) => MaterialPage<void>(
-      key: ValueKey<String>(name),
-      name: '/\$name',
-      child: FastUINavigation.surface(name),
+    pages: _pages.map((page) => MaterialPage<void>(
+      key: ValueKey<int>(page.id),
+      name: '/\${page.name}',
+      child: FastUINavigation.surface(page.name),
     )).toList(),
     onDidRemovePage: (_) {},
   );

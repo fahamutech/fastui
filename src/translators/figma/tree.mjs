@@ -20,6 +20,7 @@ import {getBackgroundBlurEffect, getDropShadowEffect, getLayerBlurEffect} from '
 import {getColor} from './color.mjs';
 import {collectSharedComponents} from './shared-components.mjs';
 import {configureAssetDownloads, getFigmaImagePath} from './assets.mjs';
+import {isInertFigmaVector} from './resources.mjs';
 import {
     createContainerComponent,
     createConditionComponent,
@@ -28,6 +29,7 @@ import {
     createInstanceComponent,
     createLoopComponent,
     createTextComponent,
+    createTextInputComponent,
     createVectorComponent,
     handleRectangleComponent,
 } from './spec-writer.mjs';
@@ -72,7 +74,10 @@ let sharedComponentMap = {};
 async function transformFrameChildren({frame, module, isLoopElement, token, figFile, srcPath}) {
     const children = [];
     const isCondition = getBaseType(frame) === 'condition';
-    let fChildren = frame?.children?.filter(x => (x?.visible ?? true) || isCondition) ?? [];
+    let fChildren = frame?.children?.filter(x =>
+        ((x?.visible ?? true) || isCondition) &&
+        !(x?.type === 'VECTOR' && isInertFigmaVector(x))
+    ) ?? [];
     if (isCondition) {
         fChildren = fChildren.map(x => ({...x, visible: true, absoluteRenderBounds: x?.absoluteBoundingBox}));
     }
@@ -132,15 +137,19 @@ async function transformFrameChildren({frame, module, isLoopElement, token, figF
                         flex: flexForAxis,
                         justifyContent: transformLayoutAxisAlign(child?.primaryAxisAlignItems),
                         alignItems: transformLayoutAxisAlign(child?.counterAxisAlignItems),
-                        width: child?.selectedSurfaceRoot ? '100%' : getSize(child?.layoutSizingHorizontal, child?.absoluteRenderBounds?.width)
+                        // Render bounds include shadows, blur and other visual
+                        // effects. They must never drive layout: doing so makes a
+                        // fixed 400px Figma dialog become a 440px Flutter/CSS box
+                        // when its shadow extends 20px on both sides.
+                        width: child?.selectedSurfaceRoot ? '100%' : getSize(child?.layoutSizingHorizontal, child?.absoluteBoundingBox?.width ?? child?.absoluteRenderBounds?.width)
                             ?? (frame?.layoutMode === 'VERTICAL' && (child?.layoutAlign === 'STRETCH' || child?.layoutSizingHorizontal === 'FILL') ? '100%' : undefined),
-                        height: child?.selectedSurfaceRoot ? '100%' : getSize(child?.layoutSizingVertical, child?.absoluteRenderBounds?.height)
+                        height: child?.selectedSurfaceRoot ? '100%' : getSize(child?.layoutSizingVertical, child?.absoluteBoundingBox?.height ?? child?.absoluteRenderBounds?.height)
                             ?? (frame?.layoutMode !== 'VERTICAL' && (child?.layoutAlign === 'STRETCH' || child?.layoutSizingVertical === 'FILL') ? '100%' : undefined),
                         fallbackWidth: child?.layoutSizingHorizontal === 'FILL' || child?.layoutAlign === 'STRETCH'
-                            ? child?.absoluteRenderBounds?.width
+                            ? (child?.absoluteBoundingBox?.width ?? child?.absoluteRenderBounds?.width)
                             : undefined,
                         fallbackHeight: child?.layoutSizingVertical === 'FILL' || child?.layoutAlign === 'STRETCH'
-                            ? child?.absoluteRenderBounds?.height
+                            ? (child?.absoluteBoundingBox?.height ?? child?.absoluteRenderBounds?.height)
                             : undefined,
                         ...getContainerLikeStyles(child, backGroundImage),
                         boxShadow: getDropShadowEffect(child),
@@ -329,7 +338,10 @@ export async function walkFrameChildren({children, srcPath, token, figFile}) {
         } else if (child?.type === 'VECTOR') {
             await createVectorComponent({filename, child, srcPath, token, figFile});
         } else if (CONTAINER_NODE_TYPES.has(child?.type)) {
-            if (isRepeatType(getBaseType(child))) {
+            if (getBaseType(child) === 'input') {
+                const inputType = `${child?.name}`.toLowerCase().includes('password') ? 'password' : undefined;
+                await createTextInputComponent(filename, child, inputType);
+            } else if (isRepeatType(getBaseType(child))) {
                 await createLoopComponent({filename, child});
             } else if (child?.type === 'INSTANCE') {
                 await createInstanceComponent({filename, child: structuredClone(child), srcPath, sharedComponentMap, routeLookup});

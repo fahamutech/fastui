@@ -1,5 +1,5 @@
 import {itOrEmptyList} from '../../shared/fn.mjs';
-import {getColor} from './color.mjs';
+import {getColor, getLinearGradient} from './color.mjs';
 
 /**
  * Maps a Figma axis-alignment enum to the matching CSS flexbox value.
@@ -126,6 +126,9 @@ export function getContainerLikeStyles(child, backGroundImage) {
         borderBottomLeftRadius: child?.rectangleCornerRadii?.[3],
         opacity: child?.opacity,
         backgroundColor: getColor(child?.fills),
+        // Keep gradients distinct from bitmap fills. This avoids a gradient
+        // being silently overwritten when a frame also has an image paint.
+        backgroundGradient: backGroundImage ? undefined : getLinearGradient(child?.fills),
         backgroundSize: backGroundImage ? 'cover' : undefined,
         backgroundPosition: backGroundImage ? 'center' : undefined,
         backgroundImage: backGroundImage ? `url("${backGroundImage}")` : undefined,

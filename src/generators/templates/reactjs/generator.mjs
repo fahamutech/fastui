@@ -51,6 +51,12 @@ const reactStyleAssets = styles => {
             .map(([key, value]) => [key, reactAssetPath(value)])
     );
     normalized.boxSizing = 'border-box';
+    // `backgroundGradient` is the target-neutral representation written by
+    // the Figma translator. CSS consumes it as a normal background image.
+    if (normalized.backgroundGradient && !normalized.backgroundImage) {
+        normalized.backgroundImage = normalized.backgroundGradient;
+    }
+    delete normalized.backgroundGradient;
     normalized.minWidth ??= 0;
     if (spaceValue > 0) normalized.gap = spaceValue;
     if (`${normalized.width ?? ''}`.trim() === '100%') normalized.maxWidth = '100%';
